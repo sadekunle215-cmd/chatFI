@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // Allow CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -9,12 +8,13 @@ export default async function handler(req, res) {
   const { url, method = "GET", body } = req.body || {};
   if (!url) return res.status(400).json({ error: "Missing url" });
 
-  // Only allow Jupiter / Solana RPC domains
+  // Only allow Jupiter + Solana RPC domains
   const allowed = [
     "api.jup.ag",
     "tokens.jup.ag",
-    "quote-api.jup.ag",
+    "quote-api.jup.ag",       // v6 quote + swap (confirmed working)
     "api.mainnet-beta.solana.com",
+    "rpc.ankr.com",            // reliable RPC for accurate balances
   ];
   let hostname;
   try { hostname = new URL(url).hostname; } catch {
@@ -30,7 +30,6 @@ export default async function handler(req, res) {
       headers: { "Content-Type": "application/json" },
     };
 
-    // Add Jupiter API key if set (optional — free tier works without it)
     if (process.env.JUPITER_API_KEY) {
       fetchOptions.headers["x-api-key"] = process.env.JUPITER_API_KEY;
     }
