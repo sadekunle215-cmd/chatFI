@@ -1,4 +1,4 @@
-# JupChat 🤖
+# ChatFi 🤖
 
 **AI-powered trading assistant built on Jupiter DEX — Solana**
 
