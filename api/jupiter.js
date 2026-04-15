@@ -12,9 +12,9 @@ export default async function handler(req, res) {
   const allowed = [
     "api.jup.ag",
     "tokens.jup.ag",
-    "quote-api.jup.ag",       // v6 quote + swap (confirmed working)
+    "quote-api.jup.ag",
     "api.mainnet-beta.solana.com",
-    "rpc.ankr.com",            // reliable RPC for accurate balances
+    "rpc.ankr.com",
   ];
   let hostname;
   try { hostname = new URL(url).hostname; } catch {
@@ -34,8 +34,9 @@ export default async function handler(req, res) {
       fetchOptions.headers["x-api-key"] = process.env.JUPITER_API_KEY;
     }
 
-    if (method === "POST" && body) {
-      fetchOptions.body = typeof body === "string" ? body : JSON.stringify(body);
+    if (method === "POST" && body !== undefined && body !== null) {
+      // body may arrive as object or string — always serialize as JSON string
+      fetchOptions.body = typeof body === "object" ? JSON.stringify(body) : body;
     }
 
     const response = await fetch(url, fetchOptions);
