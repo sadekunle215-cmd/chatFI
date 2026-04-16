@@ -14,15 +14,19 @@ export default async function handler(req, res) {
   }
 
   const allowed = [
-    "api.jup.ag",           // main API (swap, trigger, portfolio, predictions, tokens, price, earn)
-    "lite-api.jup.ag",      // free-tier fallback
-    "earn.jup.ag",          // Jupiter Earn / Lend vaults
-    "lend.jup.ag",          // Jupiter Lend (alt domain)
+    "api.jup.ag",           // all Jupiter APIs: swap v2, price v3, lend, prediction, trigger, portfolio, tokens
+    "lite-api.jup.ag",      // trigger execute fallback
     "api.mainnet-beta.solana.com",
     "rpc.ankr.com",
     "mainnet.helius-rpc.com",
     "solana-mainnet.g.alchemy.com",
   ];
+
+  // Method allowlist — proxy only permits safe HTTP verbs needed by Jupiter APIs
+  const allowedMethods = ["GET", "POST", "DELETE"];
+  if (!allowedMethods.includes((method || "").toUpperCase())) {
+    return res.status(400).json({ error: "Method not allowed: " + method });
+  }
 
   let hostname;
   try { hostname = new URL(url).hostname; } catch {
@@ -33,19 +37,20 @@ export default async function handler(req, res) {
   }
 
   try {
+    const methodUpper = (method || "GET").toUpperCase();
     const fetchOptions = {
-      method,
+      method: methodUpper,
       headers: { "Content-Type": "application/json" },
     };
 
-    // Jupiter Lend/Earn API uses "x-api-key"; other Jupiter APIs use "Authorization: Bearer"
-    // Send both so all endpoints work with the same key
+    // All Jupiter APIs use x-api-key. Send Authorization: Bearer as fallback for older endpoints.
     if (process.env.JUPITER_API_KEY) {
-      fetchOptions.headers["Authorization"] = `Bearer ${process.env.JUPITER_API_KEY}`;
       fetchOptions.headers["x-api-key"] = process.env.JUPITER_API_KEY;
+      fetchOptions.headers["Authorization"] = `Bearer ${process.env.JUPITER_API_KEY}`;
     }
 
-    if (method === "POST" && body !== undefined && body !== null) {
+    // Attach body for POST and DELETE (e.g. DELETE /prediction/v1/positions needs ownerPubkey)
+    if ((methodUpper === "POST" || methodUpper === "DELETE") && body !== undefined && body !== null) {
       fetchOptions.body = typeof body === "object" ? JSON.stringify(body) : body;
     }
 
