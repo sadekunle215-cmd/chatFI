@@ -1,21 +1,24 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { VersionedTransaction } from "@solana/web3.js";
 
-// ─── Jupiter API endpoints ────────────────────────────────────────────────────
+// ─── Jupiter API endpoints (verified against developers.jup.ag docs Apr 2026) ─
 const JUP_BASE         = "https://api.jup.ag";
 const JUP_LITE         = "https://lite-api.jup.ag";
-const JUP_PRICE_API    = `${JUP_BASE}/price/v2`;
+const JUP_PRICE_API    = `${JUP_BASE}/price/v3`;             // v3: usdPrice field, priceChange24h
 const JUP_TOKENS_API   = `${JUP_BASE}/tokens/v1/token`;
 const JUP_TOKEN_SEARCH = `${JUP_BASE}/tokens/v1/search`;
-const JUP_SWAP_ORDER   = `${JUP_BASE}/ultra/v1/order`;
-const JUP_SWAP_EXEC    = `${JUP_BASE}/ultra/v1/execute`;
+const JUP_SWAP_ORDER   = `${JUP_BASE}/swap/v2/order`;        // v2 meta-aggregator (RTSE auto, gasless auto)
+const JUP_SWAP_EXEC    = `${JUP_BASE}/swap/v2/execute`;      // v2 execute
 const JUP_TRIGGER_BASE = `${JUP_BASE}/trigger/v1`;
 const JUP_TRIGGER_EXEC = `${JUP_LITE}/trigger/v1/execute`;
 const JUP_PORTFOLIO    = `${JUP_BASE}/portfolio/v1`;
-const JUP_PRED_API     = `${JUP_BASE}/prediction/v1`;   // singular "prediction"
-const JUP_EARN_API     = `${JUP_BASE}/lend/v1/earn`;    // correct path per Lend API docs
+const JUP_PRED_API     = `${JUP_BASE}/prediction/v1`;
+const JUP_EARN_API     = `${JUP_BASE}/lend/v1/earn`;
 const SOLANA_RPC       = "SOLANA_RPC";
 const SPL_PROGRAM      = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+// JupUSD mint for prediction market deposits
+const JUPUSD_MINT      = "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD";
+const USDC_MINT        = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 // Popular tokens — expands dynamically as user searches
 const TOKEN_MINTS = {
@@ -41,12 +44,13 @@ const TOKEN_DECIMALS = {
   MSOL:9, JITOSOL:9, BSOL:9, SAMO:9, ORCA:6, POPCAT:9, TRUMP:6,
 };
 
-const PRED_SPORTS = ["Football","Basketball","Tennis","Cricket","Esports","MMA","Other"];
+// Jupiter Prediction categories (per official API docs)
+const PRED_CATEGORIES = ["sports","crypto","politics","esports","culture","economics","tech"];
 
 // ─── AI system prompt ─────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are ChatFi — a sharp, honest AI trading assistant built on Jupiter DEX (Solana). Tone: thoughtful, direct, warm — never hyped.
 
-You pull live data: token prices, safety scores, metadata. You help users swap ANY Solana token, set limit/DCA orders, track portfolios, research tokens, analyse sports for prediction markets, and earn yield via Jupiter Lend vaults.
+You pull live data: token prices (Jupiter Price API v3), safety scores, metadata. You help users swap ANY Solana token, set limit/DCA orders, track full portfolios (wallet balances + DeFi positions + prediction market positions + earn positions), research tokens, analyse sports for prediction markets, and earn yield via Jupiter Lend vaults.
 
 ALWAYS reply in this exact raw JSON — no markdown fences, no text outside:
 {
@@ -59,21 +63,23 @@ Available actions:
 - null               → just chat
 - "FETCH_PRICE"      → actionData: { "tokens": ["SOL","JUP"] }
 - "FETCH_TOKEN_INFO" → actionData: { "symbol": "BONK" }
-- "FETCH_PORTFOLIO"  → actionData: { "wallet": "address_or_connected" }
+- "FETCH_PORTFOLIO"  → actionData: { "wallet": "address_or_connected" } — fetches wallet balances + DeFi positions + prediction positions + earn positions + pending orders
 - "SHOW_SWAP"        → actionData: { "from": "SOL", "to": "PEPE", "reason": "brief why" }
 - "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "hint": "brief why" }
 - "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players" }
-- "FETCH_PREDICTIONS"→ actionData: { "sport": "football" } — use null sport for all categories. Sport values: football, basketball, tennis, cricket, esports, mma, crypto, politics
+- "FETCH_PREDICTIONS"→ actionData: { "sport": "sports" } — use null for all. Category values (exact): sports, crypto, politics, esports, culture, economics, tech
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null }
+- "CLAIM_PAYOUTS"    → actionData: {} — triggers fetch of claimable prediction positions
 
 Rules:
-- "buy X" / "swap X to Y" / "exchange" → SHOW_SWAP — use EXACT symbol user mentioned even if unknown meme coin, the UI searches any Jupiter-listed token live
+- "buy X" / "swap X to Y" / "exchange" → SHOW_SWAP — use EXACT symbol user mentioned even if unknown meme coin
 - "price of X" → FETCH_PRICE
 - "is X safe?" / "research X" → FETCH_TOKEN_INFO
-- "my portfolio" / "my wallet" → FETCH_PORTFOLIO
+- "my portfolio" / "my wallet" / "my positions" / "my orders" / "my bets" → FETCH_PORTFOLIO
+- "claim" / "claim winnings" / "claim payout" → CLAIM_PAYOUTS
 - sports + predict/bet → SHOW_PREDICTION with thorough analysis
 - "predictions" / "show markets" / "what can I bet on" → FETCH_PREDICTIONS
-- "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" / "earn vault" / "best APY" → FETCH_EARN
+- "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
 - "limit order" / "DCA" / "buy when price hits" → SHOW_TRIGGER
 - Never fabricate prices. Be concise and precise. No bullet lists — write plain prose.`;
 
@@ -84,6 +90,8 @@ const SUGGESTIONS = [
   "Arsenal vs Man City prediction",
   "Show open predictions",
   "Show earn vaults",
+  "My portfolio & positions",
+  "Claim my payouts",
 ];
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -205,7 +213,7 @@ function TokenPicker({ value, onSelect, jupFetch }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function JupChat() {
-  const [msgs, setMsgs]           = useState([{ id:1, role:"ai", text:"Good morning! I'm ChatFi, your AI trading assistant built on Jupiter DEX.\n\nI can pull live token prices from Solana, help you swap **any** token, research token safety, set limit orders, track your portfolio, analyse sports for prediction markets, and find the best earn vaults — all in one conversation.\n\nConnect your Phantom wallet to get started, or just ask me anything." }]);
+  const [msgs, setMsgs] = useState([{ id:1, role:"ai", text:"Good morning! I'm ChatFi, your AI trading assistant built on Jupiter DEX.\n\nI can pull live token prices, help you swap **any** Solana token, set limit orders, track your full portfolio — including prediction market positions, earn deposits, and pending orders — analyse sports for on-chain prediction bets, earn yield via Jupiter Lend vaults, and claim your prediction winnings.\n\nConnect your Phantom wallet to get started, or just ask me anything." }]);
   const [input, setInput]         = useState("");
   const [typing, setTyping]       = useState(false);
   const [wallet, setWallet]       = useState(null);
@@ -229,14 +237,21 @@ export default function JupChat() {
   const [showTrig, setShowTrig]   = useState(false);
   const [trigCfg, setTrigCfg]     = useState({ token:"SOL", targetPrice:"", amount:"", direction:"below" });
 
-  // Predictions
+  // Predictions — AI analysis panel (SHOW_PREDICTION action)
   const [showPred, setShowPred]   = useState(false);
   const [pred, setPred]           = useState(null);
   const [pick, setPick]           = useState(null);
   const [stake, setStake]         = useState("10");
+  // Predictions — live market list (FETCH_PREDICTIONS action)
   const [showPredList, setShowPredList] = useState(false);
   const [predMarkets, setPredMarkets]   = useState([]);
-  const [predSport, setPredSport]       = useState(null);
+  const [predCategory, setPredCategory] = useState(null);
+  // Prediction on-chain bet panel (opened from live market list)
+  const [showBet, setShowBet]         = useState(false);
+  const [betMarket, setBetMarket]     = useState(null);
+  const [betSide, setBetSide]         = useState(null);
+  const [betAmount, setBetAmount]     = useState("5");
+  const [betStatus, setBetStatus]     = useState(null);
 
   // Earn / Lend
   const [showEarn, setShowEarn]           = useState(false);
@@ -309,8 +324,9 @@ export default function JupChat() {
   }, [swapCfg.fromMint, swapCfg.toMint, swapCfg.amount, showSwap]);
 
   // ── Proxy helper ────────────────────────────────────────────────────────────
+  // All Jupiter API calls go through /api/jupiter (Vercel serverless) which injects the API key
   const jupFetch = async (url, options = {}) => {
-    const payload = { url, method: options.method || "GET" };
+    const payload = { url, method: (options.method || "GET").toUpperCase() };
     if (options.body !== undefined) {
       payload.body = typeof options.body === "string" ? JSON.parse(options.body) : options.body;
     }
@@ -343,16 +359,18 @@ export default function JupChat() {
     return null;
   };
 
-  // ── Jupiter Price API ───────────────────────────────────────────────────────
+  // ── Jupiter Price API v3 ────────────────────────────────────────────────────
+  // v3: GET /price/v3?ids=mint1,mint2 → { mint: { usdPrice, priceChange24h, decimals, blockId } }
   const fetchPrices = useCallback(async (tokens = Object.keys(TOKEN_MINTS)) => {
     try {
       const mints = tokens.map(t => tokenCacheRef.current[t.toUpperCase()] || TOKEN_MINTS[t.toUpperCase()]).filter(Boolean);
       if (!mints.length) return {};
       const json = await jupFetch(`${JUP_PRICE_API}?ids=${mints.join(",")}`);
       const out  = {};
-      for (const [mint, info] of Object.entries(json.data || {})) {
+      // v3 response: top-level object keyed by mint address, each with { usdPrice, ... }
+      for (const [mint, info] of Object.entries(json || {})) {
         const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0];
-        if (sym && info.price) out[sym] = parseFloat(info.price);
+        if (sym && info?.usdPrice) out[sym] = parseFloat(info.usdPrice);
       }
       setPrices(p => ({ ...p, ...out }));
       return out;
@@ -367,38 +385,57 @@ export default function JupChat() {
     catch { return null; }
   };
 
-  // ── Portfolio ───────────────────────────────────────────────────────────────
+  // ── Portfolio — full on-demand: wallet balances + DeFi positions + prediction + earn ─
   const fetchPortfolioData = async (walletAddress) => {
     if (!walletAddress) return null;
-    try { return await jupFetch(`${JUP_PORTFOLIO}/wallet/${walletAddress}`); }
-    catch { return null; }
+    const results = {};
+    // 1. Jupiter portfolio (DeFi positions — perps, etc.)
+    try { results.defi = await jupFetch(`${JUP_PORTFOLIO}/wallet/${walletAddress}`); } catch {}
+    // 2. Prediction market open positions
+    try {
+      const pred = await jupFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletAddress}`);
+      results.predPositions = Array.isArray(pred) ? pred : (pred?.data || []);
+    } catch {}
+    // 3. Prediction market open orders
+    try {
+      const orders = await jupFetch(`${JUP_PRED_API}/orders?ownerPubkey=${walletAddress}`);
+      results.predOrders = Array.isArray(orders) ? orders : (orders?.data || []);
+    } catch {}
+    // 4. Earn (lend) positions
+    try {
+      const earn = await jupFetch(`${JUP_EARN_API}/positions?users=${walletAddress}`);
+      results.earnPositions = Array.isArray(earn) ? earn : (earn?.data || []);
+    } catch {}
+    return results;
   };
 
-  // ── Predictions — uses correct Jupiter Prediction API (singular, /events endpoint) ─
-  const fetchPredictionMarkets = async (sport = null) => {
-    // Official base: https://api.jup.ag/prediction/v1
-    // Category param uses "category", not "sport". Breaking change Apr 2026: title/closeTime at top level.
-    const categoryParam = sport ? sport.toLowerCase() : null;
-    const endpoints = [
-      categoryParam
-        ? `${JUP_PRED_API}/events?category=${categoryParam}`
-        : `${JUP_PRED_API}/events`,
-      categoryParam
-        ? `${JUP_PRED_API}/markets?category=${categoryParam}`
-        : `${JUP_PRED_API}/markets`,
-    ];
-    for (const url of endpoints) {
-      try {
-        const data = await jupFetch(url);
-        // After Apr 2026 breaking change, fields like title are at top level (not nested in metadata)
-        const markets =
-          Array.isArray(data)    ? data         :
-          data?.events?.length   ? data.events  :
-          data?.markets?.length  ? data.markets :
-          data?.data?.length     ? data.data    : [];
-        if (markets.length > 0) return { markets, source: "api" };
-      } catch { /* try next */ }
-    }
+  // ── Predictions — Official: GET /prediction/v1/events?category=<cat>&includeMarkets=true ─
+  const fetchPredictionMarkets = async (category = null) => {
+    // Apr 2026 breaking change: title/closeTime are now TOP LEVEL (not nested in metadata)
+    // Categories: sports, crypto, politics, esports, culture, economics, tech
+    const params = new URLSearchParams({ includeMarkets: "true", filter: "live" });
+    if (category) params.set("category", category.toLowerCase());
+    const url = `${JUP_PRED_API}/events?${params.toString()}`;
+    try {
+      const data = await jupFetch(url);
+      // Response is { data: [...events] } or an array directly
+      const events =
+        Array.isArray(data)        ? data         :
+        data?.data?.length         ? data.data    :
+        data?.events?.length       ? data.events  : [];
+      if (events.length > 0) return { markets: events, source: "api" };
+    } catch { /* fall through */ }
+    // Fallback: try without filter
+    try {
+      const fallbackParams = new URLSearchParams({ includeMarkets: "true" });
+      if (category) fallbackParams.set("category", category.toLowerCase());
+      const data2 = await jupFetch(`${JUP_PRED_API}/events?${fallbackParams.toString()}`);
+      const events2 =
+        Array.isArray(data2)       ? data2        :
+        data2?.data?.length        ? data2.data   :
+        data2?.events?.length      ? data2.events : [];
+      if (events2.length > 0) return { markets: events2, source: "api" };
+    } catch { /* fall through */ }
     return { markets: [], source: "empty" };
   };
 
@@ -411,21 +448,24 @@ export default function JupChat() {
       const tokens = Array.isArray(data) ? data : (data?.data || []);
       if (tokens.length > 0) {
         const normalized = tokens.map(v => ({
-          id:     v.id || v.address || Math.random().toString(36).slice(2),
-          name:   v.name || v.symbol || "Earn Vault",
-          token:  v.asset?.symbol || v.symbol || "SOL",
-          // totalRate is rewards + supply rate (in raw decimal, e.g. 0.06 = 6%)
-          apy:    parseFloat(v.totalRate || v.supplyRate || 0),
-          apyDisplay: v.totalRate
+          id:           v.id || v.address || Math.random().toString(36).slice(2),
+          name:         v.name || `jupiter lend ${v.asset?.symbol || v.symbol || ""}`,
+          token:        v.asset?.symbol || v.symbol || "SOL",
+          // assetMint is required for on-chain deposit — this is the underlying asset mint
+          assetMint:    v.asset?.address || v.assetMint || v.mint || v.address || null,
+          assetDecimals: v.asset?.decimals ?? v.decimals ?? 6,
+          // totalRate is rewards + supply rate in raw decimal (e.g. 0.06 = 6%)
+          apy:          parseFloat(v.totalRate || v.supplyRate || 0),
+          apyDisplay:   v.totalRate
             ? (parseFloat(v.totalRate) * 100).toFixed(2) + "%"
             : (v.supplyRate ? (parseFloat(v.supplyRate) * 100).toFixed(2) + "%" : "N/A"),
-          tvl:    v.totalAssets
-            ? (parseFloat(v.totalAssets) / Math.pow(10, v.decimals || 6))
+          tvl:          v.totalAssets
+            ? (parseFloat(v.totalAssets) / Math.pow(10, v.asset?.decimals ?? v.decimals ?? 6))
             : 0,
-          protocol: "Jupiter Lend",
-          description: `Supply ${v.asset?.symbol || v.symbol || ""} · Rewards ${v.rewardsRate ? (parseFloat(v.rewardsRate)*100).toFixed(2)+"%" : ""}`,
-          logoUrl: v.asset?.logo_url || "",
-          price:   v.asset?.price || 0,
+          protocol:     "Jupiter Lend",
+          description:  `Supply ${v.asset?.symbol || v.symbol || ""} · Rewards ${v.rewardsRate ? (parseFloat(v.rewardsRate)*100).toFixed(2)+"%" : "0.00%"}`,
+          logoUrl:      v.asset?.logo_url || v.logoUrl || "",
+          price:        v.asset?.price || 0,
         })).sort((a, b) => b.apy - a.apy);
         setEarnVaults(normalized);
         setEarnLoading(false);
@@ -436,6 +476,181 @@ export default function JupChat() {
     setEarnLoading(false);
   };
 
+  // ── Earn deposit — real on-chain tx via POST /lend/v1/earn/deposit ────────────
+  const doEarnDeposit = async () => {
+    const { vault, amount } = earnDeposit;
+    if (!amount || parseFloat(amount) <= 0) return;
+    if (!walletFull) { push("ai", "Connect your wallet first to deposit."); return; }
+    const provider =
+      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
+      window?.trustwallet?.solana || window?.trustWallet?.solana ||
+      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
+      window?.okxwallet?.solana || window?.solana;
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+
+    // Get the asset mint from the vault object
+    const assetMint = vault.assetMint;
+    if (!assetMint) {
+      push("ai", `Could not resolve asset mint for **${vault.name}**. Please try again.`);
+      return;
+    }
+    const decimals = vault.assetDecimals || 6;
+    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
+
+    setShowEarnDeposit(false);
+    push("ai", `Preparing deposit of **${amount} ${vault.token}** into **${vault.name}** (${vault.apyDisplay} APY)…`);
+    try {
+      const res = await jupFetch(`${JUP_EARN_API}/deposit`, {
+        method: "POST",
+        body: { asset: assetMint, amount: amountRaw, signer: walletFull },
+      });
+      if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
+      if (!res.transaction) throw new Error("No transaction returned from Jupiter Lend.");
+
+      const binaryStr = atob(res.transaction);
+      const txBytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const signedTx = await provider.signTransaction(tx);
+
+      // Send via Solana RPC
+      const signedBytes = signedTx.serialize();
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [btoa(String.fromCharCode(...signedBytes)), { encoding: "base64", skipPreflight: true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      setShowEarn(false);
+      push("ai", `Deposit submitted ✓\n\n**${amount} ${vault.token}** deposited into **${vault.name}**\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+    } catch (err) {
+      push("ai", `Deposit failed: ${err?.message || "Unknown error"}. Please check your balance and try again.`);
+    }
+  };
+
+  // ── Prediction on-chain bet — POST /prediction/v1/orders ────────────────────
+  const doPredictionBet = async () => {
+    if (!betMarket || !betSide || !betAmount || parseFloat(betAmount) < 5) return;
+    if (!walletFull) { push("ai", "Connect your wallet first to place a prediction bet."); return; }
+    const provider =
+      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
+      window?.trustwallet?.solana || window?.trustWallet?.solana ||
+      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
+      window?.okxwallet?.solana || window?.solana;
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+
+    // depositAmount in native USDC/JupUSD units (1 USD = 1_000_000)
+    const depositAmount = Math.floor(parseFloat(betAmount) * 1_000_000).toString();
+    const isYes = betSide === "yes";
+
+    setBetStatus("signing");
+    setShowBet(false);
+    push("ai", `Placing **${betSide.toUpperCase()}** bet of **$${betAmount} USDC** on: _${betMarket.title}_…`);
+
+    try {
+      const orderRes = await jupFetch(`${JUP_PRED_API}/orders`, {
+        method: "POST",
+        body: {
+          ownerPubkey: walletFull,
+          marketId: betMarket.marketId,
+          isYes,
+          isBuy: true,
+          depositAmount,
+          depositMint: USDC_MINT,
+        },
+      });
+      if (orderRes.error) throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
+      if (!orderRes.transaction) throw new Error("No transaction returned from Jupiter Prediction.");
+
+      const binaryStr = atob(orderRes.transaction);
+      const txBytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const signedTx = await provider.signTransaction(tx);
+
+      // Send via Solana RPC
+      const signedBytes = signedTx.serialize();
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [btoa(String.fromCharCode(...signedBytes)), { encoding: "base64", skipPreflight: true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      const orderPubkey = orderRes?.order?.orderPubkey;
+      const contracts   = orderRes?.order?.contracts;
+      setBetStatus("done");
+      push("ai", `Prediction order submitted ✓\n\n**${betSide.toUpperCase()}** on _${betMarket.title}_\nAmount: **$${betAmount} USDC**${contracts ? `  ·  Contracts: **${contracts}**` : ""}\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})${orderPubkey ? `\n\nOrder account: \`${orderPubkey.slice(0,20)}…\`` : ""}`);
+    } catch (err) {
+      setBetStatus("error");
+      push("ai", `Prediction bet failed: ${err?.message || "Unknown error"}. Please check your USDC balance (minimum $5) and try again.`);
+    }
+    setBetStatus(null);
+  };
+
+  // ── Claim prediction payouts — POST /prediction/v1/positions/{pubkey}/claim ─
+  const doClaimPayouts = async (introText = "") => {
+    const provider =
+      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
+      window?.trustwallet?.solana || window?.trustWallet?.solana ||
+      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
+      window?.okxwallet?.solana || window?.solana;
+    if (!provider) { push("ai", "Wallet not connected. Please connect to claim payouts."); return; }
+
+    push("ai", (introText ? introText + "\n\n" : "") + "Checking for claimable prediction positions…");
+    try {
+      const res = await jupFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletFull}`);
+      const positions = Array.isArray(res) ? res : (res?.data || []);
+      const claimable = positions.filter(p => p.claimable === true && p.claimed === false);
+      if (claimable.length === 0) {
+        push("ai", "No claimable positions found. Winning payouts auto-claim within 24 hours of market settlement.");
+        return;
+      }
+      const totalPayout = claimable.reduce((s, p) => s + parseInt(p.payoutUsd || 0), 0) / 1_000_000;
+      push("ai", `Found **${claimable.length}** claimable position${claimable.length > 1 ? "s" : ""} worth **$${totalPayout.toFixed(2)} USDC** total. Claiming…`);
+
+      let claimed = 0;
+      for (const pos of claimable) {
+        try {
+          const claimRes = await jupFetch(`${JUP_PRED_API}/positions/${pos.pubkey}/claim`, {
+            method: "POST",
+            body: { ownerPubkey: walletFull },
+          });
+          if (!claimRes.transaction) throw new Error("No transaction in claim response.");
+
+          const bytes = new Uint8Array(atob(claimRes.transaction).split("").map(c => c.charCodeAt(0)));
+          const tx = VersionedTransaction.deserialize(bytes);
+          if (!provider.signTransaction) throw new Error("Wallet cannot sign.");
+          const signed = await provider.signTransaction(tx);
+          const signedBytes = signed.serialize();
+          const rpcRes = await jupFetch(SOLANA_RPC, {
+            method: "POST",
+            body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [btoa(String.fromCharCode(...signedBytes)), { encoding: "base64", skipPreflight: true }] },
+          });
+          const sig = rpcRes?.result;
+          if (!sig) throw new Error(rpcRes?.error?.message || "Send failed.");
+          const payoutUsd = (parseInt(pos.payoutUsd || 0) / 1_000_000).toFixed(2);
+          const title = pos.marketMetadata?.title || pos.marketId || "market";
+          push("ai", `✓ Claimed **$${payoutUsd} USDC** from _${title.slice(0, 50)}_\n[View on Solscan →](https://solscan.io/tx/${sig})`);
+          claimed++;
+        } catch (e) {
+          push("ai", `Failed to claim position ${pos.pubkey?.slice(0, 12)}…: ${e?.message || "Unknown error"}`);
+        }
+      }
+      if (claimed > 0) {
+        const updated = await fetchSolanaBalances(walletFull);
+        setPortfolio(updated);
+      }
+    } catch (err) {
+      push("ai", `Could not fetch positions: ${err?.message || "Unknown error"}. Please try again.`);
+    }
+  };
+
   // ── Swap quote ──────────────────────────────────────────────────────────────
   const fetchSwapQuote = useCallback(async () => {
     const { fromMint, fromDecimals, toMint, amount } = swapCfg;
@@ -444,7 +659,7 @@ export default function JupChat() {
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals || 9));
     setQF(true); setSwapQuote(null);
     try {
-      const data = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&slippageBps=50&taker=${walletFull || ""}`);
+      const data = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&taker=${walletFull || ""}`);
       if (data && !data.error && data.outAmount) setSwapQuote(data);
       else setSwapQuote(null);
     } catch { setSwapQuote(null); }
@@ -528,7 +743,8 @@ export default function JupChat() {
     setSwapStatus("signing"); setSwapTxid(null);
     try {
       const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals || 9));
-      const orderData = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&slippageBps=50&taker=${walletFull}`);
+      // v2 /order: no slippageBps = auto RTSE slippage + auto gasless if <0.01 SOL
+      const orderData = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&taker=${walletFull}`);
       if (orderData.error) throw new Error(typeof orderData.error==="object"?JSON.stringify(orderData.error):orderData.error);
       if (!orderData.transaction) throw new Error("No transaction returned from Jupiter — check your balance.");
 
@@ -545,8 +761,10 @@ export default function JupChat() {
 
       const signature = execResult.signature || execResult.txid || execResult.transaction;
       setSwapStatus("done"); setSwapTxid(signature); setShowSwap(false);
+      // v2 outAmount field
       const outAmt = orderData?.outAmount ? (parseInt(orderData.outAmount)/Math.pow(10,toDecimals||6)).toFixed(4) : "?";
-      push("ai", `Swap executed via Jupiter ✓\n\nSent **${amount} ${from}** → received **~${outAmt} ${to}**\n\nTransaction: \`${signature?.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      const feeBps = orderData?.feeBps ? ` · Fee: ${orderData.feeBps}bps` : "";
+      push("ai", `Swap executed via Jupiter ✓\n\nSent **${amount} ${from}** → received **~${outAmt} ${to}**${feeBps}\n\nTransaction: \`${signature?.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
@@ -613,7 +831,7 @@ export default function JupChat() {
     push("user", raw);
     setTyping(true);
     setShowSwap(false); setShowPred(false); setShowTrig(false);
-    setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false);
+    setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
 
@@ -660,8 +878,33 @@ export default function JupChat() {
           const pData = await fetchPortfolioData(addr);
           const solBal = portfolio.SOL ? `SOL: **${portfolio.SOL.toFixed(4)}**${prices.SOL?" ($"+(portfolio.SOL*prices.SOL).toFixed(2)+")":""}` : "";
           const other  = Object.entries(portfolio).filter(([k])=>k!=="SOL").map(([k,v])=>`${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("\n");
-          const defi   = pData?.positions?.length ? `\n\nDeFi Positions: ${pData.positions.length} active` : "";
-          push("ai", `${text}\n\n${solBal}${other?"\n"+other:""}${defi}`);
+          const defi   = pData?.defi?.positions?.length ? `\n\nDeFi Positions: ${pData.defi.positions.length} active` : "";
+          // Prediction positions
+          const predPos = pData?.predPositions || [];
+          const predOpen = predPos.filter(p => !p.claimed && !p.claimable);
+          const predClaim = predPos.filter(p => p.claimable && !p.claimed);
+          const predStr = predPos.length > 0
+            ? `\n\n**Prediction Positions (${predPos.length}):**\n` +
+              predPos.slice(0,5).map(p => {
+                const title = p.marketMetadata?.title || p.marketId || "Market";
+                const side  = p.isYes ? "YES" : "NO";
+                const cost  = p.totalCostUsd ? `$${(parseInt(p.totalCostUsd)/1_000_000).toFixed(2)}` : "";
+                const claim = p.claimable ? ` 🏆 CLAIMABLE $${(parseInt(p.payoutUsd||0)/1_000_000).toFixed(2)}` : "";
+                return `${side} on _${title.slice(0,40)}_ ${cost}${claim}`;
+              }).join("\n")
+            : "";
+          // Earn positions
+          const earnPos = pData?.earnPositions || [];
+          const earnStr = earnPos.filter(e => parseFloat(e.underlyingAssets||e.shares||0) > 0).length > 0
+            ? `\n\n**Earn Positions:**\n` +
+              earnPos.filter(e => parseFloat(e.underlyingAssets||e.shares||0)>0).slice(0,5).map(e =>
+                `${e.asset || e.underlyingAddress?.slice(0,8) || "Token"}: ${(parseFloat(e.underlyingAssets||0)/1e6).toFixed(4)} deposited`
+              ).join("\n")
+            : "";
+          // Pending orders
+          const orders = pData?.predOrders || [];
+          const ordersStr = orders.length > 0 ? `\n\n**Pending Prediction Orders:** ${orders.length}` : "";
+          push("ai", `${text}\n\n${solBal}${other?"\n"+other:""}${defi}${predStr}${earnStr}${ordersStr}`);
         }
 
       } else if (action === "SHOW_SWAP") {
@@ -712,15 +955,20 @@ export default function JupChat() {
 
       } else if (action === "FETCH_PREDICTIONS") {
         push("ai", text + "\n\nFetching prediction markets…");
-        const result = await fetchPredictionMarkets(actionData?.sport);
+        const cat = actionData?.sport || actionData?.category || null;
+        const result = await fetchPredictionMarkets(cat);
         setPredMarkets(result.markets);
-        setPredSport(actionData?.sport || null);
+        setPredCategory(cat);
         setShowPredList(true);
 
       } else if (action === "FETCH_EARN") {
         push("ai", text + "\n\nFetching earn vaults…");
         await fetchEarnVaults();
         setShowEarn(true);
+
+      } else if (action === "CLAIM_PAYOUTS") {
+        if (!walletFull) { push("ai", text + "\n\nConnect your wallet first to check for claimable payouts."); }
+        else { await doClaimPayouts(text); }
 
       } else {
         push("ai", text);
@@ -905,30 +1153,48 @@ export default function JupChat() {
           {showPredList && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>
-                Prediction Markets {predSport ? `— ${predSport}` : ""}
+                Prediction Markets {predCategory ? `— ${predCategory}` : ""}
               </div>
               {predMarkets.length > 0 ? (
                 <>
-                  <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{predMarkets.length} open market{predMarkets.length!==1?"s":""} found — click one to predict</div>
-                  {predMarkets.map((m, i) => {
-                    // After Apr 2026 breaking change: title, closeTime etc. are at top level (not in metadata)
-                    const title   = m.title || m.metadata?.title || m.question || m.name || `${m.teamA||"Team A"} vs ${m.teamB||"Team B"}`;
-                    const close   = m.closeTime || m.metadata?.closeTime || m.endTime || m.closingDate;
-                    const sport   = m.category || m.sport || m.metadata?.category || predSport || "";
-                    const poolUSD = m.volume || m.totalVolume || m.pool || m.totalStake;
+                  <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{predMarkets.length} market{predMarkets.length!==1?"s":""} found — click one to bet YES or NO</div>
+                  {predMarkets.slice(0,20).map((m, i) => {
+                    // Apr 2026: title, closeTime, category are TOP LEVEL (not nested in metadata)
+                    const title    = m.title || m.metadata?.title || m.question || m.name || "Prediction Market";
+                    const closeTs  = m.closeTime || m.metadata?.closeTime || m.endTime;
+                    const cat      = m.category || m.metadata?.category || predCategory || "";
+                    // Markets may be nested in m.markets array; take first market's marketId
+                    const markets  = m.markets || [];
+                    const firstMkt = markets[0];
+                    const marketId = m.marketId || m.id || firstMkt?.marketId || firstMkt?.id || null;
+                    // Pricing: buyYesPriceUsd / buyNoPriceUsd in native units (1_000_000 = $1.00)
+                    const pricing  = m.pricing || firstMkt?.pricing || {};
+                    const yesPrice = pricing.buyYesPriceUsd ? (pricing.buyYesPriceUsd / 1_000_000).toFixed(2) : null;
+                    const noPrice  = pricing.buyNoPriceUsd  ? (pricing.buyNoPriceUsd  / 1_000_000).toFixed(2) : null;
+                    const vol      = m.volume || m.totalVolume || firstMkt?.pricing?.volume;
                     return (
-                      <div key={m.id||i} className="market-row"
-                        onClick={() => {
-                          setPred({ teamA:m.teamA||m.title||title, teamB:m.teamB||"Team B", sport:sport, league:m.league||m.category||"", analysis:m.description||"" });
-                          setPick(null); setShowPred(true); setShowPredList(false);
-                        }}
-                        style={{ padding:"12px 14px", border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8, background:T.bg, cursor:"pointer", transition:"all 0.15s" }}>
-                        <div style={{ fontWeight:500, fontSize:13, color:T.text1, marginBottom:3 }}>{title}</div>
-                        <div style={{ fontSize:11, color:T.text3, display:"flex", gap:12 }}>
-                          {sport && <span>⚽ {sport}</span>}
-                          {close && <span>🕐 Closes {new Date(close).toLocaleDateString()}</span>}
-                          {poolUSD && <span>💰 ${Number(poolUSD).toLocaleString()} pool</span>}
+                      <div key={marketId||i}
+                        style={{ padding:"12px 14px", border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8, background:T.bg }}>
+                        <div style={{ fontWeight:500, fontSize:13, color:T.text1, marginBottom:6 }}>{title}</div>
+                        <div style={{ fontSize:11, color:T.text3, display:"flex", gap:12, marginBottom:8 }}>
+                          {cat && <span>📂 {cat}</span>}
+                          {closeTs && <span>🕐 {new Date(typeof closeTs==="number"?closeTs*1000:closeTs).toLocaleDateString()}</span>}
+                          {vol > 0 && <span>💰 ${(vol/1_000_000).toFixed(0)} vol</span>}
                         </div>
+                        {marketId ? (
+                          <div style={{ display:"flex", gap:8 }}>
+                            <button onClick={() => { setBetMarket({ marketId, title, yesPrice, noPrice }); setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false); }} className="hov-btn"
+                              style={{ flex:1, padding:"7px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                              YES {yesPrice ? `$${yesPrice}` : ""}
+                            </button>
+                            <button onClick={() => { setBetMarket({ marketId, title, yesPrice, noPrice }); setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false); }} className="hov-btn"
+                              style={{ flex:1, padding:"7px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                              NO {noPrice ? `$${noPrice}` : ""}
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize:11, color:T.text3 }}>No tradable market available yet</div>
+                        )}
                       </div>
                     );
                   })}
@@ -936,18 +1202,18 @@ export default function JupChat() {
               ) : (
                 <>
                   <div style={{ fontSize:13, color:T.text2, marginBottom:16 }}>
-                    No live API markets found right now. Browse by sport or ask about a specific match:
+                    No live markets found right now. Browse by category:
                   </div>
                   <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:16 }}>
-                    {PRED_SPORTS.map(sport => (
-                      <button key={sport} onClick={() => send(`Show ${sport.toLowerCase()} prediction markets`)} className="hov-btn"
+                    {PRED_CATEGORIES.map(cat => (
+                      <button key={cat} onClick={() => send(`Show ${cat} prediction markets`)} className="hov-btn"
                         style={{ padding:"8px 16px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:20, fontSize:13, color:T.text2, cursor:"pointer" }}>
-                        {sport}
+                        {cat}
                       </button>
                     ))}
                   </div>
                   <div style={{ fontSize:12, color:T.text3 }}>
-                    Or type a match: <em>"Arsenal vs Man City prediction"</em>
+                    Or ask about a specific match: <em>"Arsenal vs Man City prediction"</em>
                   </div>
                 </>
               )}
@@ -958,41 +1224,59 @@ export default function JupChat() {
             </div>
           )}
 
-          {/* ── Single prediction panel ───────────────────────────────────── */}
+          {/* ── Single prediction analysis panel (SHOW_PREDICTION) ──────────── */}
           {showPred && pred && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>{pred.teamA} vs {pred.teamB}</div>
-              <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{pred.league} · {pred.sport}</div>
+              <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{pred.league}{pred.league&&pred.sport?" · ":""}{pred.sport}</div>
               {pred.analysis && <div style={{ fontSize:13, color:T.text2, marginBottom:16, lineHeight:1.6, padding:"10px 12px", background:T.bg, borderRadius:8 }}>{pred.analysis}</div>}
-              <div style={{ display:"flex", gap:10, marginBottom:14 }}>
-                {[pred.teamA, "Draw", pred.teamB].map(opt => (
-                  <button key={opt} onClick={() => setPick(opt)} className="hov-pick"
-                    style={{ flex:1, padding:"10px 8px", border:`2px solid ${pick===opt?T.accent:T.border}`, borderRadius:10, background:pick===opt?T.accentBg:T.bg, color:pick===opt?T.accent:T.text2, fontSize:13, fontWeight:pick===opt?600:400, cursor:"pointer", transition:"all 0.15s" }}>
-                    {opt}
-                  </button>
-                ))}
+              <div style={{ fontSize:12, color:T.text3, marginBottom:12, padding:"8px 12px", background:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:8 }}>
+                💡 This is AI analysis. To place a real on-chain bet, ask <em>"Show prediction markets"</em> and pick from live Jupiter markets below.
               </div>
-              <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                <input type="number" placeholder="Stake (USDC)" value={stake}
-                  onChange={e => setStake(e.target.value)}
+              <button onClick={() => { setShowPred(false); send("Show prediction markets"); }}
+                style={{ padding:"8px 16px", background:T.accent, border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:500, cursor:"pointer", marginRight:8 }} className="hov-btn">
+                Browse Live Markets →
+              </button>
+              <button onClick={() => setShowPred(false)}
+                style={{ padding:"8px 12px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                Close
+              </button>
+            </div>
+          )}
+
+          {/* ── On-chain prediction bet panel ────────────────────────────── */}
+          {showBet && betMarket && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:8, color:T.text1 }}>Place Prediction Bet</div>
+              <div style={{ fontSize:13, color:T.text2, marginBottom:14, padding:"8px 12px", background:T.bg, borderRadius:8 }}>{betMarket.title}</div>
+              <div style={{ fontSize:12, color:T.text3, marginBottom:10 }}>Choose outcome:</div>
+              <div style={{ display:"flex", gap:10, marginBottom:16 }}>
+                <button onClick={() => setBetSide("yes")} className="hov-pick"
+                  style={{ flex:1, padding:"12px 8px", border:`2px solid ${betSide==="yes"?T.green:T.border}`, borderRadius:10, background:betSide==="yes"?T.greenBg:T.bg, color:betSide==="yes"?T.green:T.text2, fontSize:14, fontWeight:betSide==="yes"?700:400, cursor:"pointer", transition:"all 0.15s" }}>
+                  YES {betMarket.yesPrice ? <span style={{ fontSize:11, opacity:0.7 }}>(${betMarket.yesPrice})</span> : ""}
+                </button>
+                <button onClick={() => setBetSide("no")} className="hov-pick"
+                  style={{ flex:1, padding:"12px 8px", border:`2px solid ${betSide==="no"?T.red:T.border}`, borderRadius:10, background:betSide==="no"?T.redBg:T.bg, color:betSide==="no"?T.red:T.text2, fontSize:14, fontWeight:betSide==="no"?700:400, cursor:"pointer", transition:"all 0.15s" }}>
+                  NO {betMarket.noPrice ? <span style={{ fontSize:11, opacity:0.7 }}>(${betMarket.noPrice})</span> : ""}
+                </button>
+              </div>
+              <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
+                <input type="number" placeholder="Amount (USDC, min $5)" value={betAmount}
+                  onChange={e => setBetAmount(e.target.value)}
                   style={{ flex:1, padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
                 />
-                <button
-                  onClick={() => {
-                    if (!pick) return;
-                    push("ai", `Prediction noted: **${pick}** with $${stake} USDC.\n\nNote: Minimum order size on Jupiter Predictions is $5. On-chain execution will be wired in the next update.`);
-                    setShowPred(false);
-                  }}
-                  disabled={!pick||!stake||parseFloat(stake)<5} className="hov-btn"
-                  style={{ padding:"8px 16px", background:T.green, border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:500, cursor:"pointer" }}>
-                  Confirm Pick
+                <button onClick={doPredictionBet}
+                  disabled={!betSide || !betAmount || parseFloat(betAmount) < 5 || betStatus === "signing"} className="hov-btn"
+                  style={{ padding:"8px 18px", background:betSide==="yes"?T.green:betSide==="no"?T.red:T.text3, border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:600, cursor:"pointer" }}>
+                  {betStatus === "signing" ? "Signing…" : `Confirm ${betSide ? betSide.toUpperCase() : "Pick"}`}
                 </button>
-                <button onClick={() => setShowPred(false)}
+                <button onClick={() => setShowBet(false)}
                   style={{ padding:"8px 12px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
                   Cancel
                 </button>
               </div>
-              {parseFloat(stake)<5 && stake!=="" && <div style={{ fontSize:11, color:T.red, marginTop:6 }}>Minimum stake is $5 USDC</div>}
+              {parseFloat(betAmount) < 5 && betAmount !== "" && <div style={{ fontSize:11, color:T.red }}>Minimum bet is $5 USDC</div>}
+              <div style={{ fontSize:11, color:T.text3, marginTop:8 }}>Deposit token: USDC · On-chain via Jupiter Prediction Markets · Min $5</div>
             </div>
           )}
 
@@ -1067,10 +1351,7 @@ export default function JupChat() {
               />
               <div style={{ display:"flex", gap:8 }}>
                 <button
-                  onClick={() => {
-                    push("ai", `Deposit noted: **${earnDeposit.amount} ${earnDeposit.vault.token||"SOL"}** into **${earnDeposit.vault.name}** (${earnDeposit.vault.apyDisplay} APY).\n\nOn-chain deposit execution is being wired up. You can deposit directly at [earn.jup.ag](https://earn.jup.ag) for now.`);
-                    setShowEarnDeposit(false); setShowEarn(false);
-                  }}
+                  onClick={doEarnDeposit}
                   disabled={!earnDeposit.amount||parseFloat(earnDeposit.amount)<=0} className="hov-btn"
                   style={{ flex:1, padding:"10px", background:T.teal, border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:500, cursor:"pointer" }}>
                   Confirm Deposit
