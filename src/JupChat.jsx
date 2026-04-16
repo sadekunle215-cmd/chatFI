@@ -1,16 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Connection, VersionedTransaction } from "@solana/web3.js";
 
-// ─── Jupiter API endpoints (all updated to current api.jup.ag) ────────────────
-const JUP_BASE        = "https://api.jup.ag";
-const JUP_PRICE_API   = `${JUP_BASE}/price/v3`;             // v3 — v2 sunsetted
-const JUP_TOKENS_API  = `${JUP_BASE}/tokens/v2/token`;      // v2 — v1 sunsetted
-const JUP_SWAP_ORDER  = `${JUP_BASE}/swap/v2/order`;        // NEW unified swap v2
-const JUP_SWAP_EXEC   = `${JUP_BASE}/swap/v2/execute`;      // NEW execute endpoint
-const JUP_TRIGGER_API = `${JUP_BASE}/trigger/v2`;           // v2 — v1 deprecated
-const JUP_PORTFOLIO   = `${JUP_BASE}/portfolio/v1`;         // portfolio tracking
-const JUP_PRED_API    = `${JUP_BASE}/predictions/v1`;       // predictions market beta
-const SOLANA_RPC      = "SOLANA_RPC"; // Resolved server-side via HELIUS_RPC_URL env variable
+// ─── Jupiter API endpoints ────────────────────────────────────────────────────
+const JUP_BASE          = "https://api.jup.ag";
+const JUP_LITE          = "https://lite-api.jup.ag";
+const JUP_PRICE_API     = `${JUP_BASE}/price/v2`;           // v2 — confirmed live
+const JUP_TOKENS_API    = `${JUP_BASE}/tokens/v1/token`;    // v1 — stable
+const JUP_SWAP_ORDER    = `${JUP_BASE}/ultra/v1/order`;     // Ultra swap API
+const JUP_SWAP_EXEC     = `${JUP_BASE}/ultra/v1/execute`;   // Ultra execute
+const JUP_TRIGGER_BASE  = `${JUP_BASE}/trigger/v1`;         // v1 — createOrder
+const JUP_TRIGGER_EXEC  = `${JUP_LITE}/trigger/v1/execute`; // v1 lite — execute
+const JUP_PORTFOLIO     = `${JUP_BASE}/portfolio/v1`;       // portfolio tracking
+const JUP_PRED_API      = `${JUP_BASE}/predictions/v1`;     // predictions market beta
+const SOLANA_RPC        = "SOLANA_RPC"; // Resolved server-side via HELIUS_RPC_URL env variable
 const SPL_PROGRAM     = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
 const TOKEN_MINTS = {
@@ -236,14 +238,19 @@ export default function JupChat() {
   const fetchPredictionMarkets = async (sport = null) => {
     try {
       const url = sport
-        ? `${JUP_PRED_API}/events?category=${sport}&status=open`
-        : `${JUP_PRED_API}/events?status=open`;
+        ? `${JUP_PRED_API}/markets?category=${sport}&status=open`
+        : `${JUP_PRED_API}/markets?status=open`;
       const data = await jupFetch(url);
+      // Normalise response shape: API may return { markets }, { data }, { events }, or an array
+      if (Array.isArray(data)) return { markets: data };
+      if (data?.markets) return data;
+      if (data?.data)    return { markets: data.data };
+      if (data?.events)  return { markets: data.events };
       return data;
     } catch { return null; }
   };
 
-  // ── Jupiter Swap V2 quote ───────────────────────────────────────────────────
+  // ── Jupiter Ultra swap quote ─────────────────────────────────────────────────
   const fetchSwapQuote = useCallback(async () => {
     const { from, to, amount } = swapCfg;
     if (!amount || parseFloat(amount) <= 0 || from === to) return;
@@ -254,11 +261,11 @@ export default function JupChat() {
     setQF(true);
     setSwapQuote(null);
     try {
-      // Swap v2 /order returns quote + assembled transaction in one call
+      // Ultra /order returns quote + assembled transaction together
       const data = await jupFetch(
         `${JUP_SWAP_ORDER}?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountRaw}&slippageBps=50&taker=${walletFull || ""}`
       );
-      if (data && !data.error) {
+      if (data && !data.error && data.outAmount) {
         setSwapQuote(data);
       } else {
         setSwapQuote(null);
@@ -353,7 +360,7 @@ export default function JupChat() {
     }
   };
 
-  // ── Swap execution (Swap API v2) ────────────────────────────────────────────
+  // ── Swap execution (Ultra API) ───────────────────────────────────────────────
   const doSwap = async () => {
     const { from, to, amount } = swapCfg;
     if (!amount || !walletFull) {
@@ -374,15 +381,17 @@ export default function JupChat() {
       const outputMint = TOKEN_MINTS[to];
       const amountRaw  = Math.floor(parseFloat(amount) * Math.pow(10, TOKEN_DECIMALS[from] || 9));
 
-      // Step 1: Get order (quote + assembled transaction)
+      // Step 1: Get Ultra order (quote + assembled transaction in one call)
       const orderData = await jupFetch(
         `${JUP_SWAP_ORDER}?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountRaw}&slippageBps=50&taker=${walletFull}`
       );
-      if (orderData.error) throw new Error(orderData.error);
+      if (orderData.error) {
+        throw new Error(typeof orderData.error === "object" ? JSON.stringify(orderData.error) : orderData.error);
+      }
+      if (!orderData.transaction) throw new Error("No transaction returned from Jupiter — check your balance.");
 
-      // Step 2: Deserialize, sign, then execute via /execute endpoint
-      const { transaction: swapTransaction } = orderData;
-      const binaryStr = atob(swapTransaction);
+      // Step 2: Deserialize and sign
+      const binaryStr = atob(orderData.transaction);
       const txBytes = new Uint8Array(binaryStr.length);
       for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
       const tx = VersionedTransaction.deserialize(txBytes);
@@ -394,25 +403,28 @@ export default function JupChat() {
         throw new Error("Wallet does not support transaction signing");
       }
 
-      // Step 3: Submit via Jupiter's optimised /execute endpoint
+      // Step 3: Submit via Jupiter Ultra /execute with requestId
       const signedBase64 = btoa(String.fromCharCode(...signedTx.serialize()));
       const execResult = await jupFetch(JUP_SWAP_EXEC, {
         method: "POST",
         body: {
           signedTransaction: signedBase64,
+          requestId: orderData.requestId,
         },
       });
 
-      if (execResult.error) throw new Error(execResult.error);
-      const signature = execResult.signature || execResult.txid;
+      if (execResult.error) {
+        throw new Error(typeof execResult.error === "object" ? JSON.stringify(execResult.error) : execResult.error);
+      }
+      const signature = execResult.signature || execResult.txid || execResult.transaction;
 
       setSwapStatus("done");
       setSwapTxid(signature);
       setShowSwap(false);
 
       const outDecimals = TOKEN_DECIMALS[to] || 9;
-      const outAmt = swapQuote?.outAmount
-        ? (parseInt(swapQuote.outAmount) / Math.pow(10, outDecimals)).toFixed(4)
+      const outAmt = orderData?.outAmount
+        ? (parseInt(orderData.outAmount) / Math.pow(10, outDecimals)).toFixed(4)
         : "?";
 
       push("ai", `Swap executed via Jupiter ✓\n\nSent **${amount} ${from}** → received **~${outAmt} ${to}**\n\nTransaction: \`${signature?.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
@@ -421,12 +433,13 @@ export default function JupChat() {
       setPortfolio(updated);
     } catch (err) {
       setSwapStatus("error");
-      push("ai", `Swap failed: ${err.message || "Unknown error"}. Please check your balance and try again.`);
+      const errMsg = err?.message || JSON.stringify(err) || "Unknown error";
+      push("ai", `Swap failed: ${errMsg}. Please check your balance and try again.`);
     }
     setSwapStatus(null);
   };
 
-  // ── Limit / DCA order (Jupiter Trigger API v2) ──────────────────────────────
+  // ── Limit / DCA order (Jupiter Trigger API v1) ─────────────────────────────
   const doTrigger = async () => {
     const { token, targetPrice, amount, direction } = trigCfg;
     if (!targetPrice || !amount || !walletFull) {
@@ -452,54 +465,61 @@ export default function JupChat() {
     const takingRaw = Math.floor(receiveAmt * Math.pow(10, outDecimals));
 
     try {
-      // Trigger v2: challenge-response auth first
-      const challengeRes = await jupFetch(`${JUP_TRIGGER_API}/challenge?wallet=${walletFull}`);
-      if (challengeRes.error) throw new Error(challengeRes.error);
-
-      // Sign the challenge message
-      const encoded = new TextEncoder().encode(challengeRes.message);
-      const sigBytes = await provider.signMessage(encoded, "utf8");
-      const sigBase64 = btoa(String.fromCharCode(...sigBytes.signature));
-
-      // Create the order with auth token
-      const orderRes = await jupFetch(`${JUP_TRIGGER_API}/createOrder`, {
+      // Trigger v1: POST /createOrder — no challenge-response needed
+      const orderRes = await jupFetch(`${JUP_TRIGGER_BASE}/createOrder`, {
         method: "POST",
         body: {
-          wallet: walletFull,
-          authToken: sigBase64,
           inputMint,
           outputMint,
-          makingAmount: amountRaw.toString(),
-          takingAmount: takingRaw.toString(),
-          expiredAt: null,
+          maker: walletFull,
+          payer: walletFull,
+          params: {
+            makingAmount: amountRaw.toString(),
+            takingAmount: takingRaw.toString(),
+          },
           computeUnitPrice: "auto",
         },
       });
 
-      if (orderRes.error) throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
+      if (orderRes.error) {
+        throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
+      }
+      if (!orderRes.transaction) throw new Error("No transaction returned from Jupiter.");
 
-      const { transaction } = orderRes;
-      const binaryStr = atob(transaction);
+      // Deserialize and sign
+      const binaryStr = atob(orderRes.transaction);
       const txBytes = new Uint8Array(binaryStr.length);
       for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
       const tx = VersionedTransaction.deserialize(txBytes);
 
-      let signature;
-      if (provider.signAndSendTransaction) {
-        const result = await provider.signAndSendTransaction(tx);
-        signature = result?.signature || result;
-      } else if (provider.signTransaction) {
-        const signed = await provider.signTransaction(tx);
-        const connection = new Connection(SOLANA_RPC, "confirmed");
-        signature = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+      let signedTx;
+      if (provider.signTransaction) {
+        signedTx = await provider.signTransaction(tx);
       } else {
         throw new Error("Wallet does not support transaction signing");
       }
 
+      // Execute via Jupiter's Trigger execute endpoint (not raw RPC)
+      const signedBase64 = btoa(String.fromCharCode(...signedTx.serialize()));
+      const execRes = await jupFetch(JUP_TRIGGER_EXEC, {
+        method: "POST",
+        body: {
+          signedTransaction: signedBase64,
+          requestId: orderRes.requestId,
+        },
+      });
+
+      if (execRes.error) {
+        throw new Error(typeof execRes.error === "object" ? JSON.stringify(execRes.error) : execRes.error);
+      }
+
+      const signature = execRes.signature || execRes.txid || orderRes.order;
+
       setShowTrig(false);
       push("ai", `Limit order placed ✓\n\nWill ${direction === "below" ? "buy" : "sell"} **${amount} ${direction === "below" ? "USDC worth of " + token : token}** when price hits **$${targetPrice}**\n\nTransaction: \`${signature?.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
     } catch (err) {
-      push("ai", `Limit order failed: ${err.message || "Unknown error"}. Please try again.`);
+      const errMsg = err?.message || JSON.stringify(err) || "Unknown error";
+      push("ai", `Limit order failed: ${errMsg}. Please try again.`);
     }
   };
 
@@ -577,11 +597,14 @@ export default function JupChat() {
         }
 
       } else if (action === "FETCH_PREDICTIONS") {
-        const markets = await fetchPredictionMarkets(actionData?.sport);
-        if (markets?.events?.length) {
-          const list = markets.events.slice(0, 5).map(e =>
-            `• ${e.title || e.question} — closes ${e.closeTime ? new Date(e.closeTime).toLocaleDateString() : "TBD"}`
-          ).join("\n");
+        const data = await fetchPredictionMarkets(actionData?.sport);
+        const markets = data?.markets || [];
+        if (markets.length) {
+          const list = markets.slice(0, 5).map(e => {
+            const title = e.title || e.question || e.name || "Unknown market";
+            const close = e.closeTime || e.endTime || e.closingDate;
+            return `• ${title}${close ? " — closes " + new Date(close).toLocaleDateString() : ""}`;
+          }).join("\n");
           push("ai", `${text}\n\nOpen prediction markets:\n\n${list}`);
         } else {
           push("ai", text + "\n\nNo open prediction markets found right now. Try asking about a specific match.");
