@@ -847,10 +847,36 @@ export default function JupChat() {
       }
     }
 
-    // 2.5. Generic window.solana catch-all (wallets that only inject the generic provider)
-    const alreadyHasLegacy = list.some(l => l.type === "standard" || l.type === "legacy");
-    if (!alreadyHasLegacy && window?.solana?.connect) {
-      list.push({ name: "Solana Wallet", icon: "💎", detected: true, connect: async () => window.solana, type: "legacy" });
+    // 2.5. Generic window.solana catch-all
+    // Jupiter Mobile's in-app browser injects window.solana but does NOT register via wallet-standard
+    // and does NOT set window.jupiter. It may set window.solana.isJupiter, but we can't rely on that.
+    // So: if window.solana exists and isn't already claimed by a named legacy wallet above, add it.
+    const solanaProviderClaimed = list.some(l => (l.type === "standard" || l.type === "legacy"));
+    const genericSolana = window?.solana;
+    if (genericSolana && typeof genericSolana.connect === "function" && !solanaProviderClaimed) {
+      // Try to identify by known flags
+      let name = "Solana Wallet";
+      let icon = "💎";
+      if (genericSolana.isJupiter)   { name = "Jupiter";      icon = WALLET_LOGOS["Jupiter"]; }
+      else if (genericSolana.isPhantom)  { name = "Phantom";  icon = WALLET_LOGOS["Phantom"]; }
+      else if (genericSolana.isSolflare) { name = "Solflare"; icon = WALLET_LOGOS["Solflare"]; }
+      else if (genericSolana.isBackpack) { name = "Backpack";  icon = WALLET_LOGOS["Backpack"]; }
+      else if (genericSolana.isTrust)    { name = "Trust Wallet"; icon = WALLET_LOGOS["Trust Wallet"]; }
+      list.push({ name, icon, detected: true, connect: async () => genericSolana, type: "legacy" });
+    }
+
+    // 2.6. Even if named wallets were detected, check if window.solana is a DIFFERENT wallet
+    // (e.g. inside Jupiter Mobile, window.solana exists but none of the named checks above returned it)
+    if (genericSolana && typeof genericSolana.connect === "function" && solanaProviderClaimed) {
+      const isAlreadyListed = list.some(l =>
+        (l.type === "legacy" || l.type === "standard") &&
+        // check if any legacy entry is backed by this same object — we can't compare directly,
+        // so instead check: if isJupiter flag set but "Jupiter" not in detected list, add it
+        l.name.toLowerCase() === "jupiter"
+      );
+      if (!isAlreadyListed && genericSolana.isJupiter) {
+        list.unshift({ name: "Jupiter", icon: WALLET_LOGOS["Jupiter"], detected: true, connect: async () => genericSolana, type: "legacy" });
+      }
     }
 
     // 3. On mobile: show deep links for ALL wallets not already detected
@@ -906,12 +932,17 @@ export default function JupChat() {
     // Some wallets (Backpack, OKX, etc.) fire this event slightly after page load
     window.addEventListener("wallet-standard:register-wallet", rebuild);
 
-    // Re-check after 500ms to catch late injectors that don't fire the event
-    const timer = setTimeout(rebuild, 500);
+    // Jupiter Mobile and some other in-app browsers inject window.solana LATE.
+    // Poll at 300ms, 800ms, and 2000ms to catch late injectors.
+    const t1 = setTimeout(rebuild, 300);
+    const t2 = setTimeout(rebuild, 800);
+    const t3 = setTimeout(rebuild, 2000);
 
     return () => {
       window.removeEventListener("wallet-standard:register-wallet", rebuild);
-      clearTimeout(timer);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
     };
   }, [showWalletModal]);
 
