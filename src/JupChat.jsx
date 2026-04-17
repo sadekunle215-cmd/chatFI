@@ -130,11 +130,14 @@ const fmt = (text = "") =>
 
 // ─── Token search picker component ───────────────────────────────────────────
 function TokenPicker({ value, onSelect, jupFetch }) {
-  const [mode, setMode]       = useState("select");
-  const [query, setQuery]     = useState("");
+  const [query, setQuery]     = useState(value || "");
   const [results, setResults] = useState([]);
   const [busy, setBusy]       = useState(false);
+  const [focused, setFocused] = useState(false);
   const timer = useRef(null);
+
+  // Sync display when value changes externally
+  useEffect(() => { if (!focused) setQuery(value || ""); }, [value, focused]);
 
   const search = (q) => {
     setQuery(q);
@@ -143,77 +146,66 @@ function TokenPicker({ value, onSelect, jupFetch }) {
     timer.current = setTimeout(async () => {
       setBusy(true);
       try {
-        const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}&limit=10`);
+        // Use higher limit and broader search for full Jupiter token list
+        const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}&limit=50`);
         const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-        setResults(list.slice(0, 10));
+        // Prioritise: exact symbol match first, then sort by daily volume
+        const upper = q.trim().toUpperCase();
+        const sorted = [...list].sort((a, b) => {
+          const aExact = a.symbol?.toUpperCase() === upper ? 1 : 0;
+          const bExact = b.symbol?.toUpperCase() === upper ? 1 : 0;
+          if (bExact !== aExact) return bExact - aExact;
+          return (b.daily_volume || 0) - (a.daily_volume || 0);
+        });
+        setResults(sorted.slice(0, 20));
       } catch { setResults([]); }
       setBusy(false);
-    }, 400);
+    }, 300);
   };
 
   const pick = (t) => {
     const sym = (t.symbol || "").toUpperCase();
     onSelect(sym, t.address, t.decimals ?? 6);
-    setMode("select");
-    setQuery("");
+    setQuery(sym);
     setResults([]);
+    setFocused(false);
   };
-
-  if (mode === "select") {
-    return (
-      <select
-        value={value}
-        onChange={e => {
-          if (e.target.value === "__search__") { setMode("search"); }
-          else {
-            const sym = e.target.value;
-            onSelect(sym, TOKEN_MINTS[sym], TOKEN_DECIMALS[sym] ?? 9);
-          }
-        }}
-        style={{ flex:1, padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
-      >
-        {Object.keys(TOKEN_MINTS).map(t => <option key={t} value={t}>{t}</option>)}
-        {!TOKEN_MINTS[value] && value && <option value={value}>{value}</option>}
-        <option value="__search__">🔍 Search any token…</option>
-      </select>
-    );
-  }
 
   return (
     <div style={{ flex:1, position:"relative" }}>
       <input
-        autoFocus
         value={query}
         onChange={e => search(e.target.value)}
-        placeholder="Token name or symbol…"
-        style={{ width:"100%", padding:"8px 10px", border:`2px solid ${T.accent}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, outline:"none" }}
+        onFocus={() => { setFocused(true); if (query.trim()) search(query); }}
+        onBlur={() => setTimeout(() => { setFocused(false); setResults([]); }, 200)}
+        placeholder="Search token…"
+        style={{ width:"100%", padding:"8px 10px", border:`2px solid ${focused ? T.accent : T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, outline:"none", transition:"border-color 0.15s" }}
       />
-      <div style={{ position:"absolute", top:"calc(100% + 4px)", left:0, right:0, zIndex:40, background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, boxShadow:"0 6px 18px rgba(0,0,0,0.13)", overflow:"hidden", maxHeight:220, overflowY:"auto" }}>
-        {busy && <div style={{ padding:"8px 12px", fontSize:12, color:T.text3 }}>Searching Jupiter…</div>}
-        {!busy && results.length === 0 && query.length > 1 && (
-          <div style={{ padding:"8px 12px", fontSize:12, color:T.text3 }}>No results for "{query}"</div>
-        )}
-        {results.map(t => (
-          <div key={t.address} onClick={() => pick(t)}
-            style={{ padding:"8px 12px", cursor:"pointer", fontSize:13, display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${T.border}` }}
-            className="hov-row"
-          >
-            <span><strong>{t.symbol}</strong>{t.name ? ` — ${t.name.slice(0,24)}` : ""}</span>
-            {t.daily_volume > 0 && <span style={{ fontSize:10, color:T.text3 }}>${(t.daily_volume/1e3).toFixed(0)}k vol</span>}
-          </div>
-        ))}
-        <div onClick={() => { setMode("select"); setQuery(""); setResults([]); }}
-          style={{ padding:"7px 12px", cursor:"pointer", fontSize:12, color:T.text3 }}>
-          ← Popular tokens
+      {(busy || (results.length > 0 && focused)) && (
+        <div style={{ position:"absolute", top:"calc(100% + 4px)", left:0, right:0, zIndex:40, background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, boxShadow:"0 6px 18px rgba(0,0,0,0.13)", overflow:"hidden", maxHeight:260, overflowY:"auto" }}>
+          {busy && <div style={{ padding:"8px 12px", fontSize:12, color:T.text3 }}>Searching Jupiter…</div>}
+          {!busy && results.length === 0 && query.length > 1 && (
+            <div style={{ padding:"8px 12px", fontSize:12, color:T.text3 }}>No results for "{query}"</div>
+          )}
+          {results.map(t => (
+            <div key={t.address} onMouseDown={() => pick(t)}
+              style={{ padding:"8px 12px", cursor:"pointer", fontSize:13, display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${T.border}` }}
+              className="hov-row"
+            >
+              <span><strong>{t.symbol}</strong>{t.name ? ` — ${t.name.slice(0,24)}` : ""}</span>
+              {t.daily_volume > 0 && <span style={{ fontSize:10, color:T.text3 }}>${(t.daily_volume/1e3).toFixed(0)}k vol</span>}
+            </div>
+          ))}
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function JupChat() {
-  const [msgs, setMsgs] = useState([{ id:1, role:"ai", text:"Good morning! I'm ChatFi, your AI trading assistant built on Jupiter DEX.\n\nI can pull live token prices, help you swap **any** Solana token, set limit orders, track your full portfolio — including prediction market positions, earn deposits, and pending orders — analyse sports for on-chain prediction bets, earn yield via Jupiter Lend vaults, and claim your prediction winnings.\n\nConnect your Phantom wallet to get started, or just ask me anything." }]);
+  const [msgs, setMsgs] = useState([{ id:1, role:"ai", text:"Good morning! I'm ChatFi, your AI trading assistant built on Jupiter DEX.\n\nI can pull live token prices, help you swap **any** Solana token, set limit orders, track your full portfolio — including prediction market positions, earn deposits, and pending orders — analyse sports for on-chain prediction bets, earn yield via Jupiter Lend vaults, and claim your prediction winnings.\n\nConnect your wallet to get started, or just ask me anything. Don't have a wallet? [Download Jupiter Wallet →](https://jup.ag/mobile)" }]);
+  const [showWalletModal, setShowWalletModal] = useState(false);
   const [input, setInput]         = useState("");
   const [typing, setTyping]       = useState(false);
   const [wallet, setWallet]       = useState(null);
@@ -725,15 +717,31 @@ export default function JupChat() {
     } catch { return {}; }
   };
 
+  // ── Wallet options registry ─────────────────────────────────────────────────
+  const WALLET_OPTIONS = [
+    { name:"Jupiter Wallet",  icon:"🪐", get: () => window?.jupiter?.solana || window?.jupiter },
+    { name:"Phantom",         icon:"👻", get: () => window?.phantom?.solana },
+    { name:"Solflare",        icon:"🔥", get: () => window?.solflare },
+    { name:"Backpack",        icon:"🎒", get: () => window?.backpack?.solana },
+    { name:"Trust Wallet",    icon:"🛡️", get: () => window?.trustwallet?.solana || window?.trustWallet?.solana },
+    { name:"Coin98",          icon:"🪙", get: () => window?.coin98?.sol },
+    { name:"OKX Wallet",      icon:"⭕", get: () => window?.okxwallet?.solana },
+    { name:"Other Wallet",    icon:"💼", get: () => window?.solana },
+  ];
+
+  const pendingSwapRef = useRef(null);
+
   // ── Wallet connect ──────────────────────────────────────────────────────────
-  const connectWallet = async (pendingSwap) => {
-    const provider =
-      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
-      window?.trustwallet?.solana || window?.trustWallet?.solana ||
-      window?.jupiter?.solana || window?.jupiter ||
-      window?.coin98?.sol || window?.okxwallet?.solana || window?.solana;
+  const connectWallet = (pendingSwap) => {
+    pendingSwapRef.current = pendingSwap;
+    setShowWalletModal(true);
+  };
+
+  const doConnectWith = async (getProvider) => {
+    setShowWalletModal(false);
+    const provider = getProvider();
     if (!provider) {
-      push("ai", "No Solana wallet detected. Please install **Phantom**, **Solflare**, **Backpack**, **Trust Wallet**, or **Jupiter Wallet** to connect.");
+      push("ai", "That wallet is not installed in your browser. Please install it or choose another wallet. Don't have one? [Download Jupiter Wallet →](https://jup.ag/mobile)");
       return;
     }
     try {
@@ -746,6 +754,7 @@ export default function JupChat() {
       setPortfolio(balances);
       const live = await fetchPrices();
       const solUSD = balances.SOL && live.SOL ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})` : "";
+      const pendingSwap = pendingSwapRef.current;
       if (pendingSwap) {
         setSwapCfg(c => ({
           ...c,
@@ -1490,6 +1499,34 @@ export default function JupChat() {
           )}
           <div ref={endRef}/>
         </div>
+
+        {/* Wallet selection modal */}
+        {showWalletModal && (
+          <div style={{ position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center" }}
+            onClick={e => { if (e.target === e.currentTarget) setShowWalletModal(false); }}>
+            <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, padding:24, width:320, maxWidth:"90vw", boxShadow:"0 16px 48px rgba(0,0,0,0.2)" }}>
+              <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:6 }}>Connect Wallet</div>
+              <div style={{ fontSize:12, color:T.text3, marginBottom:18 }}>
+                Choose your Solana wallet. Don't have one?{" "}
+                <a href="https://jup.ag/mobile" target="_blank" rel="noreferrer" style={{ color:T.accent }}>Download Jupiter Wallet →</a>
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {WALLET_OPTIONS.map(w => (
+                  <button key={w.name} onClick={() => doConnectWith(w.get)} className="hov-row"
+                    style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left" }}>
+                    <span style={{ fontSize:20, width:28, textAlign:"center" }}>{w.icon}</span>
+                    <span>{w.name}</span>
+                    {w.get() && <span style={{ marginLeft:"auto", fontSize:11, color:T.green, fontWeight:500 }}>Detected</span>}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setShowWalletModal(false)}
+                style={{ marginTop:14, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Input bar */}
         <div style={{ padding:"12px 20px 16px", borderTop:`1px solid ${T.border}`, background:T.surface }}>
