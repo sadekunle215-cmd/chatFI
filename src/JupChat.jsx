@@ -1697,8 +1697,8 @@ export default function JupChat() {
           {msgs.map(m => (
             <div key={m.id} className="msg-enter" style={{ marginBottom:20, display:"flex", gap:12, justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
               {m.role==="ai" && (
-                <div style={ width:32, height:32, borderRadius:"50%", overflow:"hidden", border:`1px solid ${T.border}`, flexShrink:0, marginTop:2 }>
-                <img src={CHATFI_AVATAR} alt="ChatFi" style={ width:"100%", height:"100%", objectFit:"cover" }/>
+                <div style={{ width:32, height:32, borderRadius:"50%", overflow:"hidden", border:`1px solid ${T.border}`, flexShrink:0, marginTop:2 }}>
+                <img src={CHATFI_AVATAR} alt="ChatFi" style={{ width:"100%", height:"100%", objectFit:"cover" }}/>
               </div>
               )}
               <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#fff":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6 }}
@@ -1709,8 +1709,8 @@ export default function JupChat() {
 
           {typing && (
             <div style={{ display:"flex", gap:12, marginBottom:20 }}>
-              <div style={ width:32, height:32, borderRadius:"50%", overflow:"hidden", border:`1px solid ${T.border}` }>
-              <img src={CHATFI_AVATAR} alt="ChatFi" style={ width:"100%", height:"100%", objectFit:"cover" }/>
+              <div style={{ width:32, height:32, borderRadius:"50%", overflow:"hidden", border:`1px solid ${T.border}` }}>
+              <img src={CHATFI_AVATAR} alt="ChatFi" style={{ width:"100%", height:"100%", objectFit:"cover" }}/>
             </div>
               <div style={{ padding:"12px 16px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:"4px 18px 18px 18px", display:"flex", gap:5, alignItems:"center" }}>
                 <span className="dot1"/><span className="dot2"/><span className="dot3"/>
