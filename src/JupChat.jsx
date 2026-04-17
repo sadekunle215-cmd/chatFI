@@ -149,21 +149,32 @@ function TokenPicker({ value, onSelect, jupFetch }) {
       setBusy(true);
       try {
         // Use higher limit and broader search for full Jupiter token list
-        // v2 search: no limit param needed; returns up to 20 by default; mint = t.id
-        const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}`);
-        const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-        // Prioritise: exact symbol match first, then sort by 24h volume
+        // Search V2 (verified) + V1 (all Jupiter tokens) in parallel, merge & dedup
+        const [v2raw, v1raw] = await Promise.allSettled([
+          jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}`),
+          jupFetch(`${JUP_BASE}/tokens/v1/search?query=${encodeURIComponent(q)}&limit=50`),
+        ]);
+        const toList = (r) => {
+          const d = r.status === "fulfilled" ? r.value : [];
+          return Array.isArray(d) ? d : (d?.tokens || d?.data || []);
+        };
+        const v2list = toList(v2raw).map(t => ({ ...t, address: t.id || t.address, _src: "v2" }));
+        const v1list = toList(v1raw).map(t => ({ ...t, address: t.address || t.id, _src: "v1" }));
+        // Merge: V2 first, then V1 extras not already in V2 (dedup by address/id)
+        const seen = new Set(v2list.map(t => t.address).filter(Boolean));
+        const merged = [...v2list, ...v1list.filter(t => t.address && !seen.has(t.address))];
+        // Sort: exact symbol match → then V2 before V1 → then 24h volume
         const upper = q.trim().toUpperCase();
-        const sorted = [...list].sort((a, b) => {
-          const aExact = a.symbol?.toUpperCase() === upper ? 1 : 0;
-          const bExact = b.symbol?.toUpperCase() === upper ? 1 : 0;
-          if (bExact !== aExact) return bExact - aExact;
-          // v2 daily volume is under stats24h; v1 had top-level daily_volume
-          const aVol = (a.stats24h?.buyVolume || 0) + (a.stats24h?.sellVolume || 0) || a.daily_volume || 0;
-          const bVol = (b.stats24h?.buyVolume || 0) + (b.stats24h?.sellVolume || 0) || b.daily_volume || 0;
+        const sorted = [...merged].sort((a, b) => {
+          const aE = a.symbol?.toUpperCase() === upper ? 1 : 0;
+          const bE = b.symbol?.toUpperCase() === upper ? 1 : 0;
+          if (bE !== aE) return bE - aE;
+          if (a._src !== b._src) return a._src === "v2" ? -1 : 1;
+          const aVol = (a.stats24h?.buyVolume||0)+(a.stats24h?.sellVolume||0)||a.daily_volume||0;
+          const bVol = (b.stats24h?.buyVolume||0)+(b.stats24h?.sellVolume||0)||b.daily_volume||0;
           return bVol - aVol;
         });
-        setResults(sorted.slice(0, 20));
+        setResults(sorted.slice(0, 50));
       } catch { setResults([]); }
       setBusy(false);
     }, 300);
@@ -362,24 +373,30 @@ export default function JupChat() {
   };
 
   // ── Resolve any token symbol → { mint, decimals } ───────────────────────────
-  // Uses Token API v2: response fields are id (mint), symbol, name, decimals
+  // Tries V2 first (verified tokens), then V1 fallback for any Jupiter-listed token
   const resolveToken = async (symbolOrName) => {
     if (!symbolOrName) return null;
     const upper = symbolOrName.toUpperCase();
     if (tokenCacheRef.current[upper]) {
       return { mint: tokenCacheRef.current[upper], decimals: tokenDecimalsRef.current[upper] ?? 6 };
     }
-    try {
-      // v2 search — returns array; mint = t.id (not t.address)
-      const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbolOrName)}`);
+    const tryParse = (data, sym) => {
       const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-      const match = list.find(t => t.symbol?.toUpperCase() === upper) || list[0];
-      const mint = match?.id || match?.address;   // v2 uses "id"; v1 fallback uses "address"
-      if (mint) {
-        tokenCacheRef.current[upper] = mint;
-        tokenDecimalsRef.current[upper] = match.decimals ?? 6;
-        return { mint, decimals: match.decimals ?? 6 };
-      }
+      const match = list.find(t => t.symbol?.toUpperCase() === sym) || list[0];
+      const mint = match?.id || match?.address;
+      return mint ? { mint, decimals: match.decimals ?? 6 } : null;
+    };
+    // V2 search (verified + community tokens)
+    try {
+      const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbolOrName)}`);
+      const r = tryParse(data, upper);
+      if (r) { tokenCacheRef.current[upper] = r.mint; tokenDecimalsRef.current[upper] = r.decimals; return r; }
+    } catch {}
+    // V1 fallback — covers unverified/new/meme tokens not yet in V2
+    try {
+      const data = await jupFetch(`${JUP_BASE}/tokens/v1/search?query=${encodeURIComponent(symbolOrName)}&limit=20`);
+      const r = tryParse(data, upper);
+      if (r) { tokenCacheRef.current[upper] = r.mint; tokenDecimalsRef.current[upper] = r.decimals; return r; }
     } catch {}
     return null;
   };
@@ -409,8 +426,22 @@ export default function JupChat() {
     const upper = symbol.toUpperCase();
     // If we already have the mint cached, try direct detail fetch first
     const cachedMint = tokenCacheRef.current[upper] || TOKEN_MINTS[upper];
+    const normalise = (match, mint) => ({
+      ...(match || {}),
+      address: mint,
+      logo_url: match?.icon || match?.logo_url || "",
+      market_cap: match?.mcap || match?.market_cap || null,
+      daily_volume: match?.stats24h
+        ? (match.stats24h.buyVolume || 0) + (match.stats24h.sellVolume || 0)
+        : (match?.daily_volume || null),
+      organicScore: match?.organicScore ?? null,
+      freezeAuthority: match?.audit?.freezeAuthorityDisabled === false ? "active" : null,
+      mint_authority: match?.audit?.mintAuthorityDisabled === false ? "active" : null,
+      tags: match?.tags || (match?.isVerified ? ["verified"] : []),
+    });
+
+    // Try V2 first
     try {
-      // v2 search — returns array; mint field = t.id
       const searchData = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbol)}`);
       const list = Array.isArray(searchData) ? searchData : (searchData?.tokens || searchData?.data || []);
       const match = list.find(t => t.symbol?.toUpperCase() === upper) || list[0];
@@ -418,24 +449,30 @@ export default function JupChat() {
       if (mint) {
         tokenCacheRef.current[upper] = mint;
         tokenDecimalsRef.current[upper] = match?.decimals ?? 6;
-        // Normalise v2 fields → unified shape the rest of the code expects
-        const normalised = {
-          ...(match || {}),
-          address: mint,          // ensure .address is populated (v1 compat)
-          logo_url: match?.icon || match?.logo_url || "",
-          market_cap: match?.mcap || match?.market_cap || null,
-          daily_volume: match?.stats24h?.buyVolume != null
-            ? match.stats24h.buyVolume + (match.stats24h.sellVolume || 0)
-            : (match?.daily_volume || null),
-          organicScore: match?.organicScore ?? null,
-          // v2 audit block
-          freezeAuthority: match?.audit?.freezeAuthorityDisabled === false ? "active" : null,
-          mint_authority: match?.audit?.mintAuthorityDisabled === false ? "active" : null,
-          tags: match?.tags || (match?.isVerified ? ["verified"] : []),
-        };
-        return normalised;
+        return normalise(match, mint);
       }
     } catch {}
+
+    // V1 fallback — finds unverified / new / meme tokens not yet in V2
+    try {
+      const searchData = await jupFetch(`${JUP_BASE}/tokens/v1/search?query=${encodeURIComponent(symbol)}&limit=10`);
+      const list = Array.isArray(searchData) ? searchData : (searchData?.tokens || searchData?.data || []);
+      const match = list.find(t => t.symbol?.toUpperCase() === upper) || list[0];
+      const mint = match?.address || match?.id || cachedMint;
+      if (mint) {
+        tokenCacheRef.current[upper] = mint;
+        tokenDecimalsRef.current[upper] = match?.decimals ?? 6;
+        return normalise(match, mint);
+      }
+    } catch {}
+
+    // Last resort: if we have a cached mint, fetch detail directly
+    if (cachedMint) {
+      try {
+        const detail = await jupFetch(`${JUP_TOKENS_API}/${cachedMint}`);
+        if (detail?.address || detail?.mint) return normalise(detail, cachedMint);
+      } catch {}
+    }
     return null;
   };
 
@@ -474,7 +511,7 @@ export default function JupChat() {
     if (searchQuery) {
       // Try search endpoint
       try {
-        const data = await jupFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=50`);
+        const data = await jupFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=50&includeMarkets=true`);
         const events = extractEvents(data);
         if (events.length > 0) return { markets: events, source: "search" };
       } catch {}
@@ -635,6 +672,13 @@ export default function JupChat() {
     const depositAmount = Math.floor(parseFloat(betAmount) * 1_000_000).toString();
     const isYes = betSide === "yes";
 
+    // Validate marketId before calling API — must be a Solana pubkey (32-byte base58, ~44 chars)
+    if (!betMarket?.marketId) {
+      push("ai", "Market ID not found for this event. Please refresh markets and try again.");
+      setBetStatus(null);
+      return;
+    }
+
     setBetStatus("signing");
     setShowBet(false);
     push("ai", `Placing **${betSide.toUpperCase()}** bet of **$${betAmount} USDC** on: _${betMarket.title}_…`);
@@ -652,7 +696,12 @@ export default function JupChat() {
         },
       });
       if (orderRes.error) throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
-      if (!orderRes.transaction) throw new Error("No transaction returned from Jupiter Prediction.");
+      if (!orderRes.transaction) {
+        // Surface whatever the API actually returned to help diagnose
+        const hint = orderRes.message || orderRes.msg || orderRes.code
+          || (Object.keys(orderRes).length ? JSON.stringify(orderRes).slice(0, 120) : "empty response");
+        throw new Error(`No transaction from Jupiter Prediction. API said: "${hint}". Ensure you have USDC (min $5) and the market is open.`);
+      }
 
       const binaryStr = atob(orderRes.transaction);
       const txBytes = new Uint8Array(binaryStr.length);
@@ -1865,13 +1914,14 @@ export default function JupChat() {
                     const title    = m.title || m.metadata?.title || m.question || m.name || "Prediction Market";
                     const closeTs  = m.closeTime || m.metadata?.closeTime || m.endTime;
                     const cat      = m.category || m.metadata?.category || predCategory || "";
-                    // Markets nested in m.markets[] or m.market{}; extract ID from every known field
+                    // Markets nested in m.markets[] or m.market{}; prefer open markets
                     const markets  = m.markets || (m.market ? [m.market] : []);
-                    const firstMkt = markets[0];
-                    // Try every possible ID field across API versions
-                    const marketId = m.marketId || m.marketPubkey || m.pubkey ||
-                                     firstMkt?.marketId || firstMkt?.id || firstMkt?.pubkey ||
-                                     firstMkt?.marketPubkey || m.id || null;
+                    // Per Jupiter docs: Market has { marketId, status: 'open'|'closed'|'cancelled', pricing }
+                    // Prefer an open market; fallback to first market
+                    const openMkt  = markets.find(mk => mk.status === "open") || markets[0];
+                    // marketId is the Solana pubkey used by POST /orders
+                    // NEVER use the event-level id/eventId (UUID) — that's wrong for orders API
+                    const marketId = openMkt?.marketId || openMkt?.id || openMkt?.pubkey || null;
                     // Pricing: buyYesPriceUsd / buyNoPriceUsd in native units (1_000_000 = $1.00)
                     const pricing  = m.pricing || firstMkt?.pricing || {};
                     const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
@@ -1890,17 +1940,25 @@ export default function JupChat() {
                         </div>
                         {marketId ? (
                           <div style={{ display:"flex", gap:8 }}>
-                            <button onClick={() => { setBetMarket({ marketId, title, yesPrice, noPrice }); setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false); }} className="hov-btn"
+                            <button onClick={() => {
+                              setBetMarket({ marketId, title, yesPrice, noPrice });
+                              setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                            }} className="hov-btn"
                               style={{ flex:1, padding:"7px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer" }}>
                               YES {yesPrice ? `$${yesPrice}` : ""}
                             </button>
-                            <button onClick={() => { setBetMarket({ marketId, title, yesPrice, noPrice }); setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false); }} className="hov-btn"
+                            <button onClick={() => {
+                              setBetMarket({ marketId, title, yesPrice, noPrice });
+                              setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                            }} className="hov-btn"
                               style={{ flex:1, padding:"7px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:600, cursor:"pointer" }}>
                               NO {noPrice ? `$${noPrice}` : ""}
                             </button>
                           </div>
                         ) : (
-                          <div style={{ fontSize:11, color:T.text3 }}>No tradable market available yet</div>
+                          <div style={{ fontSize:11, color:T.text3, fontStyle:"italic" }}>
+                            Market closed or not yet tradeable
+                          </div>
                         )}
                       </div>
                     );
