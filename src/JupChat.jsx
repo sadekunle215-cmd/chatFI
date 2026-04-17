@@ -723,32 +723,26 @@ export default function JupChat() {
   // Legacy window-injection providers (desktop extensions / in-app browsers)
   const getLegacyProvider = (name) => {
     switch (name) {
-      case "Phantom":       return window?.phantom?.solana;
-      case "Solflare":      return window?.solflare?.isSolflare ? window.solflare : null;
-      case "Backpack":      return window?.backpack?.solana;
-      case "Jupiter":       return window?.jupiter?.solana || window?.jupiter;
-      case "Trust Wallet":  return window?.trustwallet?.solana || window?.trustWallet?.solana;
-      case "Coin98":        return window?.coin98?.sol;
-      case "OKX":           return window?.okxwallet?.solana;
-      default:              return window?.solana || null;
+      case "Phantom":   return window?.phantom?.solana;
+      // Accept any Solflare injection — older versions don't set isSolflare
+      case "Solflare":  return window?.solflare?.isSolflare ? window.solflare : (window?.solflare?.connect ? window.solflare : null);
+      case "Backpack":  return window?.backpack?.solana;
+      case "Jupiter":   return window?.jupiter?.solana || (window?.jupiter?.connect ? window.jupiter : null);
+      default:          return window?.solana || null;
     }
   };
 
   // Mobile universal/deep links — open the wallet app which will redirect back
   const MOBILE_DEEP_LINKS = {
-    "Phantom":      (url) => `https://phantom.app/ul/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
-    "Solflare":     (url) => `https://solflare.com/ul/v1/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
-    "Backpack":     (url) => `https://backpack.app/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
-    "Trust Wallet": (url) => `https://link.trustwallet.com/open_url?coin_id=501&url=${encodeURIComponent(url)}`,
-    "OKX":          (url) => `okx://wallet/dapp/url?dappUrl=${encodeURIComponent(url)}`,
-    "Coin98":       (url) => `coin98://browser?url=${encodeURIComponent(url)}`,
-    "Jupiter":      ()    => "https://jup.ag/mobile",
+    "Phantom":  (url) => `https://phantom.app/ul/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
+    "Solflare": (url) => `https://solflare.com/ul/v1/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
+    "Backpack": (url) => `https://backpack.app/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
+    "Jupiter":  ()    => "https://jup.ag/mobile",
   };
 
   // Shared icon map used by buildWalletList
   const WALLET_ICONS = {
     "Phantom":"👻", "Solflare":"🔥", "Backpack":"🎒", "Jupiter":"🪐",
-    "Trust Wallet":"🛡️", "OKX":"⭕", "Coin98":"🪙",
   };
 
   // Wrap a Wallet Standard wallet into the same {connect, signTransaction} shape
@@ -756,7 +750,9 @@ export default function JupChat() {
     connect: async () => {
       const feat = stdWallet.features["standard:connect"];
       const result = await feat.connect();
-      const acct = result.accounts?.[0];
+      // Some wallets (Backpack, Solflare) don't put accounts in the connect() result —
+      // they update stdWallet.accounts in place, so fall back to that.
+      const acct = result.accounts?.[0] || stdWallet.accounts?.[0];
       if (!acct) throw new Error("No account returned");
       // publicKey may be Uint8Array — convert to base58 string using bs58-style logic
       let pubkeyStr;
@@ -807,13 +803,10 @@ export default function JupChat() {
 
     // 2. Legacy injected providers (desktop extensions / wallet in-app browsers)
     const LEGACY = [
-      { name:"Phantom",     icon:"👻" },
-      { name:"Solflare",    icon:"🔥" },
-      { name:"Backpack",    icon:"🎒" },
-      { name:"Jupiter",     icon:"🪐" },
-      { name:"Trust Wallet",icon:"🛡️" },
-      { name:"Coin98",      icon:"🪙" },
-      { name:"OKX",         icon:"⭕" },
+      { name:"Phantom",  icon:"👻" },
+      { name:"Solflare", icon:"🔥" },
+      { name:"Backpack", icon:"🎒" },
+      { name:"Jupiter",  icon:"🪐" },
     ];
     for (const w of LEGACY) {
       const already = list.find(l => l.name.toLowerCase() === w.name.toLowerCase());
@@ -853,7 +846,6 @@ export default function JupChat() {
         { name:"Phantom",  icon:"👻", url:"https://phantom.com/download" },
         { name:"Solflare", icon:"🔥", url:"https://solflare.com/download" },
         { name:"Backpack", icon:"🎒", url:"https://backpack.app/downloads" },
-        { name:"OKX",      icon:"⭕", url:"https://www.okx.com/web3/wallet" },
       ];
       for (const w of DESKTOP_INSTALLS) {
         list.push({ name: w.name, icon: w.icon, detected: false, deepLink: w.url, type: "download" });
@@ -917,7 +909,10 @@ export default function JupChat() {
 
     try {
       const resp   = await provider.connect();
-      const pubkey = resp.publicKey.toString();
+      // Solflare (legacy) resolves connect() without returning publicKey —
+      // it sets provider.publicKey directly. Check both.
+      let pubkey = resp?.publicKey?.toString?.() || provider?.publicKey?.toString?.();
+      if (!pubkey) throw new Error("Could not read wallet public key — please try again.");
       const display = pubkey.slice(0,4) + "…" + pubkey.slice(-4);
       connectedProviderRef.current = provider;
       setWallet(display);
@@ -958,9 +953,7 @@ export default function JupChat() {
     // Then legacy
     return (
       window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
-      window?.trustwallet?.solana || window?.trustWallet?.solana ||
-      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
-      window?.okxwallet?.solana || window?.solana || null
+      window?.jupiter?.solana || window?.jupiter || window?.solana || null
     );
   };
 
@@ -1718,7 +1711,7 @@ export default function JupChat() {
                 </div>
               ) : (
                 <div style={{ padding:16, background:T.bg, borderRadius:10, fontSize:13, color:T.text2, textAlign:"center" }}>
-                  <div style={{ marginBottom:10 }}>No wallet detected. Open this site inside your Phantom, Solflare, Backpack, OKX or Jupiter mobile app to connect automatically.</div>
+                  <div style={{ marginBottom:10 }}>No wallet detected. Open this site inside your Phantom, Solflare, Backpack or Jupiter mobile app to connect automatically.</div>
                   <a href="https://jup.ag/mobile" target="_blank" rel="noreferrer"
                     style={{ display:"inline-block", padding:"10px 20px", background:T.accent, color:"#fff", borderRadius:8, fontSize:13, fontWeight:600, textDecoration:"none" }}>
                     Download Jupiter Wallet →
