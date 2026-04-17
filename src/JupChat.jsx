@@ -2229,10 +2229,17 @@ export default function JupChat() {
                     </button>
                   )}
 
-                  {/* Detected / available wallets */}
-                  {walletList.length > 0 ? (
+                  {/* Detected / available wallets — on mobile, hide deeplink entries already shown as WC buttons */}
+                  {(() => {
+                    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+                    const WC_NAMES = ["phantom","solflare","backpack","jupiter"];
+                    const filtered = walletList.filter(w => {
+                      if (isMobile && w.type === "deeplink" && WC_NAMES.some(n => w.name.toLowerCase().includes(n))) return false;
+                      return true;
+                    });
+                    return filtered.length > 0 ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                      {walletList.map((w, i) => (
+                      {filtered.map((w, i) => (
                         <button key={i} onClick={() => doConnectWith(w)} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${w.detected ? T.accent+"44" : T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
                           <span style={{ width:32, textAlign:"center", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -2254,15 +2261,8 @@ export default function JupChat() {
                         </button>
                       ))}
                     </div>
-                  ) : (
-                    <div style={{ padding:16, background:T.bg, borderRadius:10, fontSize:13, color:T.text2, textAlign:"center" }}>
-                      <div style={{ marginBottom:10 }}>No wallet detected. Open this site inside your Phantom, Solflare, Backpack, OKX or Jupiter mobile app to connect automatically.</div>
-                      <a href="https://jup.ag/mobile" target="_blank" rel="noreferrer"
-                        style={{ display:"inline-block", padding:"10px 20px", background:T.accent, color:"#fff", borderRadius:8, fontSize:13, fontWeight:600, textDecoration:"none" }}>
-                        Download Jupiter Wallet →
-                      </a>
-                    </div>
-                  )}
+                  ) : null);
+                  })()}
 
                   <button onClick={() => setShowWalletModal(false)}
                     style={{ marginTop:14, width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
