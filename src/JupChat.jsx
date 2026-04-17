@@ -729,7 +729,6 @@ export default function JupChat() {
       case "Jupiter":       return window?.jupiter?.solana || window?.jupiter;
       case "Trust Wallet": {
         const tw = window?.trustwallet?.solana || window?.trustWallet?.solana;
-        // Only return if it has a callable connect() — newer Trust Wallet uses Wallet Standard exclusively
         return (tw && typeof tw.connect === "function") ? tw : null;
       }
       case "Coin98":        return window?.coin98?.sol;
@@ -746,19 +745,29 @@ export default function JupChat() {
     "Trust Wallet": (url) => `https://link.trustwallet.com/open_url?coin_id=501&url=${encodeURIComponent(url)}`,
     "OKX":          (url) => `okx://wallet/dapp/url?dappUrl=${encodeURIComponent(url)}`,
     "Coin98":       (url) => `coin98://browser?url=${encodeURIComponent(url)}`,
-    "Jupiter":      (url) => `https://jup.ag/ul/v1/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
+    // Jupiter has no documented deeplink for opening a dapp URL in-app.
+    // Best approach: send user to Jupiter mobile download page.
+    // When already installed on Android, the Play Store link opens the app directly.
+    "Jupiter": () => "https://jup.ag/mobile",
   };
 
-  // Real wallet logo URLs (official favicons/icons)
+  // Wallet logo map — inline SVG data URIs for any that block hotlinking; favicon for the rest
   const WALLET_LOGOS = {
-    "Phantom":           "https://phantom.app/favicon.ico",
-    "Solflare":          "https://solflare.com/favicon.ico",
-    "Backpack":          "https://backpack.app/favicon.ico",
-    "Jupiter":           "https://jup.ag/favicon.ico",
-    "Trust Wallet":      "https://trustwallet.com/favicon.ico",
-    "OKX":               "https://www.okx.com/favicon.ico",
-    "Coin98":            "https://coin98.com/favicon.ico",
-    "Get Jupiter Wallet":"https://jup.ag/favicon.ico",
+    // Phantom blocks favicon hotlinks — inline purple ghost SVG
+    "Phantom": "data:image/svg+xml;base64," + btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="#ab9ff2"/><path d="M110 55c0-25.4-20.6-46-46-46S18 29.6 18 55c0 14.3 6.5 27 16.8 35.4L29 110h12l5-8a45.7 45.7 0 0 0 18 4 45.7 45.7 0 0 0 18-4l5 8h12l-5.8-19.6C108.9 82.1 110 68.8 110 55zm-60 8a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm28 0a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" fill="white"/></svg>`),
+    // Solflare favicon works fine
+    "Solflare":      "https://solflare.com/favicon.ico",
+    // Backpack favicon works
+    "Backpack":      "https://backpack.app/favicon.ico",
+    // Jupiter favicon works
+    "Jupiter":       "https://jup.ag/favicon.ico",
+    // Trust Wallet favicon works
+    "Trust Wallet":  "https://trustwallet.com/favicon.ico",
+    // OKX blocks hotlinks — inline black grid logo SVG
+    "OKX": "data:image/svg+xml;base64," + btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="#000"/><rect x="22" y="48" width="24" height="24" rx="4" fill="white"/><rect x="52" y="48" width="24" height="24" rx="4" fill="white"/><rect x="82" y="48" width="24" height="24" rx="4" fill="white"/><rect x="37" y="62" width="24" height="24" rx="4" fill="white"/><rect x="67" y="62" width="24" height="24" rx="4" fill="white"/><rect x="37" y="34" width="24" height="24" rx="4" fill="white"/><rect x="67" y="34" width="24" height="24" rx="4" fill="white"/></svg>`),
+    // Coin98 favicon works
+    "Coin98":        "https://coin98.com/favicon.ico",
+    "Get Jupiter Wallet": "https://jup.ag/favicon.ico",
   };
 
   // Wrap a Wallet Standard wallet into the same {connect, signTransaction} shape
@@ -927,10 +936,9 @@ export default function JupChat() {
 
     try {
       const resp   = await provider.connect();
-      // Solflare mobile (and some others) return undefined from connect() and
-      // put publicKey directly on the provider object — handle both shapes.
+      // Solflare and some wallets put publicKey on the provider, not the connect() response
       const pubkeyObj = resp?.publicKey || provider?.publicKey;
-      if (!pubkeyObj) throw new Error("Wallet connected but no public key returned. Try opening this site inside your wallet's in-app browser.");
+      if (!pubkeyObj) throw new Error("No public key returned. Try opening this site inside your wallet's in-app browser.");
       const pubkey = pubkeyObj.toString();
       const display = pubkey.slice(0,4) + "…" + pubkey.slice(-4);
       connectedProviderRef.current = provider;
@@ -1716,8 +1724,9 @@ export default function JupChat() {
                       style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${w.detected ? T.accent+"44" : T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
                       <span style={{ width:32, textAlign:"center", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
                         {typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))
-                          ? <img src={w.icon} style={{ width:26, height:26, borderRadius:6, objectFit:"contain" }} alt={w.name}/>
-                          : <span style={{ fontSize:22 }}>{w.icon}</span>}
+                          ? <img src={w.icon} style={{ width:26, height:26, borderRadius:6, objectFit:"contain" }} alt={w.name} onError={e => { e.target.style.display="none"; e.target.nextSibling.style.display="inline"; }} />
+                          : null}
+                        <span style={{ fontSize:22, display: (typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))) ? "none" : "inline" }}>{w.icon}</span>
                       </span>
                       <span style={{ flex:1, fontWeight: w.detected ? 500 : 400 }}>{w.name}</span>
                       {w.detected && w.type !== "download" && (
