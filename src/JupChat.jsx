@@ -727,12 +727,11 @@ export default function JupChat() {
       case "Solflare":      return window?.solflare?.isSolflare ? window.solflare : null;
       case "Backpack":      return window?.backpack?.solana;
       case "Jupiter": {
-        // window.jupiter is set by some Jupiter builds; but the Jupiter mobile
-        // in-app browser injects its provider as window.solana with isJupiter:true
-        const jupProv = window?.jupiter?.solana || window?.jupiter;
-        if (jupProv) return jupProv;
-        if (window?.solana?.isJupiter) return window.solana;
-        return null;
+        // Jupiter Mobile in-app browser injects window.solana with isJupiter=true
+        // It does NOT inject window.jupiter — check for that flag first
+        const jupSolana = window?.solana;
+        if (jupSolana?.isJupiter) return jupSolana;
+        return window?.jupiter?.solana || window?.jupiter || null;
       }
       case "Trust Wallet": {
         const tw = window?.trustwallet?.solana || window?.trustWallet?.solana;
@@ -752,9 +751,7 @@ export default function JupChat() {
     "Trust Wallet": (url) => `https://link.trustwallet.com/open_url?coin_id=501&url=${encodeURIComponent(url)}`,
     "OKX":          (url) => `okx://wallet/dapp/url?dappUrl=${encodeURIComponent(url)}`,
     "Coin98":       (url) => `coin98://browser?url=${encodeURIComponent(url)}`,
-    // Jupiter has no documented deeplink for opening a dapp URL in-app.
-    // Best approach: send user to Jupiter mobile download page.
-    // When already installed on Android, the Play Store link opens the app directly.
+    // Jupiter deeplink is only shown when NOT inside Jupiter Mobile (in-app detection handles the rest)
     "Jupiter": () => "https://jup.ag/mobile",
   };
 
@@ -850,13 +847,7 @@ export default function JupChat() {
       }
     }
 
-    // 2.5a. Jupiter in-app browser catch — window.solana.isJupiter is true but window.jupiter
-    //       may not exist. Must run BEFORE the generic catch-all so it gets the right name/icon.
-    if (!list.some(l => l.name === "Jupiter") && window?.solana?.isJupiter) {
-      list.push({ name: "Jupiter", icon: WALLET_LOGOS["Jupiter"], detected: true, connect: async () => window.solana, type: "legacy" });
-    }
-
-    // 2.5b. Generic window.solana catch-all (wallets that only inject the generic provider)
+    // 2.5. Generic window.solana catch-all (wallets that only inject the generic provider)
     const alreadyHasLegacy = list.some(l => l.type === "standard" || l.type === "legacy");
     if (!alreadyHasLegacy && window?.solana?.connect) {
       list.push({ name: "Solana Wallet", icon: "💎", detected: true, connect: async () => window.solana, type: "legacy" });
