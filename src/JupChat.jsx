@@ -711,24 +711,37 @@ export default function JupChat() {
 
   const getStandardWallets = () => {
     try {
-      const reg = window?.__wallet_standard__?.get?.() || [];
-      return reg.filter(w =>
-        w.chains?.some(c => c.startsWith("solana:")) &&
-        w.features?.["standard:connect"] &&
-        w.features?.["standard:signTransaction"]
-      );
+      // Method 1: Wallet Standard v1 (window.__wallet_standard__)
+      const reg1 = window?.__wallet_standard__?.get?.() || [];
+      // Method 2: Newer getWallets() API used by Jupiter Wallet Extension
+      const reg2 = window?.wallets?.get?.() || [];
+      // Method 3: solana:registerWallet event-based registry
+      const reg3 = window?.__solana_wallets__ || [];
+      const all = [...reg1, ...reg2, ...reg3];
+      // Deduplicate by name
+      const seen = new Set();
+      return all.filter(w => {
+        if (!w?.name) return false;
+        if (seen.has(w.name)) return false;
+        seen.add(w.name);
+        return (
+          w.chains?.some(c => c.startsWith("solana:")) &&
+          (w.features?.["standard:connect"] || w.features?.["solana:connect"]) &&
+          (w.features?.["standard:signTransaction"] || w.features?.["solana:signTransaction"])
+        );
+      });
     } catch { return []; }
   };
 
   // Legacy window-injection providers (desktop extensions / in-app browsers)
   const getLegacyProvider = (name) => {
     switch (name) {
-      case "Phantom":   return window?.phantom?.solana;
+      case "Phantom":   return window?.phantom?.solana || (window?.solana?.isPhantom ? window.solana : null);
       // Accept any Solflare injection — older versions don't set isSolflare
       case "Solflare":  return window?.solflare?.isSolflare ? window.solflare : (window?.solflare?.connect ? window.solflare : null);
       case "Backpack":  return window?.backpack?.solana;
-      // Jupiter mobile wallet injects window.solana with isJupiter=true inside its in-app browser
-      case "Jupiter":   return window?.jupiter?.solana || window?.jupiter || (window?.solana?.isJupiter ? window.solana : null);
+      // Jupiter Wallet Extension injects window.jupiterSolana (extension) OR window.solana with isJupiter=true (mobile)
+      case "Jupiter":   return window?.jupiterSolana || window?.jupiter?.solana || window?.jupiter || (window?.solana?.isJupiter ? window.solana : null);
       default:          return window?.solana || null;
     }
   };
@@ -749,15 +762,17 @@ export default function JupChat() {
   // Wrap a Wallet Standard wallet into the same {connect, signTransaction} shape
   const wrapStandardWallet = (stdWallet) => ({
     connect: async () => {
-      const feat = stdWallet.features["standard:connect"];
-      const result = await feat.connect();
+      const connectFeat = stdWallet.features["standard:connect"] ||
+                          stdWallet.features["solana:connect"];
+      if (!connectFeat) throw new Error("Wallet does not support standard:connect");
+      const result = await connectFeat.connect();
       // Some wallets (Backpack, Solflare) don't put accounts in the connect() result —
       // they update stdWallet.accounts in place, so fall back to that.
-      const acct = result.accounts?.[0] || stdWallet.accounts?.[0];
+      const acct = result?.accounts?.[0] || stdWallet.accounts?.[0];
       if (!acct) throw new Error("No account returned");
       // publicKey may be Uint8Array — convert to base58 string using bs58-style logic
       let pubkeyStr;
-      if (typeof acct.address === "string") {
+      if (typeof acct.address === "string" && acct.address.length > 20) {
         pubkeyStr = acct.address;
       } else if (acct.publicKey instanceof Uint8Array) {
         // Inline base58 encode
@@ -772,13 +787,16 @@ export default function JupChat() {
         for (let k = 0; acct.publicKey[k] === 0 && k < acct.publicKey.length - 1; ++k) str += "1";
         for (let k = digits.length - 1; k >= 0; --k) str += ALPHABET[digits[k]];
         pubkeyStr = str;
-      } else { throw new Error("Cannot read public key"); }
+      } else { throw new Error("Cannot read public key from wallet"); }
       return { publicKey: { toString: () => pubkeyStr } };
     },
     signTransaction: async (tx) => {
       const feat = stdWallet.features["standard:signTransaction"] ||
                    stdWallet.features["solana:signTransaction"];
-      const result = await feat.signTransaction({ transaction: tx, account: stdWallet.accounts?.[0] });
+      if (!feat) throw new Error("Wallet does not support signTransaction");
+      const account = stdWallet.accounts?.[0];
+      if (!account) throw new Error("No connected account found — please reconnect.");
+      const result = await feat.signTransaction({ transaction: tx, account });
       return result.signedTransaction || result.transaction || tx;
     },
     isStandard: true,
@@ -855,6 +873,7 @@ export default function JupChat() {
     // 4. On desktop with nothing detected: show extension install links
     if (!isMobile && list.length === 0) {
       const DESKTOP_INSTALLS = [
+        { name:"Jupiter Wallet", icon:"🪐", url:"https://chromewebstore.google.com/detail/jupiter-wallet/iledlaeogohbilgbfhmbgkgmpplbfboh" },
         { name:"Phantom",  icon:"👻", url:"https://phantom.com/download" },
         { name:"Solflare", icon:"🔥", url:"https://solflare.com/download" },
         { name:"Backpack", icon:"🎒", url:"https://backpack.app/downloads" },
@@ -875,6 +894,22 @@ export default function JupChat() {
   const [walletList, setWalletList] = useState([]);
   const pendingSwapRef = useRef(null);
   const connectedProviderRef = useRef(null); // store the active provider for signing
+
+  // Pre-warm wallet detection on mount — catches wallets injected at page load
+  // and re-builds list when new wallets register (Backpack, OKX, etc.)
+  useEffect(() => {
+    const rebuild = () => {
+      // Only update state if modal isn't open (avoids flicker); the modal effect handles that
+      setWalletList(buildWalletList());
+    };
+    // Small delay so wallet extensions have time to inject
+    const t = setTimeout(rebuild, 500);
+    window.addEventListener("wallet-standard:register-wallet", rebuild);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("wallet-standard:register-wallet", rebuild);
+    };
+  }, []);
 
   // Rebuild wallet list every time the modal opens;
   // also listen for wallets that register asynchronously after page load
@@ -914,19 +949,24 @@ export default function JupChat() {
 
     setShowWalletModal(false);
     let provider;
-    try {
-      provider = await walletEntry.connect();
-    } catch (err) {
-      push("ai", `Could not get wallet provider for ${walletEntry.name}. Please try again.`);
-      return;
-    }
+    let pubkey;
 
     try {
-      const resp   = await provider.connect();
-      // Solflare (legacy) resolves connect() without returning publicKey —
-      // it sets provider.publicKey directly. Check both.
-      let pubkey = resp?.publicKey?.toString?.() || provider?.publicKey?.toString?.();
-      if (!pubkey) throw new Error("Could not read wallet public key — please try again.");
+      if (walletEntry.type === "standard") {
+        // For Wallet Standard wallets: walletEntry.connect() returns the wrapped provider
+        // AND internally calls standard:connect — so we get the pubkey from its return value
+        provider = await walletEntry.connect();   // this is wrapStandardWallet(sw)
+        const resp = await provider.connect();    // calls feat.connect() → returns {publicKey}
+        pubkey = resp?.publicKey?.toString?.();
+        if (!pubkey) throw new Error("Could not read wallet public key — please try again.");
+      } else {
+        // Legacy provider: walletEntry.connect() returns the raw window.phantom.solana etc.
+        provider = await walletEntry.connect();
+        const resp = await provider.connect();
+        pubkey = resp?.publicKey?.toString?.() || provider?.publicKey?.toString?.();
+        if (!pubkey) throw new Error("Could not read wallet public key — please try again.");
+      }
+
       const display = pubkey.slice(0,4) + "…" + pubkey.slice(-4);
       connectedProviderRef.current = provider;
       setWallet(display);
