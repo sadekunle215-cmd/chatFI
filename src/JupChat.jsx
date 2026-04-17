@@ -735,28 +735,63 @@ export default function JupChat() {
 
   const loadWCScript = () =>
     new Promise((res, rej) => {
-      if (window._wcLoaded) { res(); return; }
-      // Try unpkg first (ships the pre-bundled UMD reliably), fall back to jsdelivr
+      // If already loaded AND class is resolvable, skip
+      if (window._wcLoaded && resolveWCClass()) { res(); return; }
+
+      // ── Node.js built-in polyfills required by WalletConnect UMD bundle ────
+      // The WC UMD bundle references process/global/Buffer at runtime; without
+      // these stubs the bundle throws internally and never sets window.SignClient.
+      if (!window.global)  window.global  = window;
+      if (!window.process) window.process = {
+        env:      {},
+        version:  "v16.0.0",
+        browser:  true,
+        nextTick: (cb, ...args) => setTimeout(() => cb(...args), 0),
+      };
+      if (typeof window.Buffer === "undefined") {
+        // Minimal Buffer shim (WC only needs .from / .isBuffer / .alloc)
+        try {
+          const s = document.createElement("script");
+          s.src = "https://cdn.jsdelivr.net/npm/buffer@6/index.min.js";
+          document.head.appendChild(s);
+          // Don't block on this — WC may not need Buffer at init time
+        } catch {}
+      }
+
       const CDNS = [
         "https://unpkg.com/@walletconnect/sign-client@2.17.0/dist/index.umd.js",
         "https://cdn.jsdelivr.net/npm/@walletconnect/sign-client@2.17.0/dist/index.umd.js",
       ];
       const tryLoad = (i) => {
-        if (i >= CDNS.length) { rej(new Error("Failed to load WalletConnect SDK from all CDNs")); return; }
+        if (i >= CDNS.length) {
+          rej(new Error("WalletConnect SDK failed to load from all CDNs — window.SignClient not set. Open browser console for details."));
+          return;
+        }
         const s = document.createElement("script");
         s.src = CDNS[i];
-        s.onload = () => { window._wcLoaded = true; res(); };
-        s.onerror = () => tryLoad(i + 1);
+        s.onload = () => {
+          // Verify that the bundle actually populated a usable global.
+          // Just trusting onload is wrong — the bundle may error internally
+          // (e.g. missing process/Buffer) and fire onload without setting globals.
+          if (resolveWCClass()) {
+            window._wcLoaded = true;
+            res();
+          } else {
+            // Script tag loaded but globals missing → try next CDN
+            console.warn(`[JupChat] WC script loaded from ${CDNS[i]} but SignClient global not found, trying next CDN…`);
+            tryLoad(i + 1);
+          }
+        };
+        s.onerror = () => {
+          console.warn(`[JupChat] Failed to fetch WC script from ${CDNS[i]}, trying next…`);
+          tryLoad(i + 1);
+        };
         document.head.appendChild(s);
       };
       tryLoad(0);
     });
 
   // Resolve the SignClient class from whatever the UMD bundle registers globally.
-  // @walletconnect/sign-client v2 UMD may set:
-  //   window.SignClient            (if init is a static method directly)
-  //   window.SignClient.SignClient  (namespace wrapper)
-  //   window.SignClient.default
   const resolveWCClass = () => {
     const candidates = [
       window.SignClient,
@@ -764,6 +799,9 @@ export default function JupChat() {
       window.SignClient?.default,
       window.WalletConnectSignClient,
       window.WCSignClient,
+      window?.["@walletconnect/sign-client"],
+      window?.["@walletconnect/sign-client"]?.SignClient,
+      window?.["@walletconnect/sign-client"]?.default,
     ];
     for (const c of candidates) {
       if (c && typeof c.init === "function") return c;
