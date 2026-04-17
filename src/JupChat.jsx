@@ -736,20 +736,46 @@ export default function JupChat() {
   const loadWCScript = () =>
     new Promise((res, rej) => {
       if (window._wcLoaded) { res(); return; }
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/@walletconnect/sign-client@2.17.0/dist/index.umd.js";
-      s.onload = () => { window._wcLoaded = true; res(); };
-      s.onerror = () => rej(new Error("Failed to load WalletConnect SDK"));
-      document.head.appendChild(s);
+      // Try unpkg first (ships the pre-bundled UMD reliably), fall back to jsdelivr
+      const CDNS = [
+        "https://unpkg.com/@walletconnect/sign-client@2.17.0/dist/index.umd.js",
+        "https://cdn.jsdelivr.net/npm/@walletconnect/sign-client@2.17.0/dist/index.umd.js",
+      ];
+      const tryLoad = (i) => {
+        if (i >= CDNS.length) { rej(new Error("Failed to load WalletConnect SDK from all CDNs")); return; }
+        const s = document.createElement("script");
+        s.src = CDNS[i];
+        s.onload = () => { window._wcLoaded = true; res(); };
+        s.onerror = () => tryLoad(i + 1);
+        document.head.appendChild(s);
+      };
+      tryLoad(0);
     });
+
+  // Resolve the SignClient class from whatever the UMD bundle registers globally.
+  // @walletconnect/sign-client v2 UMD may set:
+  //   window.SignClient            (if init is a static method directly)
+  //   window.SignClient.SignClient  (namespace wrapper)
+  //   window.SignClient.default
+  const resolveWCClass = () => {
+    const candidates = [
+      window.SignClient,
+      window.SignClient?.SignClient,
+      window.SignClient?.default,
+      window.WalletConnectSignClient,
+      window.WCSignClient,
+    ];
+    for (const c of candidates) {
+      if (c && typeof c.init === "function") return c;
+    }
+    return null;
+  };
 
   const getWCSignClient = async () => {
     if (wcClientRef.current) return wcClientRef.current;
     await loadWCScript();
-    // UMD global may be window.SignClient or window.SignClient.SignClient
-    const WC = window.SignClient;
-    const SC = (WC && typeof WC.init === "function") ? WC : WC?.SignClient;
-    if (!SC) throw new Error("WalletConnect SignClient not found on window");
+    const SC = resolveWCClass();
+    if (!SC) throw new Error("WalletConnect SignClient not found on window — check CDN or browser console for script errors");
     const client = await SC.init({
       projectId: WC_PROJECT_ID,
       metadata: {
