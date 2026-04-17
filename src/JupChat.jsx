@@ -829,12 +829,21 @@ export default function JupChat() {
     return client;
   };
 
-  const initWalletConnect = async () => {
+  // Deep link templates for WalletConnect URI — opens wallet app directly on mobile
+  const WC_DEEP_LINKS = {
+    "Jupiter":      (uri) => `https://jup.ag/wc?uri=${encodeURIComponent(uri)}`,
+    "Phantom":      (uri) => `https://phantom.app/ul/wc?uri=${encodeURIComponent(uri)}`,
+    "Solflare":     (uri) => `https://solflare.com/ul/v1/wc?uri=${encodeURIComponent(uri)}`,
+    "Backpack":     (uri) => `https://backpack.app/wc?uri=${encodeURIComponent(uri)}`,
+  };
+
+  const initWalletConnect = async (preferredWallet = null) => {
     setWcStatus("loading");
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     try {
       const client = await getWCSignClient();
 
-      // Clean up any stale pairings to avoid "already paired" errors
+      // Clean up stale pairings
       try {
         const stale = client.pairing?.getAll?.({ active: false }) || [];
         for (const p of stale) { await client.pairing.delete(p.topic, { code: 0, message: "stale" }).catch(() => {}); }
@@ -854,29 +863,39 @@ export default function JupChat() {
       setWcUri(uri);
       setWcStatus("waiting");
 
-      // Await user scanning + approving in Jupiter Mobile
+      // On mobile: immediately deep-link into the wallet app so it can approve
+      if (isMobile) {
+        const walletName = preferredWallet || "Jupiter";
+        const deepLinkFn = WC_DEEP_LINKS[walletName] || WC_DEEP_LINKS["Jupiter"];
+        const deepLink = deepLinkFn(uri);
+        // Small delay so the UI renders the "waiting" state before switching apps
+        setTimeout(() => { window.location.href = deepLink; }, 300);
+      }
+
+      // Await wallet approval (works whether via deep link or QR scan on desktop)
       const session = await approval();
       wcSessionRef.current = session;
 
       const accounts = session.namespaces?.solana?.accounts || [];
       if (!accounts.length) throw new Error("No Solana account returned from session");
-      const address = accounts[0].split(":").pop(); // "solana:chainId:PUBKEY" → "PUBKEY"
+      const address = accounts[0].split(":").pop();
 
-      // Build a signing provider backed by WalletConnect
       const wcProvider = {
         publicKey: { toString: () => address },
         connect: async () => ({ publicKey: { toString: () => address } }),
         signTransaction: async (tx) => {
-          // Serialize the VersionedTransaction to base64
           const raw = tx.serialize();
           const base64 = btoa(String.fromCharCode(...raw));
+          // On mobile, deep-link back to wallet for signing
+          if (isMobile) {
+            const walletName = preferredWallet || "Jupiter";
+            const deepLinkFn = WC_DEEP_LINKS[walletName] || WC_DEEP_LINKS["Jupiter"];
+            setTimeout(() => { window.location.href = deepLinkFn(uri); }, 100);
+          }
           const result = await client.request({
             topic: session.topic,
             chainId: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-            request: {
-              method: "solana_signTransaction",
-              params: { transaction: base64 },
-            },
+            request: { method: "solana_signTransaction", params: { transaction: base64 } },
           });
           if (!result?.transaction) throw new Error("No signed transaction returned from wallet");
           const signed = new Uint8Array(atob(result.transaction).split("").map(c => c.charCodeAt(0)));
@@ -885,14 +904,12 @@ export default function JupChat() {
         isWalletConnect: true,
       };
 
-      // Close modal, reset WC UI state
       setShowWalletModal(false);
       setWcStatus("idle");
       setWcUri("");
       setWcMode("qr");
       setWcCopied(false);
 
-      // Complete connection
       connectedProviderRef.current = wcProvider;
       const display = `${address.slice(0,4)}…${address.slice(-4)}`;
       setWallet(display);
@@ -901,7 +918,7 @@ export default function JupChat() {
       setPortfolio(balances);
       const live = await fetchPrices();
       const solUSD = balances.SOL && live.SOL ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})` : "";
-      push("ai", `Jupiter Wallet connected via WalletConnect ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}${Object.entries(balances).filter(([k])=>k!=="SOL").map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("")}\n\nWhat would you like to do?`);
+      push("ai", `Wallet connected via WalletConnect ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}${Object.entries(balances).filter(([k])=>k!=="SOL").map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("")}\n\nWhat would you like to do?`);
     } catch (err) {
       setWcStatus("idle");
       setWcUri("");
@@ -2128,21 +2145,46 @@ export default function JupChat() {
                       : "No wallet detected in this browser. Open this page inside your wallet app, or tap a wallet below to launch it."}
                   </div>
 
-                  {/* WalletConnect QR button — always first */}
-                  <button onClick={initWalletConnect} className="hov-row"
-                    style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%", marginBottom:8 }}>
-                    <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", background:T.accent, borderRadius:8, flexShrink:0 }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>
-                        <path d="M14 14h2v2h-2zM18 14h3M14 18v3M18 18h3v3h-3z"/>
-                      </svg>
-                    </span>
-                    <span style={{ flex:1 }}>
-                      <span style={{ fontWeight:600, display:"block", color:T.accent }}>WalletConnect (QR or URI)</span>
-                      <span style={{ fontSize:11, color:T.text3 }}>Jupiter, Phantom, Backpack + more</span>
-                    </span>
-                    <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>→</span>
-                  </button>
+                  {/* WalletConnect — mobile: per-wallet deep link buttons; desktop: QR */}
+                  {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
+                    <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:8 }}>
+                      {[
+                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Opens Jupiter Wallet app to approve" },
+                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Opens Phantom app to approve" },
+                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Opens Solflare app to approve" },
+                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Opens Backpack app to approve" },
+                      ].map(w => (
+                        <button key={w.name} onClick={() => initWalletConnect(w.name)} className="hov-row"
+                          style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
+                          <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                            {typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))
+                              ? <img src={w.icon} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={w.name}/>
+                              : <span style={{ fontSize:22 }}>{w.icon}</span>}
+                          </span>
+                          <span style={{ flex:1 }}>
+                            <span style={{ fontWeight:600, display:"block", color:T.text1 }}>{w.name}</span>
+                            <span style={{ fontSize:11, color:T.text3 }}>{w.subtitle}</span>
+                          </span>
+                          <span style={{ fontSize:13, color:T.accent, fontWeight:600 }}>→</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <button onClick={() => initWalletConnect(null)} className="hov-row"
+                      style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%", marginBottom:8 }}>
+                      <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", background:T.accent, borderRadius:8, flexShrink:0 }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>
+                          <path d="M14 14h2v2h-2zM18 14h3M14 18v3M18 18h3v3h-3z"/>
+                        </svg>
+                      </span>
+                      <span style={{ flex:1 }}>
+                        <span style={{ fontWeight:600, display:"block", color:T.accent }}>WalletConnect (QR or URI)</span>
+                        <span style={{ fontSize:11, color:T.text3 }}>Jupiter, Phantom, Backpack + more</span>
+                      </span>
+                      <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>→</span>
+                    </button>
+                  )}
 
                   {/* Detected / available wallets */}
                   {walletList.length > 0 ? (
