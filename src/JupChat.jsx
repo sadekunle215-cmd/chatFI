@@ -516,11 +516,7 @@ export default function JupChat() {
     const { vault, amount } = earnDeposit;
     if (!amount || parseFloat(amount) <= 0) return;
     if (!walletFull) { push("ai", "Connect your wallet first to deposit."); return; }
-    const provider =
-      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
-      window?.trustwallet?.solana || window?.trustWallet?.solana ||
-      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
-      window?.okxwallet?.solana || window?.solana;
+    const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
 
     // Get the asset mint from the vault object
@@ -571,11 +567,7 @@ export default function JupChat() {
   const doPredictionBet = async () => {
     if (!betMarket || !betSide || !betAmount || parseFloat(betAmount) < 5) return;
     if (!walletFull) { push("ai", "Connect your wallet first to place a prediction bet."); return; }
-    const provider =
-      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
-      window?.trustwallet?.solana || window?.trustWallet?.solana ||
-      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
-      window?.okxwallet?.solana || window?.solana;
+    const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
 
     // depositAmount in native USDC/JupUSD units (1 USD = 1_000_000)
@@ -630,11 +622,7 @@ export default function JupChat() {
 
   // ── Claim prediction payouts — POST /prediction/v1/positions/{pubkey}/claim ─
   const doClaimPayouts = async (introText = "") => {
-    const provider =
-      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
-      window?.trustwallet?.solana || window?.trustWallet?.solana ||
-      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
-      window?.okxwallet?.solana || window?.solana;
+    const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet not connected. Please connect to claim payouts."); return; }
 
     push("ai", (introText ? introText + "\n\n" : "") + "Checking for claimable prediction positions…");
@@ -717,19 +705,142 @@ export default function JupChat() {
     } catch { return {}; }
   };
 
-  // ── Wallet options registry ─────────────────────────────────────────────────
-  const WALLET_OPTIONS = [
-    { name:"Jupiter Wallet",  icon:"🪐", get: () => window?.jupiter?.solana || window?.jupiter },
-    { name:"Phantom",         icon:"👻", get: () => window?.phantom?.solana },
-    { name:"Solflare",        icon:"🔥", get: () => window?.solflare },
-    { name:"Backpack",        icon:"🎒", get: () => window?.backpack?.solana },
-    { name:"Trust Wallet",    icon:"🛡️", get: () => window?.trustwallet?.solana || window?.trustWallet?.solana },
-    { name:"Coin98",          icon:"🪙", get: () => window?.coin98?.sol },
-    { name:"OKX Wallet",      icon:"⭕", get: () => window?.okxwallet?.solana },
-    { name:"Other Wallet",    icon:"💼", get: () => window?.solana },
-  ];
+  // ── Wallet Standard detection + mobile deep-link registry ───────────────────
+  // Detects wallets via the Wallet Standard API (works for extensions + mobile in-app browsers)
+  // Falls back to legacy window injection checks, then offers mobile deep links.
 
+  const getStandardWallets = () => {
+    try {
+      const reg = window?.__wallet_standard__?.get?.() || [];
+      return reg.filter(w =>
+        w.chains?.some(c => c.startsWith("solana:")) &&
+        w.features?.["standard:connect"] &&
+        w.features?.["standard:signTransaction"]
+      );
+    } catch { return []; }
+  };
+
+  // Legacy window-injection providers (desktop extensions / in-app browsers)
+  const getLegacyProvider = (name) => {
+    switch (name) {
+      case "Phantom":       return window?.phantom?.solana;
+      case "Solflare":      return window?.solflare?.isSolflare ? window.solflare : null;
+      case "Backpack":      return window?.backpack?.solana;
+      case "Jupiter":       return window?.jupiter?.solana || window?.jupiter;
+      case "Trust Wallet":  return window?.trustwallet?.solana || window?.trustWallet?.solana;
+      case "Coin98":        return window?.coin98?.sol;
+      case "OKX":           return window?.okxwallet?.solana;
+      default:              return window?.solana || null;
+    }
+  };
+
+  // Mobile universal/deep links — open the wallet app which will redirect back
+  const MOBILE_DEEP_LINKS = {
+    "Phantom":   (url) => `https://phantom.app/ul/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
+    "Solflare":  (url) => `https://solflare.com/ul/v1/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
+    "Jupiter":   ()    => "https://jup.ag/mobile",
+  };
+
+  // Wrap a Wallet Standard wallet into the same {connect, signTransaction} shape
+  const wrapStandardWallet = (stdWallet) => ({
+    connect: async () => {
+      const feat = stdWallet.features["standard:connect"];
+      const result = await feat.connect();
+      const acct = result.accounts?.[0];
+      if (!acct) throw new Error("No account returned");
+      // publicKey may be Uint8Array — convert to base58 string using bs58-style logic
+      let pubkeyStr;
+      if (typeof acct.address === "string") {
+        pubkeyStr = acct.address;
+      } else if (acct.publicKey instanceof Uint8Array) {
+        // Inline base58 encode
+        const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        let digits = [0];
+        for (const byte of acct.publicKey) {
+          let carry = byte;
+          for (let j = 0; j < digits.length; ++j) { carry += digits[j] << 8; digits[j] = carry % 58; carry = (carry / 58) | 0; }
+          while (carry > 0) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+        }
+        let str = "";
+        for (let k = 0; acct.publicKey[k] === 0 && k < acct.publicKey.length - 1; ++k) str += "1";
+        for (let k = digits.length - 1; k >= 0; --k) str += ALPHABET[digits[k]];
+        pubkeyStr = str;
+      } else { throw new Error("Cannot read public key"); }
+      return { publicKey: { toString: () => pubkeyStr } };
+    },
+    signTransaction: async (tx) => {
+      const feat = stdWallet.features["standard:signTransaction"] ||
+                   stdWallet.features["solana:signTransaction"];
+      const result = await feat.signTransaction({ transaction: tx, account: stdWallet.accounts?.[0] });
+      return result.signedTransaction || result.transaction || tx;
+    },
+    isStandard: true,
+    walletName: stdWallet.name,
+  });
+
+  // Build the final wallet list shown in the modal
+  const buildWalletList = () => {
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    const list = [];
+
+    // 1. Wallet Standard wallets (highest priority — works everywhere they're injected)
+    const stdWallets = getStandardWallets();
+    for (const sw of stdWallets) {
+      list.push({
+        name:      sw.name,
+        icon:      sw.icon || "💳",
+        detected:  true,
+        connect:   async () => wrapStandardWallet(sw),
+        type:      "standard",
+      });
+    }
+
+    // 2. Legacy injected providers (desktop extensions / wallet in-app browsers)
+    const LEGACY = [
+      { name:"Phantom",     icon:"👻" },
+      { name:"Solflare",    icon:"🔥" },
+      { name:"Backpack",    icon:"🎒" },
+      { name:"Jupiter",     icon:"🪐" },
+      { name:"Trust Wallet",icon:"🛡️" },
+      { name:"Coin98",      icon:"🪙" },
+      { name:"OKX",         icon:"⭕" },
+    ];
+    for (const w of LEGACY) {
+      const already = list.find(l => l.name.toLowerCase() === w.name.toLowerCase());
+      if (already) continue; // already added via Wallet Standard
+      const prov = getLegacyProvider(w.name);
+      if (prov) {
+        list.push({ name: w.name, icon: w.icon, detected: true, connect: async () => prov, type: "legacy" });
+      } else if (isMobile && MOBILE_DEEP_LINKS[w.name]) {
+        // On mobile: offer deep link to open wallet app
+        list.push({ name: w.name, icon: w.icon, detected: false, deepLink: MOBILE_DEEP_LINKS[w.name](window.location.href), type: "deeplink" });
+      }
+    }
+
+    // 3. If nothing detected at all, show all deep-link options on mobile
+    if (list.length === 0 && isMobile) {
+      for (const [name, fn] of Object.entries(MOBILE_DEEP_LINKS)) {
+        const icons = { Phantom:"👻", Solflare:"🔥", Jupiter:"🪐" };
+        list.push({ name, icon: icons[name]||"💳", detected: false, deepLink: fn(window.location.href), type:"deeplink" });
+      }
+    }
+
+    // 4. Always add a "Download Jupiter Wallet" option at the bottom if on mobile
+    if (isMobile) {
+      list.push({ name:"Get Jupiter Wallet", icon:"⬇️", detected:false, deepLink:"https://jup.ag/mobile", type:"download" });
+    }
+
+    return list;
+  };
+
+  const [walletList, setWalletList] = useState([]);
   const pendingSwapRef = useRef(null);
+  const connectedProviderRef = useRef(null); // store the active provider for signing
+
+  // Rebuild wallet list every time the modal opens
+  useEffect(() => {
+    if (showWalletModal) setWalletList(buildWalletList());
+  }, [showWalletModal]);
 
   // ── Wallet connect ──────────────────────────────────────────────────────────
   const connectWallet = (pendingSwap) => {
@@ -737,17 +848,28 @@ export default function JupChat() {
     setShowWalletModal(true);
   };
 
-  const doConnectWith = async (getProvider) => {
-    setShowWalletModal(false);
-    const provider = getProvider();
-    if (!provider) {
-      push("ai", "That wallet is not installed in your browser. Please install it or choose another wallet. Don't have one? [Download Jupiter Wallet →](https://jup.ag/mobile)");
+  const doConnectWith = async (walletEntry) => {
+    // Deep links / download — just open URL
+    if (walletEntry.type === "deeplink" || walletEntry.type === "download") {
+      window.open(walletEntry.deepLink, "_blank");
+      setShowWalletModal(false);
       return;
     }
+
+    setShowWalletModal(false);
+    let provider;
     try {
-      const resp    = await provider.connect();
-      const pubkey  = resp.publicKey.toString();
+      provider = await walletEntry.connect();
+    } catch (err) {
+      push("ai", `Could not get wallet provider for ${walletEntry.name}. Please try again.`);
+      return;
+    }
+
+    try {
+      const resp   = await provider.connect();
+      const pubkey = resp.publicKey.toString();
       const display = pubkey.slice(0,4) + "…" + pubkey.slice(-4);
+      connectedProviderRef.current = provider;
       setWallet(display);
       setWalletFull(pubkey);
       const balances = await fetchSolanaBalances(pubkey);
@@ -772,8 +894,24 @@ export default function JupChat() {
         push("ai", `Wallet connected ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}${Object.entries(balances).filter(([k])=>k!=="SOL").map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("")}\n\nWhat would you like to do?`);
       }
     } catch (err) {
-      push("ai", err?.code === 4001 ? "Wallet connection declined." : "Failed to connect wallet — please try again.");
+      push("ai", err?.code === 4001 ? "Wallet connection declined." : `Failed to connect ${walletEntry.name} — ${err?.message || "please try again."}`);
     }
+  };
+
+  // ── Get active provider for signing ─────────────────────────────────────────
+  // Used by swap/bet/deposit/claim — returns the connected provider or best fallback
+  const getActiveProvider = () => {
+    if (connectedProviderRef.current) return connectedProviderRef.current;
+    // Fallback: try Wallet Standard first
+    const stdWallets = getStandardWallets();
+    if (stdWallets.length > 0) return wrapStandardWallet(stdWallets[0]);
+    // Then legacy
+    return (
+      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
+      window?.trustwallet?.solana || window?.trustWallet?.solana ||
+      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
+      window?.okxwallet?.solana || window?.solana || null
+    );
   };
 
   // ── Swap execution ──────────────────────────────────────────────────────────
@@ -785,11 +923,7 @@ export default function JupChat() {
       push("ai", `Could not resolve token addresses for **${from}** or **${to}**. Use the search dropdown to select them, then try again.`);
       return;
     }
-    const provider =
-      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
-      window?.trustwallet?.solana || window?.trustWallet?.solana ||
-      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
-      window?.okxwallet?.solana || window?.solana;
+    const provider = getActiveProvider();
     if (!provider) { push("ai","Wallet provider not found. Please reconnect."); return; }
 
     setSwapStatus("signing"); setSwapTxid(null);
@@ -831,11 +965,7 @@ export default function JupChat() {
     const { token, targetPrice, amount, direction } = trigCfg;
     if (!targetPrice || !amount) return;
     if (!walletFull) { push("ai","Connect your wallet first to set a limit order."); return; }
-    const provider =
-      window?.phantom?.solana || window?.solflare || window?.backpack?.solana ||
-      window?.trustwallet?.solana || window?.trustWallet?.solana ||
-      window?.jupiter?.solana || window?.jupiter || window?.coin98?.sol ||
-      window?.okxwallet?.solana || window?.solana;
+    const provider = getActiveProvider();
     if (!provider) { push("ai","Wallet provider not found."); return; }
 
     const inputMint  = direction==="below" ? TOKEN_MINTS.USDC  : (tokenCacheRef.current[token]||TOKEN_MINTS[token]);
@@ -1502,26 +1632,52 @@ export default function JupChat() {
 
         {/* Wallet selection modal */}
         {showWalletModal && (
-          <div style={{ position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.45)", display:"flex", alignItems:"center", justifyContent:"center" }}
+          <div style={{ position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.55)", display:"flex", alignItems:"flex-end", justifyContent:"center" }}
             onClick={e => { if (e.target === e.currentTarget) setShowWalletModal(false); }}>
-            <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, padding:24, width:320, maxWidth:"90vw", boxShadow:"0 16px 48px rgba(0,0,0,0.2)" }}>
-              <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:6 }}>Connect Wallet</div>
+            <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:"20px 20px 0 0", padding:"20px 20px 32px", width:"100%", maxWidth:480, boxShadow:"0 -8px 40px rgba(0,0,0,0.25)", maxHeight:"85vh", overflowY:"auto" }}>
+              {/* Handle bar */}
+              <div style={{ width:40, height:4, background:T.border, borderRadius:4, margin:"0 auto 18px" }}/>
+              <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:4 }}>Connect Wallet</div>
               <div style={{ fontSize:12, color:T.text3, marginBottom:18 }}>
-                Choose your Solana wallet. Don't have one?{" "}
-                <a href="https://jup.ag/mobile" target="_blank" rel="noreferrer" style={{ color:T.accent }}>Download Jupiter Wallet →</a>
+                {walletList.filter(w=>w.detected).length > 0
+                  ? "Detected wallets shown first. Tap to connect."
+                  : "No wallets detected. Open this page inside your wallet app, or download one below."}
               </div>
-              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                {WALLET_OPTIONS.map(w => (
-                  <button key={w.name} onClick={() => doConnectWith(w.get)} className="hov-row"
-                    style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left" }}>
-                    <span style={{ fontSize:20, width:28, textAlign:"center" }}>{w.icon}</span>
-                    <span>{w.name}</span>
-                    {w.get() && <span style={{ marginLeft:"auto", fontSize:11, color:T.green, fontWeight:500 }}>Detected</span>}
-                  </button>
-                ))}
-              </div>
+
+              {/* Detected / available wallets */}
+              {walletList.length > 0 ? (
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  {walletList.map((w, i) => (
+                    <button key={i} onClick={() => doConnectWith(w)} className="hov-row"
+                      style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${w.detected ? T.accent+"44" : T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
+                      <span style={{ fontSize:22, width:30, textAlign:"center", flexShrink:0 }}>
+                        {typeof w.icon === "string" && w.icon.startsWith("data:") ? <img src={w.icon} style={{ width:24, height:24, borderRadius:6 }} alt={w.name}/> : w.icon}
+                      </span>
+                      <span style={{ flex:1, fontWeight: w.detected ? 500 : 400 }}>{w.name}</span>
+                      {w.detected && w.type !== "download" && (
+                        <span style={{ fontSize:11, color:T.green, fontWeight:600, background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, padding:"2px 7px" }}>Detected</span>
+                      )}
+                      {(w.type === "deeplink") && (
+                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Open app →</span>
+                      )}
+                      {w.type === "download" && (
+                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Download →</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ padding:16, background:T.bg, borderRadius:10, fontSize:13, color:T.text2, textAlign:"center" }}>
+                  <div style={{ marginBottom:10 }}>No wallet found. Open this site inside your Phantom, Solflare or Jupiter mobile app.</div>
+                  <a href="https://jup.ag/mobile" target="_blank" rel="noreferrer"
+                    style={{ display:"inline-block", padding:"10px 20px", background:T.accent, color:"#fff", borderRadius:8, fontSize:13, fontWeight:600, textDecoration:"none" }}>
+                    Download Jupiter Wallet →
+                  </a>
+                </div>
+              )}
+
               <button onClick={() => setShowWalletModal(false)}
-                style={{ marginTop:14, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                style={{ marginTop:14, width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
                 Cancel
               </button>
             </div>
