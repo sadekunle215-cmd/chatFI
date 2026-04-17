@@ -736,9 +736,19 @@ export default function JupChat() {
 
   // Mobile universal/deep links — open the wallet app which will redirect back
   const MOBILE_DEEP_LINKS = {
-    "Phantom":   (url) => `https://phantom.app/ul/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
-    "Solflare":  (url) => `https://solflare.com/ul/v1/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
-    "Jupiter":   ()    => "https://jup.ag/mobile",
+    "Phantom":      (url) => `https://phantom.app/ul/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
+    "Solflare":     (url) => `https://solflare.com/ul/v1/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
+    "Backpack":     (url) => `https://backpack.app/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
+    "Trust Wallet": (url) => `https://link.trustwallet.com/open_url?coin_id=501&url=${encodeURIComponent(url)}`,
+    "OKX":          (url) => `okx://wallet/dapp/url?dappUrl=${encodeURIComponent(url)}`,
+    "Coin98":       (url) => `coin98://browser?url=${encodeURIComponent(url)}`,
+    "Jupiter":      ()    => "https://jup.ag/mobile",
+  };
+
+  // Shared icon map used by buildWalletList
+  const WALLET_ICONS = {
+    "Phantom":"👻", "Solflare":"🔥", "Backpack":"🎒", "Jupiter":"🪐",
+    "Trust Wallet":"🛡️", "OKX":"⭕", "Coin98":"🪙",
   };
 
   // Wrap a Wallet Standard wallet into the same {connect, signTransaction} shape
@@ -811,22 +821,47 @@ export default function JupChat() {
       const prov = getLegacyProvider(w.name);
       if (prov) {
         list.push({ name: w.name, icon: w.icon, detected: true, connect: async () => prov, type: "legacy" });
-      } else if (isMobile && MOBILE_DEEP_LINKS[w.name]) {
-        // On mobile: offer deep link to open wallet app
-        list.push({ name: w.name, icon: w.icon, detected: false, deepLink: MOBILE_DEEP_LINKS[w.name](window.location.href), type: "deeplink" });
       }
     }
 
-    // 3. If nothing detected at all, show all deep-link options on mobile
-    if (list.length === 0 && isMobile) {
-      for (const [name, fn] of Object.entries(MOBILE_DEEP_LINKS)) {
-        const icons = { Phantom:"👻", Solflare:"🔥", Jupiter:"🪐" };
-        list.push({ name, icon: icons[name]||"💳", detected: false, deepLink: fn(window.location.href), type:"deeplink" });
-      }
+    // 2.5. Generic window.solana catch-all (wallets that only inject the generic provider)
+    const alreadyHasLegacy = list.some(l => l.type === "standard" || l.type === "legacy");
+    if (!alreadyHasLegacy && window?.solana?.connect) {
+      list.push({ name: "Solana Wallet", icon: "💎", detected: true, connect: async () => window.solana, type: "legacy" });
     }
 
-    // 4. Always add a "Download Jupiter Wallet" option at the bottom if on mobile
+    // 3. On mobile: show deep links for ALL wallets not already detected
+    //    (this runs regardless of whether other wallets were found — critical fix)
     if (isMobile) {
+      const detectedNames = new Set(list.map(l => l.name.toLowerCase()));
+      for (const [name, fn] of Object.entries(MOBILE_DEEP_LINKS)) {
+        if (!detectedNames.has(name.toLowerCase())) {
+          list.push({
+            name,
+            icon:     WALLET_ICONS[name] || "💳",
+            detected: false,
+            deepLink: fn(window.location.href),
+            type:     "deeplink",
+          });
+        }
+      }
+    }
+
+    // 4. On desktop with nothing detected: show extension install links
+    if (!isMobile && list.length === 0) {
+      const DESKTOP_INSTALLS = [
+        { name:"Phantom",  icon:"👻", url:"https://phantom.com/download" },
+        { name:"Solflare", icon:"🔥", url:"https://solflare.com/download" },
+        { name:"Backpack", icon:"🎒", url:"https://backpack.app/downloads" },
+        { name:"OKX",      icon:"⭕", url:"https://www.okx.com/web3/wallet" },
+      ];
+      for (const w of DESKTOP_INSTALLS) {
+        list.push({ name: w.name, icon: w.icon, detected: false, deepLink: w.url, type: "download" });
+      }
+    }
+
+    // 5. On mobile: always add Jupiter Wallet download at the bottom
+    if (isMobile && !list.some(l => l.type === "download")) {
       list.push({ name:"Get Jupiter Wallet", icon:"⬇️", detected:false, deepLink:"https://jup.ag/mobile", type:"download" });
     }
 
@@ -837,9 +872,24 @@ export default function JupChat() {
   const pendingSwapRef = useRef(null);
   const connectedProviderRef = useRef(null); // store the active provider for signing
 
-  // Rebuild wallet list every time the modal opens
+  // Rebuild wallet list every time the modal opens;
+  // also listen for wallets that register asynchronously after page load
   useEffect(() => {
-    if (showWalletModal) setWalletList(buildWalletList());
+    if (!showWalletModal) return;
+
+    const rebuild = () => setWalletList(buildWalletList());
+    rebuild(); // immediate build
+
+    // Some wallets (Backpack, OKX, etc.) fire this event slightly after page load
+    window.addEventListener("wallet-standard:register-wallet", rebuild);
+
+    // Re-check after 500ms to catch late injectors that don't fire the event
+    const timer = setTimeout(rebuild, 500);
+
+    return () => {
+      window.removeEventListener("wallet-standard:register-wallet", rebuild);
+      clearTimeout(timer);
+    };
   }, [showWalletModal]);
 
   // ── Wallet connect ──────────────────────────────────────────────────────────
@@ -1641,7 +1691,7 @@ export default function JupChat() {
               <div style={{ fontSize:12, color:T.text3, marginBottom:18 }}>
                 {walletList.filter(w=>w.detected).length > 0
                   ? "Detected wallets shown first. Tap to connect."
-                  : "No wallets detected. Open this page inside your wallet app, or download one below."}
+                  : "No wallet detected in this browser. Open this page inside your wallet app, or tap a wallet below to launch it."}
               </div>
 
               {/* Detected / available wallets */}
@@ -1668,7 +1718,7 @@ export default function JupChat() {
                 </div>
               ) : (
                 <div style={{ padding:16, background:T.bg, borderRadius:10, fontSize:13, color:T.text2, textAlign:"center" }}>
-                  <div style={{ marginBottom:10 }}>No wallet found. Open this site inside your Phantom, Solflare or Jupiter mobile app.</div>
+                  <div style={{ marginBottom:10 }}>No wallet detected. Open this site inside your Phantom, Solflare, Backpack, OKX or Jupiter mobile app to connect automatically.</div>
                   <a href="https://jup.ag/mobile" target="_blank" rel="noreferrer"
                     style={{ display:"inline-block", padding:"10px 20px", background:T.accent, color:"#fff", borderRadius:8, fontSize:13, fontWeight:600, textDecoration:"none" }}>
                     Download Jupiter Wallet →
