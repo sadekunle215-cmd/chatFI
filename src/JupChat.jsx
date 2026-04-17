@@ -727,7 +727,8 @@ export default function JupChat() {
       // Accept any Solflare injection — older versions don't set isSolflare
       case "Solflare":  return window?.solflare?.isSolflare ? window.solflare : (window?.solflare?.connect ? window.solflare : null);
       case "Backpack":  return window?.backpack?.solana;
-      case "Jupiter":   return window?.jupiter?.solana || (window?.jupiter?.connect ? window.jupiter : null);
+      // Jupiter mobile wallet injects window.solana with isJupiter=true inside its in-app browser
+      case "Jupiter":   return window?.jupiter?.solana || window?.jupiter || (window?.solana?.isJupiter ? window.solana : null);
       default:          return window?.solana || null;
     }
   };
@@ -817,10 +818,21 @@ export default function JupChat() {
       }
     }
 
-    // 2.5. Generic window.solana catch-all (wallets that only inject the generic provider)
+    // 2.5. Generic window.solana catch-all — identify the wallet by its flag
     const alreadyHasLegacy = list.some(l => l.type === "standard" || l.type === "legacy");
     if (!alreadyHasLegacy && window?.solana?.connect) {
-      list.push({ name: "Solana Wallet", icon: "💎", detected: true, connect: async () => window.solana, type: "legacy" });
+      const solProv = window.solana;
+      const name = solProv.isJupiter  ? "Jupiter"
+                 : solProv.isPhantom  ? "Phantom"
+                 : solProv.isSolflare ? "Solflare"
+                 : solProv.isBackpack ? "Backpack"
+                 : "Solana Wallet";
+      const icon = solProv.isJupiter  ? "🪐"
+                 : solProv.isPhantom  ? "👻"
+                 : solProv.isSolflare ? "🔥"
+                 : solProv.isBackpack ? "🎒"
+                 : "💎";
+      list.push({ name, icon, detected: true, connect: async () => solProv, type: "legacy" });
     }
 
     // 3. On mobile: show deep links for ALL wallets not already detected
@@ -875,12 +887,14 @@ export default function JupChat() {
     // Some wallets (Backpack, OKX, etc.) fire this event slightly after page load
     window.addEventListener("wallet-standard:register-wallet", rebuild);
 
-    // Re-check after 500ms to catch late injectors that don't fire the event
-    const timer = setTimeout(rebuild, 500);
+    // Re-check at 800ms and 2000ms to catch wallets that inject late (Jupiter, Backpack)
+    const t1 = setTimeout(rebuild, 800);
+    const t2 = setTimeout(rebuild, 2000);
 
     return () => {
       window.removeEventListener("wallet-standard:register-wallet", rebuild);
-      clearTimeout(timer);
+      clearTimeout(t1);
+      clearTimeout(t2);
     };
   }, [showWalletModal]);
 
