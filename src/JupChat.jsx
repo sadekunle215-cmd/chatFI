@@ -149,7 +149,7 @@ function TokenPicker({ value, onSelect, jupFetch }) {
       setBusy(true);
       try {
         // Use higher limit and broader search for full Jupiter token list
-        const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}&limit=50`);
+        const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}&limit=100`);
         const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
         // Prioritise: exact symbol match first, then sort by daily volume
         const upper = q.trim().toUpperCase();
@@ -364,7 +364,7 @@ export default function JupChat() {
       return { mint: tokenCacheRef.current[upper], decimals: tokenDecimalsRef.current[upper] ?? 6 };
     }
     try {
-      const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbolOrName)}&limit=3`);
+      const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbolOrName)}&limit=10`);
       const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
       // Prefer exact symbol match first
       const match = list.find(t => t.symbol?.toUpperCase() === upper) || list[0];
@@ -447,42 +447,55 @@ export default function JupChat() {
 
   // ── Predictions — GET /prediction/v1/events with broader fetch ──────────────
   const fetchPredictionMarkets = async (category = null, searchQuery = null) => {
-    // If searching for specific competition/league, use /events/search
+    const extractEvents = (data) => {
+      const arr = Array.isArray(data) ? data : (data?.data || data?.events || data?.results || []);
+      return arr;
+    };
+
+    // If searching for specific match/team/league try multiple search strategies
     if (searchQuery) {
+      // Try search endpoint
       try {
-        const data = await jupFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=20`);
-        const events = Array.isArray(data) ? data : (data?.data || data?.events || []);
+        const data = await jupFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=50`);
+        const events = extractEvents(data);
         if (events.length > 0) return { markets: events, source: "search" };
+      } catch {}
+      // Try events with keyword filter
+      try {
+        const p = new URLSearchParams({ keyword: searchQuery, includeMarkets: "true", limit: "50" });
+        const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+        const events = extractEvents(data);
+        if (events.length > 0) return { markets: events, source: "keyword" };
+      } catch {}
+      // Fall through to full fetch and filter client-side
+      try {
+        const p = new URLSearchParams({ includeMarkets: "true", limit: "200" });
+        const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+        const all = extractEvents(data);
+        const q = searchQuery.toLowerCase();
+        const filtered = all.filter(e =>
+          e.title?.toLowerCase().includes(q) ||
+          e.description?.toLowerCase().includes(q) ||
+          e.category?.toLowerCase().includes(q) ||
+          (e.teams || []).some(t => t?.toLowerCase().includes(q))
+        );
+        if (filtered.length > 0) return { markets: filtered, source: "client-filter" };
+        if (all.length > 0) return { markets: all, source: "api" };
       } catch {}
     }
 
-    // Fetch events — no filter param so we get all statuses (open + upcoming)
-    // Use pagination: end=50 to get more results
+    // General fetch — with or without category
     const buildUrl = (params) => `${JUP_PRED_API}/events?${params.toString()}`;
-
     const attempts = [
-      // First: with category, broader fetch
-      () => {
-        const p = new URLSearchParams({ includeMarkets: "true", end: "50" });
-        if (category) p.set("category", category.toLowerCase());
-        return buildUrl(p);
-      },
-      // Second: without category (all markets)
-      () => {
-        const p = new URLSearchParams({ includeMarkets: "true", end: "50" });
-        return buildUrl(p);
-      },
+      () => { const p = new URLSearchParams({ includeMarkets: "true", limit: "100" }); if (category) p.set("category", category.toLowerCase()); return buildUrl(p); },
+      () => { const p = new URLSearchParams({ includeMarkets: "true", limit: "100" }); return buildUrl(p); },
     ];
-
     for (const getUrl of attempts) {
       try {
         const data = await jupFetch(getUrl());
-        const events =
-          Array.isArray(data)        ? data         :
-          data?.data?.length         ? data.data    :
-          data?.events?.length       ? data.events  : [];
+        const events = extractEvents(data);
         if (events.length > 0) return { markets: events, source: "api" };
-      } catch { /* try next */ }
+      } catch {}
     }
     return { markets: [], source: "empty" };
   };
@@ -495,18 +508,16 @@ export default function JupChat() {
       const tokens = Array.isArray(data) ? data : (data?.data || []);
       if (tokens.length > 0) {
         const normalized = tokens.map(v => {
-          // Jupiter API returns rates as percentages already (e.g. 12.5 = 12.5% APY)
-          // NOT raw decimals — do NOT multiply by 100
-          const totalRateRaw   = parseFloat(v.totalRate   || 0);
-          const supplyRateRaw  = parseFloat(v.supplyRate  || 0);
-          const rewardsRateRaw = parseFloat(v.rewardsRate || 0);
+          // Jupiter API returns rates as large integers (e.g. 467 = 4.67%, divide by 100)
+          const totalRateRaw   = parseFloat(v.totalRate   || 0) / 100;
+          const supplyRateRaw  = parseFloat(v.supplyRate  || 0) / 100;
+          const rewardsRateRaw = parseFloat(v.rewardsRate || 0) / 100;
           const apyVal = totalRateRaw || supplyRateRaw;
 
-          // Format cleanly: cap display at 9999% to avoid absurd numbers
+          // Format cleanly
           const fmtApy = (r) => {
             if (!r || r <= 0) return "N/A";
-            if (r >= 10000) return ">9999%";
-            if (r >= 100)   return r.toFixed(1) + "%";
+            if (r >= 100) return r.toFixed(1) + "%";
             return r.toFixed(2) + "%";
           };
 
