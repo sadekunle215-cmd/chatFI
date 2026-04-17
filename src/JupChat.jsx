@@ -209,6 +209,8 @@ export default function JupChat() {
   // WalletConnect state
   const [wcStatus, setWcStatus]   = useState("idle"); // "idle" | "loading" | "waiting" | "connected"
   const [wcUri, setWcUri]         = useState("");
+  const [wcMode, setWcMode]       = useState("qr");   // "qr" | "uri" — which tab is shown in the WC screen
+  const [wcCopied, setWcCopied]   = useState(false);  // copy-to-clipboard feedback
   const wcClientRef               = useRef(null);
   const wcSessionRef              = useRef(null);
   const wcQrRef                   = useRef(null);
@@ -887,6 +889,8 @@ export default function JupChat() {
       setShowWalletModal(false);
       setWcStatus("idle");
       setWcUri("");
+      setWcMode("qr");
+      setWcCopied(false);
 
       // Complete connection
       connectedProviderRef.current = wcProvider;
@@ -911,6 +915,8 @@ export default function JupChat() {
   const cancelWalletConnect = () => {
     setWcStatus("idle");
     setWcUri("");
+    setWcMode("qr");
+    setWcCopied(false);
     try {
       if (wcClientRef.current && wcSessionRef.current?.topic) {
         wcClientRef.current.disconnect({ topic: wcSessionRef.current.topic, reason: { code: 0, message: "User cancelled" } }).catch(() => {});
@@ -1160,8 +1166,64 @@ export default function JupChat() {
   }, [showWalletModal]);
 
   // ── Wallet connect ──────────────────────────────────────────────────────────
-  const connectWallet = (pendingSwap) => {
+  const connectWallet = async (pendingSwap) => {
     pendingSwapRef.current = pendingSwap;
+
+    // Auto-connect if a wallet is already injected (Jupiter Mobile, Phantom, etc.)
+    // This means tapping "Connect Wallet" inside Jupiter Mobile app connects instantly
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (isMobile) {
+      // 1. Jupiter Mobile in-app browser — highest priority
+      const jupProvider =
+        (window?.solana?.isJupiter ? window.solana : null) ||
+        window?.jupiter?.solana ||
+        window?.jupiter || null;
+      if (jupProvider && typeof jupProvider.connect === "function") {
+        await doConnectWith({ name: "Jupiter", type: "legacy", connect: async () => jupProvider });
+        return;
+      }
+      // 2. Any other injected wallet (Phantom, Backpack, Solflare, OKX, etc.)
+      const anyProvider =
+        window?.phantom?.solana ||
+        window?.backpack?.solana ||
+        (window?.solflare?.isSolflare ? window.solflare : null) ||
+        window?.okxwallet?.solana ||
+        window?.trustwallet?.solana ||
+        window?.coin98?.sol ||
+        window?.solana || null;
+      if (anyProvider && typeof anyProvider.connect === "function") {
+        // Identify wallet name for a nicer message
+        let name = "Wallet";
+        if (anyProvider.isPhantom)  name = "Phantom";
+        else if (anyProvider.isSolflare) name = "Solflare";
+        else if (anyProvider.isBackpack) name = "Backpack";
+        else if (anyProvider.isTrust)    name = "Trust Wallet";
+        await doConnectWith({ name, type: "legacy", connect: async () => anyProvider });
+        return;
+      }
+    } else {
+      // Desktop: also try Wallet Standard + legacy injected first before showing modal
+      const stdWallets = getStandardWallets();
+      if (stdWallets.length > 0) {
+        await doConnectWith({ name: stdWallets[0].name, type: "standard", connect: async () => wrapStandardWallet(stdWallets[0]) });
+        return;
+      }
+      const desktopProvider =
+        window?.phantom?.solana ||
+        (window?.solflare?.isSolflare ? window.solflare : null) ||
+        window?.backpack?.solana ||
+        window?.okxwallet?.solana || null;
+      if (desktopProvider && typeof desktopProvider.connect === "function") {
+        let name = "Wallet";
+        if (desktopProvider.isPhantom)  name = "Phantom";
+        else if (desktopProvider.isSolflare) name = "Solflare";
+        else if (desktopProvider.isBackpack) name = "Backpack";
+        await doConnectWith({ name, type: "legacy", connect: async () => desktopProvider });
+        return;
+      }
+    }
+
+    // No wallet detected — open modal so user can scan QR or pick a wallet
     setShowWalletModal(true);
   };
 
@@ -1958,36 +2020,101 @@ export default function JupChat() {
               {/* Handle bar */}
               <div style={{ width:40, height:4, background:T.border, borderRadius:4, margin:"0 auto 18px" }}/>
 
-              {/* ── WalletConnect QR screen ────────────────────────────── */}
+              {/* ── WalletConnect QR / URI screen ──────────────────────── */}
               {(wcStatus === "loading" || wcStatus === "waiting") ? (
-                <div style={{ textAlign:"center", padding:"8px 0 12px" }}>
-                  <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:4 }}>Scan with Jupiter Mobile</div>
-                  <div style={{ fontSize:12, color:T.text3, marginBottom:18 }}>
-                    Open Jupiter Wallet → tap the scan icon → scan this QR code
+                <div style={{ padding:"8px 0 12px" }}>
+                  {/* Header */}
+                  <div style={{ textAlign:"center", marginBottom:16 }}>
+                    <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:3 }}>Connect via WalletConnect</div>
+                    <div style={{ fontSize:12, color:T.text3 }}>Use any WalletConnect-compatible Solana wallet</div>
                   </div>
+
+                  {/* Tabs */}
+                  {wcStatus === "waiting" && (
+                    <div style={{ display:"flex", gap:6, background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:4, marginBottom:18 }}>
+                      {[
+                        { id:"qr",  label:"📷  Scan QR Code" },
+                        { id:"uri", label:"🔗  Copy URI" },
+                      ].map(tab => (
+                        <button key={tab.id} onClick={() => setWcMode(tab.id)}
+                          style={{ flex:1, padding:"7px 0", border:"none", borderRadius:8, fontSize:12, fontWeight:wcMode===tab.id?600:400,
+                            background: wcMode===tab.id ? T.surface : "transparent",
+                            color: wcMode===tab.id ? T.text1 : T.text3,
+                            boxShadow: wcMode===tab.id ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
+                            cursor:"pointer", transition:"all 0.15s" }}>
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Loading spinner */}
                   {wcStatus === "loading" && (
                     <div style={{ padding:40, display:"flex", flexDirection:"column", alignItems:"center", gap:12, color:T.text3, fontSize:13 }}>
                       <span className="spinner" style={{ width:28, height:28, border:"3px solid rgba(0,0,0,0.1)", borderTopColor:T.accent }}/>
                       Generating pairing code…
                     </div>
                   )}
-                  {wcStatus === "waiting" && (
-                    <>
+
+                  {/* QR tab */}
+                  {wcStatus === "waiting" && wcMode === "qr" && (
+                    <div style={{ textAlign:"center" }}>
+                      <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
+                        Open Jupiter Wallet → tap the scan icon → scan this QR code
+                      </div>
                       <div style={{ display:"inline-block", padding:12, background:T.bg, border:`2px solid ${T.border}`, borderRadius:16, marginBottom:14 }}>
                         <canvas ref={wcQrRef} style={{ display:"block", borderRadius:8 }}/>
                       </div>
-                      <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"center", marginBottom:16 }}>
-                        <input readOnly value={wcUri} style={{ flex:1, padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text3, fontSize:10, fontFamily:T.mono, overflow:"hidden", textOverflow:"ellipsis" }}/>
-                        <button onClick={() => { try { navigator.clipboard.writeText(wcUri); } catch {} }}
-                          style={{ padding:"7px 12px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:8, color:T.accent, fontSize:12, cursor:"pointer", flexShrink:0, fontWeight:500 }}>
-                          Copy
-                        </button>
+                      <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Waiting for wallet to approve…</div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", marginBottom:4 }}>
+                        <div style={{ width:7, height:7, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite" }}/>
+                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Listening for connection</span>
                       </div>
-                      <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>Waiting for Jupiter Wallet to approve…</div>
-                    </>
+                    </div>
                   )}
+
+                  {/* URI tab */}
+                  {wcStatus === "waiting" && wcMode === "uri" && (
+                    <div>
+                      <div style={{ fontSize:12, color:T.text3, marginBottom:14, textAlign:"center" }}>
+                        Copy this URI and paste it into your wallet app's WalletConnect screen
+                      </div>
+
+                      {/* URI display box */}
+                      <div style={{ background:T.bg, border:`1.5px solid ${T.border}`, borderRadius:12, padding:"12px 14px", marginBottom:12, wordBreak:"break-all", fontFamily:T.mono, fontSize:10, color:T.text2, lineHeight:1.5, maxHeight:100, overflowY:"auto" }}>
+                        {wcUri}
+                      </div>
+
+                      {/* Copy button */}
+                      <button onClick={() => {
+                          try { navigator.clipboard.writeText(wcUri); } catch {}
+                          setWcCopied(true);
+                          setTimeout(() => setWcCopied(false), 2500);
+                        }}
+                        style={{ width:"100%", padding:"11px", background: wcCopied ? T.greenBg : T.accentBg,
+                          border:`1.5px solid ${wcCopied ? T.greenBd : T.accent+"66"}`,
+                          borderRadius:10, color: wcCopied ? T.green : T.accent,
+                          fontSize:13, fontWeight:600, cursor:"pointer", marginBottom:14, transition:"all 0.2s" }}>
+                        {wcCopied ? "✓ Copied to clipboard!" : "Copy WalletConnect URI"}
+                      </button>
+
+                      {/* How-to steps */}
+                      <div style={{ background:T.purpleBg, border:`1px solid ${T.purple}33`, borderRadius:10, padding:"10px 14px", fontSize:11, color:T.text2, lineHeight:1.7 }}>
+                        <div style={{ fontWeight:600, color:T.purple, marginBottom:4 }}>How to connect:</div>
+                        <div>1. Open your Solana wallet app (Jupiter, Phantom, Backpack…)</div>
+                        <div>2. Find <strong>WalletConnect</strong> or the scan / connect option</div>
+                        <div>3. Paste the URI above and approve the connection</div>
+                      </div>
+
+                      <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", marginTop:12, marginBottom:4 }}>
+                        <div style={{ width:7, height:7, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite" }}/>
+                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Waiting for wallet to approve…</span>
+                      </div>
+                    </div>
+                  )}
+
                   <button onClick={cancelWalletConnect}
-                    style={{ width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                    style={{ marginTop:10, width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
                     Cancel
                   </button>
                 </div>
@@ -2011,8 +2138,8 @@ export default function JupChat() {
                       </svg>
                     </span>
                     <span style={{ flex:1 }}>
-                      <span style={{ fontWeight:600, display:"block", color:T.accent }}>Scan QR (WalletConnect)</span>
-                      <span style={{ fontSize:11, color:T.text3 }}>Best for Jupiter Mobile — scan in-app</span>
+                      <span style={{ fontWeight:600, display:"block", color:T.accent }}>WalletConnect (QR or URI)</span>
+                      <span style={{ fontSize:11, color:T.text3 }}>Jupiter, Phantom, Backpack + more</span>
                     </span>
                     <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>→</span>
                   </button>
