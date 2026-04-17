@@ -14,12 +14,11 @@ const JUP_TRIGGER_EXEC = `${JUP_LITE}/trigger/v1/execute`;
 const JUP_PORTFOLIO    = `${JUP_BASE}/portfolio/v1`;
 const JUP_PRED_API     = `${JUP_BASE}/prediction/v1`;
 const JUP_EARN_API     = `${JUP_BASE}/lend/v1/earn`;
-const SOLANA_RPC       = "https://api.mainnet-beta.solana.com";
+const SOLANA_RPC       = "SOLANA_RPC";
 const SPL_PROGRAM      = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 // JupUSD mint for prediction market deposits
 const JUPUSD_MINT      = "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD";
 const USDC_MINT        = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-const OPENAI_API_KEY   = process.env.OPENAI_API_KEY || "";
 
 // Popular tokens — expands dynamically as user searches
 const TOKEN_MINTS = {
@@ -1523,42 +1522,7 @@ export default function JupChat() {
     return id;
   };
 
-  // ── AI call — Claude first, OpenAI fallback ─────────────────────────────────
-  const callAI = async (messages) => {
-    // 1. Try Claude
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-5-20251001",
-          max_tokens: 1024,
-          system: SYSTEM_PROMPT,
-          messages,
-        }),
-      });
-      const data = await res.json();
-      if (!data.error && data?.content?.[0]?.text) return data.content[0].text;
-      throw new Error(data.error?.message || "Claude returned no content");
-    } catch (claudeErr) {
-      console.warn("Claude failed, falling back to OpenAI:", claudeErr.message);
-    }
-
-    // 2. Fallback to OpenAI
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${OPENAI_API_KEY}` },
-      body: JSON.stringify({
-        model: "gpt-4o",
-        max_tokens: 1024,
-        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
-      }),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error("OpenAI error: " + data.error.message);
-    return data?.choices?.[0]?.message?.content || '{"text":"Sorry, something went wrong.","action":null,"actionData":{}}';
-  };
-
+  // ── Send message to Claude ──────────────────────────────────────────────────
   const send = async (override) => {
     const raw = (override ?? input).trim();
     if (!raw || typing) return;
@@ -1571,7 +1535,18 @@ export default function JupChat() {
     histRef.current = [...histRef.current, { role:"user", content:raw }];
 
     try {
-      const rawText = await callAI(histRef.current);
+      const res = await fetch("/api/claude", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 1024,
+          system: SYSTEM_PROMPT,
+          messages: histRef.current,
+        }),
+      });
+      const data = await res.json();
+      const rawText = data?.content?.[0]?.text || '{"text":"Sorry, something went wrong.","action":null,"actionData":{}}';
 
       let parsed;
       try { parsed = JSON.parse(rawText); }
@@ -1733,8 +1708,8 @@ export default function JupChat() {
       } else {
         push("ai", text);
       }
-    } catch (err) {
-      push("ai", `Connection error: ${err?.message || "Please check your setup and try again."}`);
+    } catch {
+      push("ai","Connection error. Please check your setup and try again.");
     }
     setTyping(false);
   };
