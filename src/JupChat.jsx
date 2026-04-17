@@ -330,7 +330,8 @@ export default function JupChat() {
     document.head.appendChild(s);
   }, [wcStatus, wcUri]);
 
-
+  // Debounce swap quote fetch when swap config changes
+  useEffect(() => {
     if (!swapCfg.fromMint || !swapCfg.toMint) { setSwapQuote(null); return; }
     const t = setTimeout(() => fetchSwapQuote(), 600);
     return () => clearTimeout(t);
