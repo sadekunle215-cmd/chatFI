@@ -829,12 +829,39 @@ export default function JupChat() {
     return client;
   };
 
-  // Deep link templates for WalletConnect URI — opens wallet app directly on mobile
-  const WC_DEEP_LINKS = {
-    "Jupiter":      (uri) => `https://jup.ag/wc?uri=${encodeURIComponent(uri)}`,
-    "Phantom":      (uri) => `https://phantom.app/ul/wc?uri=${encodeURIComponent(uri)}`,
-    "Solflare":     (uri) => `https://solflare.com/ul/v1/wc?uri=${encodeURIComponent(uri)}`,
-    "Backpack":     (uri) => `https://backpack.app/wc?uri=${encodeURIComponent(uri)}`,
+  // WalletConnect deep link schemes — correct format per WalletConnect docs:
+  // custom scheme: walletname://wc?uri=<encoded_wc_uri>
+  // universal link: https://wallet.domain/wc?uri=<encoded_wc_uri>
+  // Phantom uses their own encrypted deeplink system (not WC URI compatible),
+  // so for Phantom/Jupiter on mobile we open their in-app browser instead.
+  const getMobileWcDeepLink = (walletName, uri) => {
+    const enc = encodeURIComponent(uri);
+    switch (walletName) {
+      case "Phantom":
+        // Phantom's WC-compatible deep link (v2 style)
+        return `phantom://wc?uri=${enc}`;
+      case "Solflare":
+        return `solflare://wc?uri=${enc}`;
+      case "Backpack":
+        return `backpack://wc?uri=${enc}`;
+      case "Jupiter":
+        // Jupiter Mobile uses the same WC scheme
+        return `jupiter://wc?uri=${enc}`;
+      default:
+        return `phantom://wc?uri=${enc}`;
+    }
+  };
+
+  // Fallback universal links (if app scheme fails / not installed)
+  const getMobileWcUniversalLink = (walletName, uri) => {
+    const enc = encodeURIComponent(uri);
+    switch (walletName) {
+      case "Phantom":  return `https://phantom.app/ul/v1/wc?uri=${enc}`;
+      case "Solflare": return `https://solflare.com/ul/v1/wc?uri=${enc}`;
+      case "Backpack": return `https://backpack.app/wc?uri=${enc}`;
+      case "Jupiter":  return `https://jup.ag/mobile`;
+      default:         return `https://phantom.app/ul/v1/wc?uri=${enc}`;
+    }
   };
 
   const initWalletConnect = async (preferredWallet = null) => {
@@ -863,16 +890,15 @@ export default function JupChat() {
       setWcUri(uri);
       setWcStatus("waiting");
 
-      // On mobile: immediately deep-link into the wallet app so it can approve
-      if (isMobile) {
-        const walletName = preferredWallet || "Jupiter";
-        const deepLinkFn = WC_DEEP_LINKS[walletName] || WC_DEEP_LINKS["Jupiter"];
-        const deepLink = deepLinkFn(uri);
-        // Small delay so the UI renders the "waiting" state before switching apps
-        setTimeout(() => { window.location.href = deepLink; }, 300);
+      // On mobile: open wallet app directly via deep link with the WC URI embedded.
+      // iOS Safari blocks window.open() after async/await, so we use window.location.href.
+      // We try the custom scheme first (opens app if installed), universal link as fallback.
+      if (isMobile && preferredWallet) {
+        const deepLink = getMobileWcDeepLink(preferredWallet, uri);
+        setTimeout(() => { window.location.href = deepLink; }, 200);
       }
 
-      // Await wallet approval (works whether via deep link or QR scan on desktop)
+      // Await wallet approval — the WC relay keeps the session open while user is in wallet app
       const session = await approval();
       wcSessionRef.current = session;
 
@@ -886,11 +912,10 @@ export default function JupChat() {
         signTransaction: async (tx) => {
           const raw = tx.serialize();
           const base64 = btoa(String.fromCharCode(...raw));
-          // On mobile, deep-link back to wallet for signing
-          if (isMobile) {
-            const walletName = preferredWallet || "Jupiter";
-            const deepLinkFn = WC_DEEP_LINKS[walletName] || WC_DEEP_LINKS["Jupiter"];
-            setTimeout(() => { window.location.href = deepLinkFn(uri); }, 100);
+          // For sign requests on mobile, redirect back to wallet app
+          if (isMobile && preferredWallet) {
+            const signDeepLink = getMobileWcDeepLink(preferredWallet, uri);
+            setTimeout(() => { window.location.href = signDeepLink; }, 100);
           }
           const result = await client.request({
             topic: session.topic,
@@ -902,6 +927,7 @@ export default function JupChat() {
           return VersionedTransaction.deserialize(signed);
         },
         isWalletConnect: true,
+        walletName: preferredWallet,
       };
 
       setShowWalletModal(false);
@@ -2149,10 +2175,10 @@ export default function JupChat() {
                   {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:8 }}>
                       {[
-                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Opens Jupiter Wallet app to approve" },
-                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Opens Phantom app to approve" },
-                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Opens Solflare app to approve" },
-                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Opens Backpack app to approve" },
+                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Opens Phantom app → approve connection" },
+                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Opens Solflare app → approve connection" },
+                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Opens Backpack app → approve connection" },
+                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Opens Jupiter Wallet app → approve connection" },
                       ].map(w => (
                         <button key={w.name} onClick={() => initWalletConnect(w.name)} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
@@ -2168,6 +2194,23 @@ export default function JupChat() {
                           <span style={{ fontSize:13, color:T.accent, fontWeight:600 }}>→</span>
                         </button>
                       ))}
+                      {/* If WC session is waiting (URI generated), show copy-URI fallback */}
+                      {wcStatus === "waiting" && wcUri && (
+                        <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 12px", marginTop:4 }}>
+                          <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>
+                            If the app didn't open, copy this URI and paste it in your wallet's WalletConnect screen:
+                          </div>
+                          <div style={{ fontFamily:T.mono, fontSize:9, color:T.text2, wordBreak:"break-all", marginBottom:8, maxHeight:48, overflowY:"auto" }}>{wcUri}</div>
+                          <button onClick={() => { try { navigator.clipboard.writeText(wcUri); } catch {} setWcCopied(true); setTimeout(()=>setWcCopied(false),2500); }}
+                            style={{ width:"100%", padding:"8px", background: wcCopied ? T.greenBg : T.accentBg, border:`1px solid ${wcCopied ? T.greenBd : T.accent+"66"}`, borderRadius:8, color: wcCopied ? T.green : T.accent, fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                            {wcCopied ? "✓ Copied!" : "Copy WalletConnect URI"}
+                          </button>
+                          <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", marginTop:8 }}>
+                            <div style={{ width:6, height:6, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite" }}/>
+                            <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Listening for connection…</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <button onClick={() => initWalletConnect(null)} className="hov-row"
