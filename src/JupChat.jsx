@@ -5,8 +5,8 @@ import { VersionedTransaction } from "@solana/web3.js";
 const JUP_BASE         = "https://api.jup.ag";
 const JUP_LITE         = "https://lite-api.jup.ag";
 const JUP_PRICE_API    = `${JUP_BASE}/price/v3`;             // v3: usdPrice field, priceChange24h
-const JUP_TOKENS_API   = `${JUP_BASE}/tokens/v1/token`;
-const JUP_TOKEN_SEARCH = `${JUP_BASE}/tokens/v1/search`;
+const JUP_TOKENS_API   = `${JUP_BASE}/tokens/v1/token`;      // detail by mint (v1 still works)
+const JUP_TOKEN_SEARCH = `${JUP_BASE}/tokens/v2/search`;      // v2 search: id=mint, icon, isVerified, audit.*
 const JUP_SWAP_ORDER   = `${JUP_BASE}/swap/v2/order`;        // v2 meta-aggregator (RTSE auto, gasless auto)
 const JUP_SWAP_EXEC    = `${JUP_BASE}/swap/v2/execute`;      // v2 execute
 const JUP_TRIGGER_BASE = `${JUP_BASE}/trigger/v1`;
@@ -149,15 +149,19 @@ function TokenPicker({ value, onSelect, jupFetch }) {
       setBusy(true);
       try {
         // Use higher limit and broader search for full Jupiter token list
-        const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}&limit=100`);
+        // v2 search: no limit param needed; returns up to 20 by default; mint = t.id
+        const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}`);
         const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-        // Prioritise: exact symbol match first, then sort by daily volume
+        // Prioritise: exact symbol match first, then sort by 24h volume
         const upper = q.trim().toUpperCase();
         const sorted = [...list].sort((a, b) => {
           const aExact = a.symbol?.toUpperCase() === upper ? 1 : 0;
           const bExact = b.symbol?.toUpperCase() === upper ? 1 : 0;
           if (bExact !== aExact) return bExact - aExact;
-          return (b.daily_volume || 0) - (a.daily_volume || 0);
+          // v2 daily volume is under stats24h; v1 had top-level daily_volume
+          const aVol = (a.stats24h?.buyVolume || 0) + (a.stats24h?.sellVolume || 0) || a.daily_volume || 0;
+          const bVol = (b.stats24h?.buyVolume || 0) + (b.stats24h?.sellVolume || 0) || b.daily_volume || 0;
+          return bVol - aVol;
         });
         setResults(sorted.slice(0, 20));
       } catch { setResults([]); }
@@ -166,8 +170,9 @@ function TokenPicker({ value, onSelect, jupFetch }) {
   };
 
   const pick = (t) => {
-    const sym = (t.symbol || "").toUpperCase();
-    onSelect(sym, t.address, t.decimals ?? 6);
+    const sym  = (t.symbol || "").toUpperCase();
+    const mint = t.id || t.address;    // v2 uses "id"; v1 used "address"
+    onSelect(sym, mint, t.decimals ?? 6);
     setQuery(sym);
     setResults([]);
     setFocused(false);
@@ -357,6 +362,7 @@ export default function JupChat() {
   };
 
   // ── Resolve any token symbol → { mint, decimals } ───────────────────────────
+  // Uses Token API v2: response fields are id (mint), symbol, name, decimals
   const resolveToken = async (symbolOrName) => {
     if (!symbolOrName) return null;
     const upper = symbolOrName.toUpperCase();
@@ -364,14 +370,15 @@ export default function JupChat() {
       return { mint: tokenCacheRef.current[upper], decimals: tokenDecimalsRef.current[upper] ?? 6 };
     }
     try {
-      const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbolOrName)}&limit=10`);
+      // v2 search — returns array; mint = t.id (not t.address)
+      const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbolOrName)}`);
       const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-      // Prefer exact symbol match first
       const match = list.find(t => t.symbol?.toUpperCase() === upper) || list[0];
-      if (match?.address) {
-        tokenCacheRef.current[upper] = match.address;
+      const mint = match?.id || match?.address;   // v2 uses "id"; v1 fallback uses "address"
+      if (mint) {
+        tokenCacheRef.current[upper] = mint;
         tokenDecimalsRef.current[upper] = match.decimals ?? 6;
-        return { mint: match.address, decimals: match.decimals ?? 6 };
+        return { mint, decimals: match.decimals ?? 6 };
       }
     } catch {}
     return null;
@@ -396,26 +403,37 @@ export default function JupChat() {
   }, []);
 
   // ── Token info — search by symbol, return rich metadata ────────────────────
+  // Token API v2: id=mint, icon=logo, isVerified, audit.{mintAuthorityDisabled,freezeAuthorityDisabled}
   const fetchTokenInfo = async (symbol) => {
     if (!symbol) return null;
+    const upper = symbol.toUpperCase();
+    // If we already have the mint cached, try direct detail fetch first
+    const cachedMint = tokenCacheRef.current[upper] || TOKEN_MINTS[upper];
     try {
-      // First try direct search for exact symbol match
-      const searchData = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbol)}&limit=5`);
+      // v2 search — returns array; mint field = t.id
+      const searchData = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbol)}`);
       const list = Array.isArray(searchData) ? searchData : (searchData?.tokens || searchData?.data || []);
-      const upper = symbol.toUpperCase();
-      // Prefer exact symbol match
       const match = list.find(t => t.symbol?.toUpperCase() === upper) || list[0];
-      if (match?.address) {
-        // Cache for future use
-        tokenCacheRef.current[upper] = match.address;
-        tokenDecimalsRef.current[upper] = match.decimals ?? 6;
-        // Also fetch full token details from /tokens/v1/token/{mint}
-        try {
-          const detail = await jupFetch(`${JUP_TOKENS_API}/${match.address}`);
-          // Merge search result + detail (detail may have richer metadata)
-          return { ...match, ...(detail || {}) };
-        } catch {}
-        return match;
+      const mint = match?.id || match?.address || cachedMint;
+      if (mint) {
+        tokenCacheRef.current[upper] = mint;
+        tokenDecimalsRef.current[upper] = match?.decimals ?? 6;
+        // Normalise v2 fields → unified shape the rest of the code expects
+        const normalised = {
+          ...(match || {}),
+          address: mint,          // ensure .address is populated (v1 compat)
+          logo_url: match?.icon || match?.logo_url || "",
+          market_cap: match?.mcap || match?.market_cap || null,
+          daily_volume: match?.stats24h?.buyVolume != null
+            ? match.stats24h.buyVolume + (match.stats24h.sellVolume || 0)
+            : (match?.daily_volume || null),
+          organicScore: match?.organicScore ?? null,
+          // v2 audit block
+          freezeAuthority: match?.audit?.freezeAuthorityDisabled === false ? "active" : null,
+          mint_authority: match?.audit?.mintAuthorityDisabled === false ? "active" : null,
+          tags: match?.tags || (match?.isVerified ? ["verified"] : []),
+        };
+        return normalised;
       }
     } catch {}
     return null;
@@ -508,16 +526,22 @@ export default function JupChat() {
       const tokens = Array.isArray(data) ? data : (data?.data || []);
       if (tokens.length > 0) {
         const normalized = tokens.map(v => {
-          // Jupiter API returns rates as large integers (e.g. 467 = 4.67%, divide by 100)
-          const totalRateRaw   = parseFloat(v.totalRate   || 0) / 100;
-          const supplyRateRaw  = parseFloat(v.supplyRate  || 0) / 100;
-          const rewardsRateRaw = parseFloat(v.rewardsRate || 0) / 100;
+          // Jupiter Earn API returns rates as percentage strings (e.g. "4.8" = 4.8%)
+          // Guard: if value > 100 it was encoded as bps (e.g. 480 = 4.80%) — divide by 100
+          const parseRate = (raw) => {
+            const n = parseFloat(raw || 0);
+            if (!n || n <= 0) return 0;
+            return n > 100 ? n / 100 : n;   // bps → percent  OR  already percent
+          };
+          const totalRateRaw   = parseRate(v.totalRate);
+          const supplyRateRaw  = parseRate(v.supplyRate);
+          const rewardsRateRaw = parseRate(v.rewardsRate);
           const apyVal = totalRateRaw || supplyRateRaw;
 
-          // Format cleanly
+          // Format cleanly — always show one decimal (e.g. 4.8%)
           const fmtApy = (r) => {
             if (!r || r <= 0) return "N/A";
-            if (r >= 100) return r.toFixed(1) + "%";
+            if (r >= 10) return r.toFixed(1) + "%";
             return r.toFixed(2) + "%";
           };
 
@@ -1358,7 +1382,13 @@ export default function JupChat() {
     if (!amount) return;
     if (!walletFull) { push("ai","Connect your wallet first to execute a swap."); return; }
     if (!fromMint || !toMint) {
-      push("ai", `Could not resolve token addresses for **${from}** or **${to}**. Use the search dropdown to select them, then try again.`);
+      if (!fromMint && !toMint) {
+        push("ai", `Could not resolve token addresses for **${from}** and **${to}**. Use the search dropdowns to find them on Jupiter.`);
+      } else if (!fromMint) {
+        push("ai", `Could not resolve token address for **${from}**. Use the "Search any token…" dropdown to find it on Jupiter, then try again.`);
+      } else {
+        push("ai", `Could not resolve token address for **${to}**. Use the "Search any token…" dropdown to find it on Jupiter, then try again.`);
+      }
       return;
     }
     const provider = getActiveProvider();
@@ -1502,15 +1532,16 @@ export default function JupChat() {
         if (!info) {
           push("ai", text + `\n\nCould not find **${actionData?.symbol || "that token"}** on Jupiter. It may not be listed yet or the symbol might be different — try the exact contract address.`);
         } else {
-          const mint = info.address || info.mint || "";
+          const mint = info.address || info.id || info.mint || "";
           const vol  = info.daily_volume ? `$${Number(info.daily_volume).toLocaleString(undefined,{maximumFractionDigits:0})}` : null;
-          const mcap = info.market_cap   ? `$${Number(info.market_cap).toLocaleString(undefined,{maximumFractionDigits:0})}` : null;
-          // Safety signals
-          const hasFreeze  = info.extensions?.coingeckoId ? null : (info.freezeAuthority   ? "⚠ Freeze authority active" : null);
-          const hasMintAuth = info.mint_authority !== null && info.mint_authority !== undefined ? "⚠ Mint authority active" : null;
-          const organic    = info.organicScore !== undefined ? `Organic score: ${info.organicScore}/100` : null;
-          const isSus      = info.audit?.isSus ? "🚨 Flagged as suspicious by Jupiter" : null;
-          const verified   = info.tags?.includes("verified") ? "✓ Verified" : null;
+          const mcap = info.market_cap || info.mcap
+            ? `$${Number(info.market_cap || info.mcap).toLocaleString(undefined,{maximumFractionDigits:0})}` : null;
+          // Safety signals — v2: audit.freezeAuthorityDisabled / mintAuthorityDisabled (false = active = bad)
+          const hasFreeze   = info.freezeAuthority || info.audit?.freezeAuthorityDisabled === false ? "⚠ Freeze authority active" : null;
+          const hasMintAuth = info.mint_authority || info.audit?.mintAuthorityDisabled === false ? "⚠ Mint authority active" : null;
+          const organic     = info.organicScore != null ? `Organic score: ${Math.round(info.organicScore)}/100` : null;
+          const isSus       = info.audit?.isSus ? "🚨 Flagged as suspicious by Jupiter" : null;
+          const verified    = (info.isVerified || info.tags?.includes("verified")) ? "✓ Verified" : null;
 
           const safetyLines = [isSus, hasFreeze, hasMintAuth, verified, organic].filter(Boolean).join(" · ");
 
@@ -1834,14 +1865,19 @@ export default function JupChat() {
                     const title    = m.title || m.metadata?.title || m.question || m.name || "Prediction Market";
                     const closeTs  = m.closeTime || m.metadata?.closeTime || m.endTime;
                     const cat      = m.category || m.metadata?.category || predCategory || "";
-                    // Markets may be nested in m.markets array; take first market's marketId
-                    const markets  = m.markets || [];
+                    // Markets nested in m.markets[] or m.market{}; extract ID from every known field
+                    const markets  = m.markets || (m.market ? [m.market] : []);
                     const firstMkt = markets[0];
-                    const marketId = m.marketId || m.id || firstMkt?.marketId || firstMkt?.id || null;
+                    // Try every possible ID field across API versions
+                    const marketId = m.marketId || m.marketPubkey || m.pubkey ||
+                                     firstMkt?.marketId || firstMkt?.id || firstMkt?.pubkey ||
+                                     firstMkt?.marketPubkey || m.id || null;
                     // Pricing: buyYesPriceUsd / buyNoPriceUsd in native units (1_000_000 = $1.00)
                     const pricing  = m.pricing || firstMkt?.pricing || {};
-                    const yesPrice = pricing.buyYesPriceUsd ? (pricing.buyYesPriceUsd / 1_000_000).toFixed(2) : null;
-                    const noPrice  = pricing.buyNoPriceUsd  ? (pricing.buyNoPriceUsd  / 1_000_000).toFixed(2) : null;
+                    const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
+                    const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
+                    const yesPrice = rawYes ? (rawYes / 1_000_000).toFixed(2) : null;
+                    const noPrice  = rawNo  ? (rawNo  / 1_000_000).toFixed(2) : null;
                     const vol      = m.volume || m.totalVolume || firstMkt?.pricing?.volume;
                     return (
                       <div key={marketId||i}
