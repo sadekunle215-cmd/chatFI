@@ -206,6 +206,12 @@ function TokenPicker({ value, onSelect, jupFetch }) {
 export default function JupChat() {
   const [msgs, setMsgs] = useState([{ id:1, role:"ai", text:"Good morning! I'm ChatFi, your AI trading assistant built on Jupiter DEX.\n\nI can pull live token prices, help you swap **any** Solana token, set limit orders, track your full portfolio — including prediction market positions, earn deposits, and pending orders — analyse sports for on-chain prediction bets, earn yield via Jupiter Lend vaults, and claim your prediction winnings.\n\nConnect your wallet to get started, or just ask me anything. Don't have a wallet? [Download Jupiter Wallet →](https://jup.ag/mobile)" }]);
   const [showWalletModal, setShowWalletModal] = useState(false);
+  // WalletConnect state
+  const [wcStatus, setWcStatus]   = useState("idle"); // "idle" | "loading" | "waiting" | "connected"
+  const [wcUri, setWcUri]         = useState("");
+  const wcClientRef               = useRef(null);
+  const wcSessionRef              = useRef(null);
+  const wcQrRef                   = useRef(null);
   const [input, setInput]         = useState("");
   const [typing, setTyping]       = useState(false);
   const [wallet, setWallet]       = useState(null);
@@ -308,8 +314,23 @@ export default function JupChat() {
     }
   }, [input]);
 
+  // Render WalletConnect QR code when URI is ready
   useEffect(() => {
-    if (!showSwap || !swapCfg.amount || parseFloat(swapCfg.amount) <= 0) { setSwapQuote(null); return; }
+    if (wcStatus !== "waiting" || !wcUri) return;
+    const render = () => {
+      if (wcQrRef.current && window.QRCode) {
+        window.QRCode.toCanvas(wcQrRef.current, wcUri, { width: 240, margin: 2, color: { dark: "#1a1410", light: "#faf7f2" } }, () => {});
+      }
+    };
+    if (window.QRCode) { render(); return; }
+    // Load qrcode lib if not yet loaded
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/qrcode@1/build/qrcode.min.js";
+    s.onload = render;
+    document.head.appendChild(s);
+  }, [wcStatus, wcUri]);
+
+
     if (!swapCfg.fromMint || !swapCfg.toMint) { setSwapQuote(null); return; }
     const t = setTimeout(() => fetchSwapQuote(), 600);
     return () => clearTimeout(t);
@@ -703,6 +724,133 @@ export default function JupChat() {
       }
       return balances;
     } catch { return {}; }
+  };
+
+  // ── WalletConnect — QR pairing flow ─────────────────────────────────────────
+  // Dynamically loads @walletconnect/sign-client from CDN, generates a Solana
+  // mainnet pairing URI, shows it as a QR code, waits for Jupiter Mobile to scan.
+
+  const WC_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f";
+
+  const loadWCScript = () =>
+    new Promise((res, rej) => {
+      if (window._wcLoaded) { res(); return; }
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/@walletconnect/sign-client@2.17.0/dist/index.umd.js";
+      s.onload = () => { window._wcLoaded = true; res(); };
+      s.onerror = () => rej(new Error("Failed to load WalletConnect SDK"));
+      document.head.appendChild(s);
+    });
+
+  const getWCSignClient = async () => {
+    if (wcClientRef.current) return wcClientRef.current;
+    await loadWCScript();
+    // UMD global may be window.SignClient or window.SignClient.SignClient
+    const WC = window.SignClient;
+    const SC = (WC && typeof WC.init === "function") ? WC : WC?.SignClient;
+    if (!SC) throw new Error("WalletConnect SignClient not found on window");
+    const client = await SC.init({
+      projectId: WC_PROJECT_ID,
+      metadata: {
+        name: "JupChat",
+        description: "ChatFi — AI Trading powered by Jupiter DEX",
+        url: window.location.origin,
+        icons: [`${window.location.origin}/favicon.ico`, "https://jup.ag/favicon.ico"],
+      },
+    });
+    wcClientRef.current = client;
+    return client;
+  };
+
+  const initWalletConnect = async () => {
+    setWcStatus("loading");
+    try {
+      const client = await getWCSignClient();
+
+      // Clean up any stale pairings to avoid "already paired" errors
+      try {
+        const stale = client.pairing?.getAll?.({ active: false }) || [];
+        for (const p of stale) { await client.pairing.delete(p.topic, { code: 0, message: "stale" }).catch(() => {}); }
+      } catch {}
+
+      const { uri, approval } = await client.connect({
+        requiredNamespaces: {
+          solana: {
+            methods: ["solana_signTransaction", "solana_signMessage"],
+            chains: ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"],
+            events: [],
+          },
+        },
+      });
+
+      if (!uri) throw new Error("No pairing URI was generated");
+      setWcUri(uri);
+      setWcStatus("waiting");
+
+      // Await user scanning + approving in Jupiter Mobile
+      const session = await approval();
+      wcSessionRef.current = session;
+
+      const accounts = session.namespaces?.solana?.accounts || [];
+      if (!accounts.length) throw new Error("No Solana account returned from session");
+      const address = accounts[0].split(":").pop(); // "solana:chainId:PUBKEY" → "PUBKEY"
+
+      // Build a signing provider backed by WalletConnect
+      const wcProvider = {
+        publicKey: { toString: () => address },
+        connect: async () => ({ publicKey: { toString: () => address } }),
+        signTransaction: async (tx) => {
+          // Serialize the VersionedTransaction to base64
+          const raw = tx.serialize();
+          const base64 = btoa(String.fromCharCode(...raw));
+          const result = await client.request({
+            topic: session.topic,
+            chainId: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            request: {
+              method: "solana_signTransaction",
+              params: { transaction: base64 },
+            },
+          });
+          if (!result?.transaction) throw new Error("No signed transaction returned from wallet");
+          const signed = new Uint8Array(atob(result.transaction).split("").map(c => c.charCodeAt(0)));
+          return VersionedTransaction.deserialize(signed);
+        },
+        isWalletConnect: true,
+      };
+
+      // Close modal, reset WC UI state
+      setShowWalletModal(false);
+      setWcStatus("idle");
+      setWcUri("");
+
+      // Complete connection
+      connectedProviderRef.current = wcProvider;
+      const display = `${address.slice(0,4)}…${address.slice(-4)}`;
+      setWallet(display);
+      setWalletFull(address);
+      const balances = await fetchSolanaBalances(address);
+      setPortfolio(balances);
+      const live = await fetchPrices();
+      const solUSD = balances.SOL && live.SOL ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})` : "";
+      push("ai", `Jupiter Wallet connected via WalletConnect ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}${Object.entries(balances).filter(([k])=>k!=="SOL").map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("")}\n\nWhat would you like to do?`);
+    } catch (err) {
+      setWcStatus("idle");
+      setWcUri("");
+      const msg = err?.message || "";
+      if (!msg.toLowerCase().includes("rejected") && !msg.toLowerCase().includes("cancel")) {
+        push("ai", `WalletConnect error: ${msg || "Please try again."}`);
+      }
+    }
+  };
+
+  const cancelWalletConnect = () => {
+    setWcStatus("idle");
+    setWcUri("");
+    try {
+      if (wcClientRef.current && wcSessionRef.current?.topic) {
+        wcClientRef.current.disconnect({ topic: wcSessionRef.current.topic, reason: { code: 0, message: "User cancelled" } }).catch(() => {});
+      }
+    } catch {}
   };
 
   // ── Wallet Standard detection + mobile deep-link registry ───────────────────
@@ -1740,56 +1888,111 @@ export default function JupChat() {
         {/* Wallet selection modal */}
         {showWalletModal && (
           <div style={{ position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.55)", display:"flex", alignItems:"flex-end", justifyContent:"center" }}
-            onClick={e => { if (e.target === e.currentTarget) setShowWalletModal(false); }}>
+            onClick={e => { if (e.target === e.currentTarget) { cancelWalletConnect(); setShowWalletModal(false); } }}>
             <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:"20px 20px 0 0", padding:"20px 20px 32px", width:"100%", maxWidth:480, boxShadow:"0 -8px 40px rgba(0,0,0,0.25)", maxHeight:"85vh", overflowY:"auto" }}>
               {/* Handle bar */}
               <div style={{ width:40, height:4, background:T.border, borderRadius:4, margin:"0 auto 18px" }}/>
-              <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:4 }}>Connect Wallet</div>
-              <div style={{ fontSize:12, color:T.text3, marginBottom:18 }}>
-                {walletList.filter(w=>w.detected).length > 0
-                  ? "Detected wallets shown first. Tap to connect."
-                  : "No wallet detected in this browser. Open this page inside your wallet app, or tap a wallet below to launch it."}
-              </div>
 
-              {/* Detected / available wallets */}
-              {walletList.length > 0 ? (
-                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                  {walletList.map((w, i) => (
-                    <button key={i} onClick={() => doConnectWith(w)} className="hov-row"
-                      style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${w.detected ? T.accent+"44" : T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
-                      <span style={{ width:32, textAlign:"center", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
-                        {typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))
-                          ? <img src={w.icon} style={{ width:26, height:26, borderRadius:6, objectFit:"contain" }} alt={w.name} onError={e => { e.target.style.display="none"; e.target.nextSibling.style.display="inline"; }} />
-                          : null}
-                        <span style={{ fontSize:22, display: (typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))) ? "none" : "inline" }}>{w.icon}</span>
-                      </span>
-                      <span style={{ flex:1, fontWeight: w.detected ? 500 : 400 }}>{w.name}</span>
-                      {w.detected && w.type !== "download" && (
-                        <span style={{ fontSize:11, color:T.green, fontWeight:600, background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, padding:"2px 7px" }}>Detected</span>
-                      )}
-                      {(w.type === "deeplink") && (
-                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Open app →</span>
-                      )}
-                      {w.type === "download" && (
-                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Download →</span>
-                      )}
-                    </button>
-                  ))}
+              {/* ── WalletConnect QR screen ────────────────────────────── */}
+              {(wcStatus === "loading" || wcStatus === "waiting") ? (
+                <div style={{ textAlign:"center", padding:"8px 0 12px" }}>
+                  <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:4 }}>Scan with Jupiter Mobile</div>
+                  <div style={{ fontSize:12, color:T.text3, marginBottom:18 }}>
+                    Open Jupiter Wallet → tap the scan icon → scan this QR code
+                  </div>
+                  {wcStatus === "loading" && (
+                    <div style={{ padding:40, display:"flex", flexDirection:"column", alignItems:"center", gap:12, color:T.text3, fontSize:13 }}>
+                      <span className="spinner" style={{ width:28, height:28, border:"3px solid rgba(0,0,0,0.1)", borderTopColor:T.accent }}/>
+                      Generating pairing code…
+                    </div>
+                  )}
+                  {wcStatus === "waiting" && (
+                    <>
+                      <div style={{ display:"inline-block", padding:12, background:T.bg, border:`2px solid ${T.border}`, borderRadius:16, marginBottom:14 }}>
+                        <canvas ref={wcQrRef} style={{ display:"block", borderRadius:8 }}/>
+                      </div>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, justifyContent:"center", marginBottom:16 }}>
+                        <input readOnly value={wcUri} style={{ flex:1, padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text3, fontSize:10, fontFamily:T.mono, overflow:"hidden", textOverflow:"ellipsis" }}/>
+                        <button onClick={() => { try { navigator.clipboard.writeText(wcUri); } catch {} }}
+                          style={{ padding:"7px 12px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:8, color:T.accent, fontSize:12, cursor:"pointer", flexShrink:0, fontWeight:500 }}>
+                          Copy
+                        </button>
+                      </div>
+                      <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>Waiting for Jupiter Wallet to approve…</div>
+                    </>
+                  )}
+                  <button onClick={cancelWalletConnect}
+                    style={{ width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                    Cancel
+                  </button>
                 </div>
               ) : (
-                <div style={{ padding:16, background:T.bg, borderRadius:10, fontSize:13, color:T.text2, textAlign:"center" }}>
-                  <div style={{ marginBottom:10 }}>No wallet detected. Open this site inside your Phantom, Solflare, Backpack, OKX or Jupiter mobile app to connect automatically.</div>
-                  <a href="https://jup.ag/mobile" target="_blank" rel="noreferrer"
-                    style={{ display:"inline-block", padding:"10px 20px", background:T.accent, color:"#fff", borderRadius:8, fontSize:13, fontWeight:600, textDecoration:"none" }}>
-                    Download Jupiter Wallet →
-                  </a>
-                </div>
-              )}
+                /* ── Normal wallet list ─────────────────────────────────── */
+                <>
+                  <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:4 }}>Connect Wallet</div>
+                  <div style={{ fontSize:12, color:T.text3, marginBottom:18 }}>
+                    {walletList.filter(w=>w.detected).length > 0
+                      ? "Detected wallets shown first. Tap to connect."
+                      : "No wallet detected in this browser. Open this page inside your wallet app, or tap a wallet below to launch it."}
+                  </div>
 
-              <button onClick={() => setShowWalletModal(false)}
-                style={{ marginTop:14, width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
-                Cancel
-              </button>
+                  {/* WalletConnect QR button — always first */}
+                  <button onClick={initWalletConnect} className="hov-row"
+                    style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%", marginBottom:8 }}>
+                    <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", background:T.accent, borderRadius:8, flexShrink:0 }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>
+                        <path d="M14 14h2v2h-2zM18 14h3M14 18v3M18 18h3v3h-3z"/>
+                      </svg>
+                    </span>
+                    <span style={{ flex:1 }}>
+                      <span style={{ fontWeight:600, display:"block", color:T.accent }}>Scan QR (WalletConnect)</span>
+                      <span style={{ fontSize:11, color:T.text3 }}>Best for Jupiter Mobile — scan in-app</span>
+                    </span>
+                    <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>→</span>
+                  </button>
+
+                  {/* Detected / available wallets */}
+                  {walletList.length > 0 ? (
+                    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                      {walletList.map((w, i) => (
+                        <button key={i} onClick={() => doConnectWith(w)} className="hov-row"
+                          style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${w.detected ? T.accent+"44" : T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
+                          <span style={{ width:32, textAlign:"center", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                            {typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))
+                              ? <img src={w.icon} style={{ width:26, height:26, borderRadius:6, objectFit:"contain" }} alt={w.name} onError={e => { e.target.style.display="none"; e.target.nextSibling.style.display="inline"; }} />
+                              : null}
+                            <span style={{ fontSize:22, display: (typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))) ? "none" : "inline" }}>{w.icon}</span>
+                          </span>
+                          <span style={{ flex:1, fontWeight: w.detected ? 500 : 400 }}>{w.name}</span>
+                          {w.detected && w.type !== "download" && (
+                            <span style={{ fontSize:11, color:T.green, fontWeight:600, background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, padding:"2px 7px" }}>Detected</span>
+                          )}
+                          {(w.type === "deeplink") && (
+                            <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Open app →</span>
+                          )}
+                          {w.type === "download" && (
+                            <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Download →</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ padding:16, background:T.bg, borderRadius:10, fontSize:13, color:T.text2, textAlign:"center" }}>
+                      <div style={{ marginBottom:10 }}>No wallet detected. Open this site inside your Phantom, Solflare, Backpack, OKX or Jupiter mobile app to connect automatically.</div>
+                      <a href="https://jup.ag/mobile" target="_blank" rel="noreferrer"
+                        style={{ display:"inline-block", padding:"10px 20px", background:T.accent, color:"#fff", borderRadius:8, fontSize:13, fontWeight:600, textDecoration:"none" }}>
+                        Download Jupiter Wallet →
+                      </a>
+                    </div>
+                  )}
+
+                  <button onClick={() => setShowWalletModal(false)}
+                    style={{ marginTop:14, width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                    Cancel
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
