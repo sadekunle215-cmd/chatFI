@@ -293,21 +293,26 @@ export default function JupChat() {
   const textareaRef = useRef(null);
 
   // ── PWA Install Prompt ──────────────────────────────────────────────────────
+  const installShownRef = useRef(false);
   useEffect(() => {
     const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
     if (isStandalone) return; // already installed, don't show
 
+    // Never show again if user already installed or dismissed
+    if (localStorage.getItem("chatfi-install-done") === "true") return;
+
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
 
     const showInstallMsg = (prompt) => {
+      if (installShownRef.current) return; // prevent duplicate
+      installShownRef.current = true;
       const installMsg = isIOS
         ? "💡 **Tip:** It looks like you haven't added ChatFi to your home screen yet!\n\nTo install on iOS: tap the **Share** button (□↑) in Safari → then tap **\"Add to Home Screen\"**."
         : "💡 **Tip:** It looks like you haven't added ChatFi to your home screen yet!\n\nAdd it for a faster, app-like experience — no browser bar, instant access.";
-      setMsgs(m => [...m, { id: Date.now(), role: "ai", text: installMsg, installPromptObj: prompt || null, isIOS }]);
+      setMsgs(m => [m[0], { id: Date.now(), role: "ai", text: installMsg, installPromptObj: prompt || null, isIOS }, ...m.slice(1)]);
     };
 
     if (isIOS) {
-      // iOS can't auto-prompt; just show the guide message
       setTimeout(() => showInstallMsg(null), 1500);
     } else {
       const handler = (e) => {
@@ -1879,6 +1884,7 @@ export default function JupChat() {
                     m.installPromptObj.prompt();
                     const { outcome } = await m.installPromptObj.userChoice;
                     if (outcome === "accepted") {
+                      localStorage.setItem("chatfi-install-done", "true");
                       setMsgs(msgs => msgs.map(msg => msg.id === m.id ? { ...msg, installPromptObj: null, text: "✅ ChatFi has been added to your home screen! Enjoy the app experience." } : msg));
                     }
                   }}
