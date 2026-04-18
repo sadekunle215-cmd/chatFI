@@ -222,7 +222,7 @@ function TokenPicker({ value, onSelect, jupFetch }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function JupChat() {
-  const [msgs, setMsgs] = useState([{ id:1, role:"ai", text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" }]);
+  const [msgs, setMsgs] = useState([{ id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" }]);
   const [showWalletModal, setShowWalletModal] = useState(false);
   // WalletConnect state
   const [wcStatus, setWcStatus]   = useState("idle"); // "idle" | "loading" | "waiting" | "connected"
@@ -1896,16 +1896,31 @@ export default function JupChat() {
               <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6 }}>
                 <div dangerouslySetInnerHTML={{ __html:fmt(m.text) }} />
                 {m.installPromptObj && !m.isIOS && (
-                  <button onClick={async () => {
-                    m.installPromptObj.prompt();
-                    const { outcome } = await m.installPromptObj.userChoice;
-                    if (outcome === "accepted") {
+                  <div style={{ marginTop:12, display:"flex", flexDirection:"column", gap:8 }}>
+                    <button onClick={async () => {
+                      m.installPromptObj.prompt();
+                      const { outcome } = await m.installPromptObj.userChoice;
+                      if (outcome === "accepted") {
+                        localStorage.setItem("chatfi-install-done", "true");
+                        setMsgs(msgs => msgs.map(msg => msg.id === m.id ? { ...msg, installPromptObj: null, text: "✅ ChatFi has been added to your home screen! Enjoy the app experience." } : msg));
+                      }
+                    }}
+                    style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"9px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
+                      <span style={{ fontSize:16 }}>📲</span> Add to Home Screen
+                    </button>
+                    <button onClick={() => {
                       localStorage.setItem("chatfi-install-done", "true");
-                      setMsgs(msgs => msgs.map(msg => msg.id === m.id ? { ...msg, installPromptObj: null, text: "✅ ChatFi has been added to your home screen! Enjoy the app experience." } : msg));
-                    }
-                  }}
-                  style={{ marginTop:12, display:"flex", alignItems:"center", gap:8, padding:"9px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
-                    <span style={{ fontSize:16 }}>📲</span> Add ChatFi to Home Screen
+                      setMsgs(msgs => msgs.filter(msg => msg.id !== m.id));
+                    }}
+                    style={{ display:"flex", alignItems:"center", justifyContent:"center", padding:"7px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:12, cursor:"pointer", width:"100%" }}>
+                      Not now
+                    </button>
+                  </div>
+                )}
+                {m.showConnectBtn && !wallet && (
+                  <button onClick={() => connectWallet(null)}
+                    style={{ marginTop:12, display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"9px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
+                    🔗 Connect Wallet
                   </button>
                 )}
               </div>
