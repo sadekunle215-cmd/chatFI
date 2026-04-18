@@ -293,10 +293,9 @@ export default function JupChat() {
   const textareaRef = useRef(null);
 
   // ── PWA Install Prompt ──────────────────────────────────────────────────────
-  const installShownRef = useRef(false);
+  const [installBanner, setInstallBanner] = useState(null); // { prompt, isIOS }
   useEffect(() => {
-    // Check all possible standalone/installed states
-    const isStandalone = 
+    const isStandalone =
       window.matchMedia("(display-mode: standalone)").matches ||
       window.matchMedia("(display-mode: fullscreen)").matches ||
       window.matchMedia("(display-mode: minimal-ui)").matches ||
@@ -304,29 +303,16 @@ export default function JupChat() {
       document.referrer.includes("android-app://") ||
       localStorage.getItem("chatfi-install-done") === "true";
 
-    if (isStandalone) {
-      localStorage.setItem("chatfi-install-done", "true"); // remember for future
-      return;
-    }
+    if (isStandalone) { localStorage.setItem("chatfi-install-done", "true"); return; }
 
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
 
-    const showInstallMsg = (prompt) => {
-      if (installShownRef.current) return; // prevent duplicate
-      installShownRef.current = true;
-      const installMsg = isIOS
-        ? "📲 Add ChatFi to your home screen for a faster app-like experience! Tap **Share** (□↑) → **\"Add to Home Screen\"**."
-        : "📲 Add ChatFi to your home screen for instant access — no browser bar!";
-      setMsgs(m => [...m, { id: Date.now(), role: "ai", text: installMsg, installPromptObj: prompt || null, isIOS }]);
-    };
-
     if (isIOS) {
-      setTimeout(() => showInstallMsg(null), 1500);
+      setTimeout(() => setInstallBanner({ prompt: null, isIOS: true }), 1500);
     } else {
       const handler = (e) => {
         e.preventDefault();
-        setDeferredPrompt(e);
-        setTimeout(() => showInstallMsg(e), 1500);
+        setTimeout(() => setInstallBanner({ prompt: e, isIOS: false }), 1500);
       };
       window.addEventListener("beforeinstallprompt", handler);
       return () => window.removeEventListener("beforeinstallprompt", handler);
@@ -1895,28 +1881,6 @@ export default function JupChat() {
               )}
               <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6 }}>
                 <div dangerouslySetInnerHTML={{ __html:fmt(m.text) }} />
-                {m.installPromptObj && !m.isIOS && (
-                  <div style={{ marginTop:12, display:"flex", flexDirection:"column", gap:8 }}>
-                    <button onClick={async () => {
-                      m.installPromptObj.prompt();
-                      const { outcome } = await m.installPromptObj.userChoice;
-                      if (outcome === "accepted") {
-                        localStorage.setItem("chatfi-install-done", "true");
-                        setMsgs(msgs => msgs.map(msg => msg.id === m.id ? { ...msg, installPromptObj: null, text: "✅ ChatFi has been added to your home screen! Enjoy the app experience." } : msg));
-                      }
-                    }}
-                    style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"9px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
-                      <span style={{ fontSize:16 }}>📲</span> Add to Home Screen
-                    </button>
-                    <button onClick={() => {
-                      localStorage.setItem("chatfi-install-done", "true");
-                      setMsgs(msgs => msgs.filter(msg => msg.id !== m.id));
-                    }}
-                    style={{ display:"flex", alignItems:"center", justifyContent:"center", padding:"7px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:12, cursor:"pointer", width:"100%" }}>
-                      Not now
-                    </button>
-                  </div>
-                )}
                 {m.showConnectBtn && !wallet && (
                   <button onClick={() => connectWallet(null)}
                     style={{ marginTop:12, display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"9px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
@@ -2535,6 +2499,32 @@ export default function JupChat() {
                 </>
               )}
             </div>
+          </div>
+        )}
+
+        {/* PWA Install Banner */}
+        {installBanner && (
+          <div style={{ position:"absolute", bottom:80, left:12, right:12, zIndex:100, background:T.surface, border:`1px solid ${T.accent}`, borderRadius:16, padding:"14px 16px", boxShadow:"0 -4px 24px rgba(0,0,0,0.4)", display:"flex", alignItems:"center", gap:12, animation:"fadeUp 0.3s ease" }}>
+            <span style={{ fontSize:24, flexShrink:0 }}>📲</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:T.text1, marginBottom:2 }}>Add ChatFi to Home Screen</div>
+              <div style={{ fontSize:11, color:T.text2 }}>{installBanner.isIOS ? "Tap Share → Add to Home Screen" : "Instant access, no browser bar"}</div>
+            </div>
+            {!installBanner.isIOS && (
+              <button onClick={async () => {
+                installBanner.prompt.prompt();
+                const { outcome } = await installBanner.prompt.userChoice;
+                if (outcome === "accepted") { localStorage.setItem("chatfi-install-done", "true"); }
+                setInstallBanner(null);
+              }}
+              style={{ padding:"7px 14px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer", flexShrink:0 }}>
+                Add
+              </button>
+            )}
+            <button onClick={() => { localStorage.setItem("chatfi-install-done", "true"); setInstallBanner(null); }}
+              style={{ padding:"6px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text3, fontSize:12, cursor:"pointer", flexShrink:0 }}>
+              ✕
+            </button>
           </div>
         )}
 
