@@ -282,6 +282,7 @@ export default function JupChat() {
   // UI
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState([{ id:"default", title:"New conversation", active:true }]);
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
 
   // Dynamic token cache — grows as user searches any token
   const tokenCacheRef    = useRef({ ...TOKEN_MINTS });
@@ -291,9 +292,43 @@ export default function JupChat() {
   const endRef      = useRef(null);
   const textareaRef = useRef(null);
 
+  // ── PWA Install Prompt ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+    if (isStandalone) return; // already installed, don't show
+
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+
+    const showInstallMsg = (prompt) => {
+      const installMsg = isIOS
+        ? "💡 **Tip:** It looks like you haven't added ChatFi to your home screen yet!\n\nTo install on iOS: tap the **Share** button (□↑) in Safari → then tap **\"Add to Home Screen\"**."
+        : "💡 **Tip:** It looks like you haven't added ChatFi to your home screen yet!\n\nAdd it for a faster, app-like experience — no browser bar, instant access.";
+      setMsgs(m => [...m, { id: Date.now(), role: "ai", text: installMsg, installPromptObj: prompt || null, isIOS }]);
+    };
+
+    if (isIOS) {
+      // iOS can't auto-prompt; just show the guide message
+      setTimeout(() => showInstallMsg(null), 1500);
+    } else {
+      const handler = (e) => {
+        e.preventDefault();
+        setDeferredPrompt(e);
+        setTimeout(() => showInstallMsg(e), 1500);
+      };
+      window.addEventListener("beforeinstallprompt", handler);
+      return () => window.removeEventListener("beforeinstallprompt", handler);
+    }
+  }, []);
+
   // ── Fonts + global CSS ──────────────────────────────────────────────────────
   useEffect(() => {
     document.title = "ChatFi — Your personal AI tools";
+
+    // Lock viewport — prevent pinch-zoom and mobile bounce
+    let vp = document.querySelector("meta[name=viewport]");
+    if (!vp) { vp = document.createElement("meta"); vp.name = "viewport"; document.head.appendChild(vp); }
+    vp.content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+
     const link = document.createElement("link");
     link.rel  = "stylesheet";
     link.href = "https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap";
@@ -301,6 +336,8 @@ export default function JupChat() {
     const style = document.createElement("style");
     style.textContent = `
       *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+      html, body { height:100%; overflow:hidden; overscroll-behavior:none; touch-action:pan-x pan-y; -webkit-text-size-adjust:100%; }
+      body { position:fixed; width:100%; }
       @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
       @keyframes blink  { 0%,80%,100%{opacity:0.15} 40%{opacity:0.9} }
       @keyframes spin   { to{transform:rotate(360deg)} }
@@ -1810,9 +1847,21 @@ export default function JupChat() {
                 <img src={CHATFI_AVATAR} alt="ChatFi" style={{ width:"100%", height:"100%", objectFit:"cover" }}/>
               </div>
               )}
-              <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6 }}
-                dangerouslySetInnerHTML={{ __html:fmt(m.text) }}
-              />
+              <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6 }}>
+                <div dangerouslySetInnerHTML={{ __html:fmt(m.text) }} />
+                {m.installPromptObj && !m.isIOS && (
+                  <button onClick={async () => {
+                    m.installPromptObj.prompt();
+                    const { outcome } = await m.installPromptObj.userChoice;
+                    if (outcome === "accepted") {
+                      setMsgs(msgs => msgs.map(msg => msg.id === m.id ? { ...msg, installPromptObj: null, text: "✅ ChatFi has been added to your home screen! Enjoy the app experience." } : msg));
+                    }
+                  }}
+                  style={{ marginTop:12, display:"flex", alignItems:"center", gap:8, padding:"9px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
+                    <span style={{ fontSize:16 }}>📲</span> Add ChatFi to Home Screen
+                  </button>
+                )}
+              </div>
             </div>
           ))}
 
