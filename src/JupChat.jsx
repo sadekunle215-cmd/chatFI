@@ -222,7 +222,7 @@ function TokenPicker({ value, onSelect, jupFetch }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function JupChat() {
-  const [msgs, setMsgs] = useState([{ id:1, role:"ai", text:"Good morning! I'm ChatFi, your AI trading assistant built on Jupiter DEX.\n\nI can pull live token prices, help you swap **any** Solana token, set limit orders, track your full portfolio — including prediction market positions, earn deposits, and pending orders — analyse sports for on-chain prediction bets, earn yield via Jupiter Lend vaults, and claim your prediction winnings.\n\nConnect your wallet to get started, or just ask me anything. Don't have a wallet? [Download Jupiter Wallet →](https://jup.ag/mobile)" }]);
+  const [msgs, setMsgs] = useState([{ id:1, role:"ai", text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" }]);
   const [showWalletModal, setShowWalletModal] = useState(false);
   // WalletConnect state
   const [wcStatus, setWcStatus]   = useState("idle"); // "idle" | "loading" | "waiting" | "connected"
@@ -295,11 +295,19 @@ export default function JupChat() {
   // ── PWA Install Prompt ──────────────────────────────────────────────────────
   const installShownRef = useRef(false);
   useEffect(() => {
-    const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
-    if (isStandalone) return; // already installed, don't show
+    // Check all possible standalone/installed states
+    const isStandalone = 
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.matchMedia("(display-mode: fullscreen)").matches ||
+      window.matchMedia("(display-mode: minimal-ui)").matches ||
+      window.navigator.standalone === true ||
+      document.referrer.includes("android-app://") ||
+      localStorage.getItem("chatfi-install-done") === "true";
 
-    // Never show again if user already installed or dismissed
-    if (localStorage.getItem("chatfi-install-done") === "true") return;
+    if (isStandalone) {
+      localStorage.setItem("chatfi-install-done", "true"); // remember for future
+      return;
+    }
 
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
 
@@ -369,7 +377,13 @@ export default function JupChat() {
     document.head.appendChild(style);
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig]);
+  const chatContainerRef = useRef(null);
+  useEffect(() => {
+    const container = chatContainerRef.current;
+    if (!container) return;
+    const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+    if (isNearBottom) endRef.current?.scrollIntoView({ behavior:"smooth" });
+  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -1869,7 +1883,7 @@ export default function JupChat() {
         </div>
 
         {/* Messages */}
-        <div style={{ flex:1, overflowY:"auto", padding:"24px 20px" }}>
+        <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"24px 20px" }}>
           {msgs.map(m => (
             <div key={m.id} className="msg-enter" style={{ marginBottom:20, display:"flex", gap:12, justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
               {m.role==="ai" && (
