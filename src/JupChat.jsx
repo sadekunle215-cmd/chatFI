@@ -378,7 +378,9 @@ export default function JupChat() {
   }, []);
 
   const chatContainerRef = useRef(null);
+  const mountedRef = useRef(false);
   useEffect(() => {
+    if (!mountedRef.current) { mountedRef.current = true; return; } // skip first render
     const container = chatContainerRef.current;
     if (!container) return;
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
