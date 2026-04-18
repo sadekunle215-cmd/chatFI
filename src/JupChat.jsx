@@ -307,9 +307,9 @@ export default function JupChat() {
       if (installShownRef.current) return; // prevent duplicate
       installShownRef.current = true;
       const installMsg = isIOS
-        ? "💡 **Tip:** It looks like you haven't added ChatFi to your home screen yet!\n\nTo install on iOS: tap the **Share** button (□↑) in Safari → then tap **\"Add to Home Screen\"**."
-        : "💡 **Tip:** It looks like you haven't added ChatFi to your home screen yet!\n\nAdd it for a faster, app-like experience — no browser bar, instant access.";
-      setMsgs(m => [m[0], { id: Date.now(), role: "ai", text: installMsg, installPromptObj: prompt || null, isIOS }, ...m.slice(1)]);
+        ? "📲 Add ChatFi to your home screen for a faster app-like experience! Tap **Share** (□↑) → **\"Add to Home Screen\"**."
+        : "📲 Add ChatFi to your home screen for instant access — no browser bar!";
+      setMsgs(m => [...m, { id: Date.now(), role: "ai", text: installMsg, installPromptObj: prompt || null, isIOS }]);
     };
 
     if (isIOS) {
