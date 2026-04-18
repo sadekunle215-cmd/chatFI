@@ -1108,6 +1108,19 @@ export default function JupChat() {
     } catch {}
   };
 
+  const disconnectWallet = () => {
+    try {
+      if (wcClientRef.current && wcSessionRef.current?.topic) {
+        wcClientRef.current.disconnect({ topic: wcSessionRef.current.topic, reason: { code: 0, message: "User disconnected" } }).catch(() => {});
+      }
+    } catch {}
+    wcSessionRef.current = null;
+    setWallet(null);
+    setWalletFull(null);
+    setPortfolio({});
+    setMsgs(m => [...m, { id: Date.now(), role: "ai", text: "👋 Wallet disconnected. Connect again anytime to access your portfolio and trading features." }]);
+  };
+
   // ── Wallet Standard detection + mobile deep-link registry ───────────────────
   // Detects wallets via the Wallet Standard API (works for extensions + mobile in-app browsers)
   // Falls back to legacy window injection checks, then offers mobile deep links.
@@ -1811,6 +1824,10 @@ export default function JupChat() {
               <div style={{ fontSize:12, color:T.text2 }}>
                 <div style={{ color:T.green, fontWeight:500, marginBottom:4 }}>● {wallet}</div>
                 {portfolio.SOL !== undefined && <div>{portfolio.SOL.toFixed(4)} SOL{prices.SOL?` · $${(portfolio.SOL*prices.SOL).toFixed(2)}`:""}</div>}
+                <button onClick={disconnectWallet} className="hov-btn"
+                  style={{ marginTop:8, width:"100%", padding:"7px 12px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:500, cursor:"pointer" }}>
+                  Disconnect Wallet
+                </button>
               </div>
             ) : (
               <button onClick={() => connectWallet(null)} className="hov-btn"
@@ -1829,7 +1846,15 @@ export default function JupChat() {
         <div style={{ padding:"12px 20px", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12, background:T.surface }}>
           <button onClick={() => setSidebarOpen(o=>!o)} style={{ background:"none", border:"none", cursor:"pointer", color:T.text3, fontSize:18, padding:4 }} className="hov-btn">☰</button>
           <div style={{ fontFamily:T.serif, fontSize:16, fontWeight:500, color:T.text1 }}>ChatFi</div>
-          {wallet && <div style={{ marginLeft:"auto", fontSize:12, color:T.green, fontWeight:500 }}>● {wallet}</div>}
+          {wallet && (
+            <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
+              <div style={{ fontSize:12, color:T.green, fontWeight:500 }}>● {wallet}</div>
+              <button onClick={disconnectWallet} className="hov-btn"
+                style={{ padding:"4px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:7, color:T.red, fontSize:11, fontWeight:500, cursor:"pointer" }}>
+                Disconnect
+              </button>
+            </div>
+          )}
           {!wallet && (
             <button onClick={() => connectWallet(null)} className="hov-btn"
               style={{ marginLeft:"auto", padding:"6px 14px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:500, cursor:"pointer" }}>
