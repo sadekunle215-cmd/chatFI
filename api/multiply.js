@@ -1,9 +1,7 @@
 // api/multiply.js — Vercel Serverless Route
-// Builds a Jupiter Multiply (leveraged loop) transaction using @jup-ag/lend SDK
-// Frontend calls POST /api/multiply → gets back base64 VersionedTransaction → signs via wallet
+// Handles both OPEN and CLOSE of Jupiter Multiply positions via @jup-ag/lend SDK
 //
-// Install in your Vercel project:
-//   npm install @jup-ag/lend @solana/web3.js bn.js
+// Install: npm install @jup-ag/lend @solana/web3.js bn.js
 
 import { Connection, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import { getOperateIx } from "@jup-ag/lend/borrow";
@@ -12,14 +10,12 @@ import BN from "bn.js";
 const SOLANA_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 
 export default async function handler(req, res) {
-  // Allow only POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { vaultId, positionId = 0, colAmount, debtAmount, signer } = req.body;
+  const { vaultId, positionId = 0, colAmount, debtAmount, signer, action = "open" } = req.body;
 
-  // Validate required fields
   if (!vaultId || !colAmount || !debtAmount || !signer) {
     return res.status(400).json({ error: "Missing required fields: vaultId, colAmount, debtAmount, signer" });
   }
@@ -28,21 +24,27 @@ export default async function handler(req, res) {
     const connection = new Connection(SOLANA_RPC, { commitment: "confirmed" });
     const signerPubkey = new PublicKey(signer);
 
-    // Call Jupiter Lend SDK — getOperateIx handles flash-loan + loop atomically
+    // For close: colAmount and debtAmount are negative strings e.g. "-1000000"
+    // getOperateIx accepts negative values to signal withdrawal/repayment
+    const colBN  = new BN(colAmount.toString().replace("-", ""));
+    const debtBN = new BN(debtAmount.toString().replace("-", ""));
+
+    const isClose = action === "close" || colAmount.toString().startsWith("-");
+
     const { ixs, addressLookupTableAccounts } = await getOperateIx({
       vaultId:    Number(vaultId),
       positionId: Number(positionId),
-      colAmount:  new BN(colAmount),
-      debtAmount: new BN(debtAmount),
+      // Negative BN signals unwind/repay to the SDK
+      colAmount:  isClose ? colBN.neg() : colBN,
+      debtAmount: isClose ? debtBN.neg() : debtBN,
       signer:     signerPubkey,
       connection,
     });
 
     if (!ixs || ixs.length === 0) {
-      return res.status(400).json({ error: "No instructions returned by Jupiter Lend SDK. Check vault ID and amounts." });
+      return res.status(400).json({ error: "No instructions returned. Check vaultId, positionId and amounts." });
     }
 
-    // Build versioned transaction (unsigned — frontend will sign)
     const { blockhash } = await connection.getLatestBlockhash({ commitment: "finalized" });
 
     const message = new TransactionMessage({
@@ -52,8 +54,6 @@ export default async function handler(req, res) {
     }).compileToV0Message(addressLookupTableAccounts || []);
 
     const tx = new VersionedTransaction(message);
-
-    // Return as base64 — same format as all other Jupiter API transactions in ChatFi
     const serialized = Buffer.from(tx.serialize()).toString("base64");
 
     return res.status(200).json({ transaction: serialized });
