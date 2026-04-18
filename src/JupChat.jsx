@@ -280,7 +280,7 @@ export default function JupChat() {
   const [showEarnDeposit, setShowEarnDeposit] = useState(false);
 
   // UI
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState([{ id:"default", title:"New conversation", active:true }]);
 
   // Dynamic token cache — grows as user searches any token
@@ -293,6 +293,7 @@ export default function JupChat() {
 
   // ── Fonts + global CSS ──────────────────────────────────────────────────────
   useEffect(() => {
+    document.title = "ChatFi — Your personal AI tools";
     const link = document.createElement("link");
     link.rel  = "stylesheet";
     link.href = "https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap";
@@ -922,8 +923,8 @@ export default function JupChat() {
     const client = await SC.init({
       projectId: WC_PROJECT_ID,
       metadata: {
-        name: "JupChat",
-        description: "ChatFi — AI Trading powered by Jupiter DEX",
+        name: "ChatFi",
+        description: "ChatFi — Your personal AI tools",
         url: window.location.origin,
         icons: [`${window.location.origin}/favicon.ico`, "https://jup.ag/favicon.ico"],
       },
@@ -1747,7 +1748,7 @@ export default function JupChat() {
           <div style={{ padding:"18px 16px 12px", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
             <div>
               <div style={{ fontFamily:T.serif, fontSize:18, fontWeight:500, color:T.text1, letterSpacing:"-0.3px" }}>ChatFi</div>
-              <div style={{ fontSize:11, color:T.text3, marginTop:2 }}>Jupiter AI Trading</div>
+              <div style={{ fontSize:11, color:T.text3, marginTop:2 }}>Your personal AI tools</div>
             </div>
             {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) && (
               <button onClick={() => setSidebarOpen(false)}
