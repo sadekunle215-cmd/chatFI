@@ -269,6 +269,7 @@ export default function JupChat() {
   const [betMarket, setBetMarket]     = useState(null);
   const [betSide, setBetSide]         = useState(null);
   const [betAmount, setBetAmount]     = useState("5");
+  const [betMint, setBetMint]         = useState("USDC");  // "USDC" | "JUPUSD"
   const [betStatus, setBetStatus]     = useState(null);
 
   // Earn / Lend
@@ -668,39 +669,46 @@ export default function JupChat() {
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
 
-    // depositAmount in native USDC/JupUSD units (1 USD = 1_000_000)
     const depositAmount = Math.floor(parseFloat(betAmount) * 1_000_000).toString();
     const isYes = betSide === "yes";
 
-    // Validate marketId before calling API — must be a Solana pubkey (32-byte base58, ~44 chars)
     if (!betMarket?.marketId) {
-      push("ai", "Market ID not found for this event. Please refresh markets and try again.");
+      push("ai", "Market ID not found for this event. Please refresh the prediction markets and try again.");
       setBetStatus(null);
       return;
     }
 
+    // Pick deposit mint: use whichever token the user has enough of
+    const usdcBal   = portfolio.USDC   ?? 0;
+    const jupusdBal = portfolio.JUPUSD ?? 0;
+    const amt       = parseFloat(betAmount);
+    let chosenMint  = betMint === "JUPUSD" ? JUPUSD_MINT : USDC_MINT;
+    if (betMint === "USDC"   && usdcBal   < amt && jupusdBal >= amt) chosenMint = JUPUSD_MINT;
+    if (betMint === "JUPUSD" && jupusdBal < amt && usdcBal   >= amt) chosenMint = USDC_MINT;
+    const mintLabel = chosenMint === JUPUSD_MINT ? "JupUSD" : "USDC";
+
     setBetStatus("signing");
     setShowBet(false);
-    push("ai", `Placing **${betSide.toUpperCase()}** bet of **$${betAmount} USDC** on: _${betMarket.title}_…`);
+    push("ai", `Placing **${betSide.toUpperCase()}** bet of **$${betAmount} ${mintLabel}** on: _${betMarket.title}_…`);
+
+    const placeOrder = (mint) => jupFetch(`${JUP_PRED_API}/orders`, {
+      method: "POST",
+      body: { ownerPubkey:walletFull, marketId:betMarket.marketId, isYes, isBuy:true, depositAmount, depositMint:mint },
+    });
 
     try {
-      const orderRes = await jupFetch(`${JUP_PRED_API}/orders`, {
-        method: "POST",
-        body: {
-          ownerPubkey: walletFull,
-          marketId: betMarket.marketId,
-          isYes,
-          isBuy: true,
-          depositAmount,
-          depositMint: USDC_MINT,
-        },
-      });
+      let orderRes = await placeOrder(chosenMint);
+      // Auto-retry with the other mint if this one fails
+      if (!orderRes.transaction && !orderRes.error) {
+        const altMint = chosenMint === USDC_MINT ? JUPUSD_MINT : USDC_MINT;
+        const retry   = await placeOrder(altMint);
+        if (retry.transaction) { orderRes = retry; chosenMint = altMint; }
+      }
       if (orderRes.error) throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
       if (!orderRes.transaction) {
-        // Surface whatever the API actually returned to help diagnose
         const hint = orderRes.message || orderRes.msg || orderRes.code
-          || (Object.keys(orderRes).length ? JSON.stringify(orderRes).slice(0, 120) : "empty response");
-        throw new Error(`No transaction from Jupiter Prediction. API said: "${hint}". Ensure you have USDC (min $5) and the market is open.`);
+          || (Object.keys(orderRes).length ? JSON.stringify(orderRes).slice(0, 160) : "empty response");
+        throw new Error(hint);
       }
 
       const binaryStr = atob(orderRes.transaction);
@@ -725,7 +733,16 @@ export default function JupChat() {
       push("ai", `Prediction order submitted ✓\n\n**${betSide.toUpperCase()}** on _${betMarket.title}_\nAmount: **$${betAmount} USDC**${contracts ? `  ·  Contracts: **${contracts}**` : ""}\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})${orderPubkey ? `\n\nOrder account: \`${orderPubkey.slice(0,20)}…\`` : ""}`);
     } catch (err) {
       setBetStatus("error");
-      push("ai", `Prediction bet failed: ${err?.message || "Unknown error"}. Please check your USDC balance (minimum $5) and try again.`);
+      const msg = err?.message || "Unknown error";
+      const isBalance = /balance|insufficient|fund|not enough/i.test(msg);
+      const isMarket  = /market.*closed|not open|no.*market/i.test(msg);
+      if (isBalance) {
+        push("ai", `Prediction bet failed: Not enough balance. You need at least **$${betAmount} USDC or JupUSD**.\n\n[Swap SOL → USDC on Jupiter →](https://jup.ag/swap/SOL-USDC)`);
+      } else if (isMarket) {
+        push("ai", "This market is no longer open for trading. Try a different market from the list.");
+      } else {
+        push("ai", `Prediction bet failed: ${msg}\n\nMake sure you have **$${betAmount} USDC or JupUSD** in your wallet. [Get USDC →](https://jup.ag/swap/SOL-USDC)`);
+      }
     }
     setBetStatus(null);
   };
@@ -2015,16 +2032,31 @@ export default function JupChat() {
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:8, color:T.text1 }}>Place Prediction Bet</div>
               <div style={{ fontSize:13, color:T.text2, marginBottom:14, padding:"8px 12px", background:T.bg, borderRadius:8, lineHeight:1.5 }}>{betMarket.title}</div>
 
-              {/* Show USDC balance warning if low */}
-              {portfolio.USDC !== undefined && portfolio.USDC < 5 && (
-                <div style={{ fontSize:12, color:T.red, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, padding:"8px 12px", marginBottom:12 }}>
-                  ⚠ Your USDC balance is ${(portfolio.USDC || 0).toFixed(4)} — minimum bet is $5 USDC. Swap some SOL to USDC first.
-                  <button onClick={() => { setShowBet(false); send("Swap SOL to USDC"); }}
-                    style={{ marginLeft:8, padding:"3px 10px", background:T.accent, border:"none", borderRadius:6, color:"#fff", fontSize:11, cursor:"pointer" }}>
-                    Swap now →
-                  </button>
-                </div>
-              )}
+              {/* Token selector + live balances */}
+              {(() => {
+                const usdcBal   = portfolio.USDC   ?? 0;
+                const jupusdBal = portfolio.JUPUSD ?? 0;
+                const noBalance = usdcBal < 5 && jupusdBal < 5;
+                return (<>
+                  <div style={{ display:"flex", gap:6, marginBottom:10 }}>
+                    {["USDC","JUPUSD"].map(m => (
+                      <button key={m} onClick={() => setBetMint(m)} className="hov-btn"
+                        style={{ padding:"4px 12px", borderRadius:20, fontSize:11, fontWeight:600, cursor:"pointer", border:`1px solid ${betMint===m?T.accent:T.border}`, background:betMint===m?T.accentBg:"transparent", color:betMint===m?T.accent:T.text2 }}>
+                        {m} · ${m==="USDC" ? usdcBal.toFixed(2) : jupusdBal.toFixed(2)}
+                      </button>
+                    ))}
+                  </div>
+                  {noBalance && (
+                    <div style={{ fontSize:12, color:T.red, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, padding:"8px 12px", marginBottom:12 }}>
+                      ⚠ You need at least $5 USDC or JupUSD to place a bet.
+                      <button onClick={() => { setShowBet(false); send("Swap SOL to USDC"); }}
+                        style={{ marginLeft:8, padding:"3px 10px", background:T.accent, border:"none", borderRadius:6, color:"#fff", fontSize:11, cursor:"pointer" }}>
+                        Swap SOL → USDC →
+                      </button>
+                    </div>
+                  )}
+                </>);
+              })()}
 
               <div style={{ fontSize:12, color:T.text3, marginBottom:10 }}>Choose outcome:</div>
               <div style={{ display:"flex", gap:10, marginBottom:16 }}>
@@ -2063,8 +2095,7 @@ export default function JupChat() {
               </div>
               {parseFloat(betAmount) < 5 && betAmount !== "" && <div style={{ fontSize:11, color:T.red }}>Minimum bet is $5 USDC</div>}
               <div style={{ fontSize:11, color:T.text3, marginTop:8 }}>
-                Pays out $1 per winning contract · No fees · Auto-claimed within 24h if you win
-                {portfolio.USDC !== undefined && <span style={{ marginLeft:8 }}>· Your USDC: ${(portfolio.USDC||0).toFixed(4)}</span>}
+                Pays out $1 per winning contract · No fees · Min bet $5
               </div>
             </div>
           )}
