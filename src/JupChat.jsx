@@ -98,25 +98,25 @@ const SUGGESTIONS = [
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const T = {
-  bg:       "#f5f0e8",
-  sidebar:  "#ede8de",
-  surface:  "#faf7f2",
-  border:   "#ddd5c4",
-  text1:    "#1a1410",
-  text2:    "#5c4f3d",
-  text3:    "#a09080",
-  accent:   "#d97931",
-  accentBg: "#fff3e8",
-  green:    "#2a8a5e",
-  greenBg:  "#edf7f2",
-  greenBd:  "#b8ddc8",
-  red:      "#c0392b",
-  redBg:    "#fdf0ee",
-  redBd:    "#f0c0b8",
-  purple:   "#7c5cbf",
-  purpleBg: "#f3effb",
-  teal:     "#1a7a8a",
-  tealBg:   "#e8f6f8",
+  bg:       "#0d1117",
+  sidebar:  "#111820",
+  surface:  "#161e27",
+  border:   "#1e2d3d",
+  text1:    "#e8f4f0",
+  text2:    "#8fa8b8",
+  text3:    "#4d6a7a",
+  accent:   "#c7f284",
+  accentBg: "#1a2e1a",
+  green:    "#c7f284",
+  greenBg:  "#1a2e1a",
+  greenBd:  "#2d4d1a",
+  red:      "#f28484",
+  redBg:    "#2e1a1a",
+  redBd:    "#4d2d2d",
+  purple:   "#a78bfa",
+  purpleBg: "#1e1a2e",
+  teal:     "#38bdf8",
+  tealBg:   "#0f2233",
   body:     "'DM Sans','Segoe UI',sans-serif",
   serif:    "'Lora','Georgia',serif",
   mono:     "'JetBrains Mono',monospace",
@@ -127,7 +127,7 @@ const fmt = (text = "") =>
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.*?)\*/g, "<em>$1</em>")
     .replace(/`(.*?)`/g, "<code>$1</code>")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer" style="color:#d97931;text-decoration:underline">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer" style="color:#c7f284;text-decoration:underline">$1</a>')
     .replace(/\n/g, "<br/>");
 
 // ─── Token search picker component ───────────────────────────────────────────
@@ -306,21 +306,21 @@ export default function JupChat() {
       .msg-enter { animation:fadeUp 0.22s ease forwards; }
       ::-webkit-scrollbar { width:5px; height:5px; }
       ::-webkit-scrollbar-track { background:transparent; }
-      ::-webkit-scrollbar-thumb { background:#d4c9b5; border-radius:6px; }
+      ::-webkit-scrollbar-thumb { background:#1e2d3d; border-radius:6px; }
       textarea { resize:none; }
-      textarea::placeholder, input::placeholder { color:#b0a090; }
+      textarea::placeholder, input::placeholder { color:#4d6a7a; }
       input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; }
-      select option { background:#faf7f2; color:#1a1410; }
-      code { font-family:'JetBrains Mono',monospace; background:#ede8de; padding:1px 5px; border-radius:3px; font-size:0.87em; color:#7a5c00; }
-      .dot1,.dot2,.dot3 { display:inline-block; width:7px; height:7px; border-radius:50%; background:#b5a896; animation:blink 1.2s infinite; }
+      select option { background:#161e27; color:#e8f4f0; }
+      code { font-family:'JetBrains Mono',monospace; background:#1e2d3d; padding:1px 5px; border-radius:3px; font-size:0.87em; color:#c7f284; }
+      .dot1,.dot2,.dot3 { display:inline-block; width:7px; height:7px; border-radius:50%; background:#4d6a7a; animation:blink 1.2s infinite; }
       .dot2{animation-delay:0.2s} .dot3{animation-delay:0.4s}
       .hov-row:hover { background:#e8e2d5 !important; }
       .hov-btn:hover { opacity:0.8; }
-      .hov-sugg:hover { background:#e8e2d5 !important; color:#3d2e1e !important; }
-      .hov-pick:hover { border-color:#d97931 !important; }
+      .hov-sugg:hover { background:#1e2d3d !important; color:#e8f4f0 !important; }
+      .hov-pick:hover { border-color:#c7f284 !important; }
       .send-btn:not(:disabled):hover { background:#c4562a !important; }
       .spinner { width:14px; height:14px; border:2px solid rgba(255,255,255,0.3); border-top-color:#fff; border-radius:50%; animation:spin 0.7s linear infinite; }
-      .vault-card:hover { border-color:#d97931 !important; background:#fff3e8 !important; }
+      .vault-card:hover { border-color:#c7f284 !important; background:#1a2e1a !important; }
       .market-row:hover { background:#e8e2d5 !important; cursor:pointer; }
     `;
     document.head.appendChild(style);
@@ -340,7 +340,7 @@ export default function JupChat() {
     if (wcStatus !== "waiting" || !wcUri) return;
     const render = () => {
       if (wcQrRef.current && window.QRCode) {
-        window.QRCode.toCanvas(wcQrRef.current, wcUri, { width: 240, margin: 2, color: { dark: "#1a1410", light: "#faf7f2" } }, () => {});
+        window.QRCode.toCanvas(wcQrRef.current, wcUri, { width: 240, margin: 2, color: { dark: "#c7f284", light: "#161e27" } }, () => {});
       }
     };
     if (window.QRCode) { render(); return; }
@@ -1776,7 +1776,7 @@ export default function JupChat() {
               </div>
             ) : (
               <button onClick={() => connectWallet(null)} className="hov-btn"
-                style={{ width:"100%", padding:"8px 12px", background:T.accent, border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:500, cursor:"pointer" }}>
+                style={{ width:"100%", padding:"8px 12px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:500, cursor:"pointer" }}>
                 Connect Wallet
               </button>
             )}
@@ -1794,7 +1794,7 @@ export default function JupChat() {
           {wallet && <div style={{ marginLeft:"auto", fontSize:12, color:T.green, fontWeight:500 }}>● {wallet}</div>}
           {!wallet && (
             <button onClick={() => connectWallet(null)} className="hov-btn"
-              style={{ marginLeft:"auto", padding:"6px 14px", background:T.accent, border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:500, cursor:"pointer" }}>
+              style={{ marginLeft:"auto", padding:"6px 14px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:500, cursor:"pointer" }}>
               Connect Wallet
             </button>
           )}
@@ -1809,7 +1809,7 @@ export default function JupChat() {
                 <img src={CHATFI_AVATAR} alt="ChatFi" style={{ width:"100%", height:"100%", objectFit:"cover" }}/>
               </div>
               )}
-              <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#fff":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6 }}
+              <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6 }}
                 dangerouslySetInnerHTML={{ __html:fmt(m.text) }}
               />
             </div>
@@ -1870,7 +1870,7 @@ export default function JupChat() {
               )}
               <div style={{ display:"flex", gap:8 }}>
                 <button onClick={doSwap} disabled={!swapCfg.amount||swapStatus==="signing"} className="send-btn"
-                  style={{ flex:1, padding:"10px", background:T.accent, border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:500, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                  style={{ flex:1, padding:"10px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:500, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
                   {swapStatus==="signing" ? <><span className="spinner"/> Signing…</> : `Swap ${swapCfg.from} → ${swapCfg.to}`}
                 </button>
                 <button onClick={() => setShowSwap(false)}
@@ -2016,7 +2016,7 @@ export default function JupChat() {
                 💡 This is AI analysis. To place a real on-chain bet, ask <em>"Show prediction markets"</em> and pick from live Jupiter markets below.
               </div>
               <button onClick={() => { setShowPred(false); send("Show prediction markets"); }}
-                style={{ padding:"8px 16px", background:T.accent, border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:500, cursor:"pointer", marginRight:8 }} className="hov-btn">
+                style={{ padding:"8px 16px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:500, cursor:"pointer", marginRight:8 }} className="hov-btn">
                 Browse Live Markets →
               </button>
               <button onClick={() => setShowPred(false)}
@@ -2050,7 +2050,7 @@ export default function JupChat() {
                     <div style={{ fontSize:12, color:T.red, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, padding:"8px 12px", marginBottom:12 }}>
                       ⚠ You need at least $5 USDC or JupUSD to place a bet.
                       <button onClick={() => { setShowBet(false); send("Swap SOL to USDC"); }}
-                        style={{ marginLeft:8, padding:"3px 10px", background:T.accent, border:"none", borderRadius:6, color:"#fff", fontSize:11, cursor:"pointer" }}>
+                        style={{ marginLeft:8, padding:"3px 10px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:11, cursor:"pointer" }}>
                         Swap SOL → USDC →
                       </button>
                     </div>
@@ -2151,7 +2151,7 @@ export default function JupChat() {
                       <div style={{ fontSize:10, color:T.text3, marginBottom:8, marginTop:2 }}>Total APY</div>
                       <button
                         onClick={() => { setEarnDeposit({ vault:v, amount:"" }); setShowEarnDeposit(true); }} className="hov-btn"
-                        style={{ padding:"6px 16px", background:T.accent, border:"none", borderRadius:6, color:"#fff", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                        style={{ padding:"6px 16px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:600, cursor:"pointer" }}>
                         Deposit
                       </button>
                     </div>
@@ -2439,7 +2439,7 @@ export default function JupChat() {
               style={{ flex:1, border:"none", outline:"none", background:"transparent", fontFamily:T.body, fontSize:14, color:T.text1, lineHeight:1.5, maxHeight:160, overflowY:"auto" }}
             />
             <button onClick={() => send()} disabled={!input.trim()||typing} className="send-btn"
-              style={{ padding:"8px 16px", background:(!input.trim()||typing)?T.border:T.accent, border:"none", borderRadius:10, color:(!input.trim()||typing)?T.text3:"#fff", fontSize:13, fontWeight:500, cursor:(!input.trim()||typing)?"default":"pointer", flexShrink:0, transition:"background 0.15s", display:"flex", alignItems:"center", gap:6 }}>
+              style={{ padding:"8px 16px", background:(!input.trim()||typing)?T.border:T.accent, border:"none", borderRadius:10, color:(!input.trim()||typing)?T.text3:"#0d1117", fontSize:13, fontWeight:500, cursor:(!input.trim()||typing)?"default":"pointer", flexShrink:0, transition:"background 0.15s", display:"flex", alignItems:"center", gap:6 }}>
               {typing ? <><span className="spinner"/></> : "Send"}
             </button>
           </div>
