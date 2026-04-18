@@ -107,7 +107,7 @@ Rules:
 const SUGGESTIONS = [
   "What's the SOL price?",
   "Swap SOL to BONK",
-  "Is PEPE safe to buy?",
+  "Jupiter multiply",
   "Arsenal vs Man City prediction",
   "Show open predictions",
   "Show earn vaults",
@@ -295,10 +295,13 @@ export default function JupChat() {
   const [showMultiply, setShowMultiply]   = useState(false);
   const [multiplyFilter, setMultiplyFilter] = useState(null); // asset filter
   // Multiply open-position panel state
-  const [multiplyVault, setMultiplyVault]   = useState(null);   // selected vault object
-  const [multiplyLeverage, setMultiplyLeverage] = useState(2);  // leverage slider (2x default)
-  const [multiplyColAmt, setMultiplyColAmt]   = useState("");   // collateral amount
-  const [multiplyStatus, setMultiplyStatus]   = useState(null); // null | "signing" | "done" | "error"
+  const [multiplyVault, setMultiplyVault]       = useState(null);
+  const [multiplyLeverage, setMultiplyLeverage] = useState(2);
+  const [multiplyColAmt, setMultiplyColAmt]     = useState("");
+  const [multiplyStatus, setMultiplyStatus]     = useState(null); // null | "signing" | "done" | "error"
+  const [multiplyMode, setMultiplyMode]         = useState("open"); // "open" | "close"
+  const [multiplyCloseAmt, setMultiplyCloseAmt] = useState("");   // col to remove on close
+  const [multiplyPositionId, setMultiplyPositionId] = useState(0); // existing position ID
   const [showEarn, setShowEarn]           = useState(false);
   const [earnVaults, setEarnVaults]       = useState([]);
   const [earnLoading, setEarnLoading]     = useState(false);
@@ -726,6 +729,7 @@ export default function JupChat() {
 
       setShowEarn(false);
       push("ai", `Deposit submitted ✓\n\n**${amount} ${vault.token}** deposited into **${vault.name}**\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      generatePlayCard({ type:"EARN", title:`${vault.token} Earn Deposit`, subtitle:`Deposited into Jupiter Lend vault`, amount, token:vault.token, signature, extra:`APY: ${vault.apyDisplay}` });
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
@@ -793,11 +797,79 @@ export default function JupChat() {
       setMultiplyColAmt("");
       setShowMultiply(false);
       push("ai", `Multiply position opened ✓\n\n**${leverage}x** on **${vault.collateral}/${vault.debt}**\nCollateral: **${multiplyColAmt} ${vault.collateral}**\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})\n\n⚠ Monitor your position at [jup.ag/lend/multiply](https://jup.ag/lend/multiply) to avoid liquidation.`);
+      generatePlayCard({ type:"MULTIPLY", title:`${leverage}x ${vault.collateral}/${vault.debt}`, subtitle:`Leveraged position opened on Jupiter`, amount:multiplyColAmt, token:vault.collateral, signature, extra:`Max LTV: ${vault.ltv} · ${vault.risk} Risk` });
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
       setMultiplyStatus("error");
       push("ai", `Multiply failed: ${err?.message || "Unknown error"}. Check your balance and try again.`);
+    }
+    setMultiplyStatus(null);
+  };
+
+  // ── Multiply — close / unwind position ──────────────────────────────────────
+  const doCloseMultiply = async () => {
+    if (!multiplyVault || !multiplyCloseAmt || parseFloat(multiplyCloseAmt) <= 0) return;
+    if (!walletFull) { push("ai", "Connect your wallet first to close a Multiply position."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+
+    const vault = multiplyVault;
+    const colSym = vault.collateral.toUpperCase();
+    const colDecimals = tokenDecimalsRef.current[colSym] ?? (colSym === "SOL" ? 9 : 6);
+    // Negative colAmount signals withdrawal/unwind to the SDK
+    const colAmountRaw = Math.floor(parseFloat(multiplyCloseAmt) * Math.pow(10, colDecimals));
+    // For full close, debt repayment = colAmount * (leverage - 1); use 0 for partial unwind
+    const debtAmountRaw = Math.floor(colAmountRaw * (multiplyLeverage - 1));
+
+    setMultiplyStatus("signing");
+    push("ai", `Closing **${vault.collateral}/${vault.debt}** Multiply position — withdrawing **${multiplyCloseAmt} ${vault.collateral}**…`);
+
+    try {
+      const res = await fetch("/api/multiply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vaultId:    vault.vaultId,
+          positionId: multiplyPositionId,
+          colAmount:  (-colAmountRaw).toString(),  // negative = withdraw collateral
+          debtAmount: (-debtAmountRaw).toString(), // negative = repay debt
+          signer:     walletFull,
+          action:     "close",
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(typeof data.error === "object" ? JSON.stringify(data.error) : data.error);
+      if (!data.transaction) throw new Error("No transaction returned from Multiply API.");
+
+      const txBytes = new Uint8Array(atob(data.transaction).split("").map(c => c.charCodeAt(0)));
+      const tx = VersionedTransaction.deserialize(txBytes);
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const signedTx = await provider.signTransaction(tx);
+
+      const signedBytes = signedTx.serialize();
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: {
+          jsonrpc: "2.0", id: 1, method: "sendTransaction",
+          params: [btoa(String.fromCharCode(...signedBytes)), { encoding: "base64", skipPreflight: true }],
+        },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      setMultiplyStatus("done");
+      setMultiplyVault(null);
+      setMultiplyCloseAmt("");
+      setMultiplyMode("open");
+      setShowMultiply(false);
+      push("ai", `Position closed ✓\n\n**${multiplyCloseAmt} ${vault.collateral}** withdrawn from **${vault.collateral}/${vault.debt}**\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      generatePlayCard({ type:"CLOSE", title:`Close ${vault.collateral}/${vault.debt}`, subtitle:`Multiply position closed on Jupiter`, amount:multiplyCloseAmt, token:vault.collateral, signature, extra:`Debt repaid: ${(parseFloat(multiplyCloseAmt)*(multiplyLeverage-1)).toFixed(4)} ${vault.debt}` });
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+    } catch (err) {
+      setMultiplyStatus("error");
+      push("ai", `Close position failed: ${err?.message || "Unknown error"}. Try again.`);
     }
     setMultiplyStatus(null);
   };
@@ -873,6 +945,7 @@ export default function JupChat() {
       const contracts   = orderRes?.order?.contracts;
       setBetStatus("done");
       push("ai", `Prediction order submitted ✓\n\n**${betSide.toUpperCase()}** on _${betMarket.title}_\nAmount: **$${betAmount} USDC**${contracts ? `  ·  Contracts: **${contracts}**` : ""}\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})${orderPubkey ? `\n\nOrder account: \`${orderPubkey.slice(0,20)}…\`` : ""}`);
+      generatePlayCard({ type:"PREDICT", title:`${betSide.toUpperCase()} — ${betMarket.title.slice(0,30)}`, subtitle:`Prediction placed on Jupiter Markets`, amount:`$${betAmount}`, token:"USDC", signature, extra:contracts ? `Contracts: ${contracts}` : "" });
     } catch (err) {
       setBetStatus("error");
       const msg = err?.message || "Unknown error";
@@ -922,6 +995,7 @@ export default function JupChat() {
           const payoutUsd = (parseInt(pos.payoutUsd || 0) / 1_000_000).toFixed(2);
           const title = pos.marketMetadata?.title || pos.marketId || "market";
           push("ai", `✓ Claimed **$${payoutUsd} USDC** from _${title.slice(0, 50)}_\n[View on Solscan →](https://solscan.io/tx/${sig})`);
+          generatePlayCard({ type:"CLAIM", title:`$${payoutUsd} USDC Claimed`, subtitle:title.slice(0, 50), amount:`$${payoutUsd}`, token:"USDC", signature:sig, extra:"Prediction market payout" });
           claimed++;
         } catch (e) {
           push("ai", `Failed to claim position ${pos.pubkey?.slice(0, 12)}…: ${e?.message || "Unknown error"}`);
@@ -1648,6 +1722,7 @@ export default function JupChat() {
       const outAmt = orderData?.outAmount ? (parseInt(orderData.outAmount)/Math.pow(10,toDecimals||6)).toFixed(4) : "?";
       const feeBps = orderData?.feeBps ? ` · Fee: ${orderData.feeBps}bps` : "";
       push("ai", `Swap executed via Jupiter ✓\n\nSent **${amount} ${from}** → received **~${outAmt} ${to}**${feeBps}\n\nTransaction: \`${signature?.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      generatePlayCard({ type:"SWAP", title:`${from} → ${to}`, subtitle:`Swapped on Jupiter DEX`, amount:`${amount} ${from} → ~${outAmt}`, token:to, signature, extra:feeBps });
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
@@ -1690,8 +1765,138 @@ export default function JupChat() {
       const signature=execRes.signature||execRes.txid||orderRes.order;
       setShowTrig(false);
       push("ai",`Limit order placed ✓\n\nWill ${direction==="below"?"buy":"sell"} **${amount} ${direction==="below"?"USDC worth of "+token:token}** when price hits **$${targetPrice}**\n\nTransaction: \`${signature?.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      generatePlayCard({ type:"LIMIT", title:`${direction==="below"?"Buy":"Sell"} ${token} @ $${targetPrice}`, subtitle:`Limit order placed on Jupiter`, amount, token:direction==="below"?"USDC":token, signature, extra:`Triggers when ${token} goes ${direction} $${targetPrice}` });
     } catch (err) {
       push("ai",`Limit order failed: ${err?.message||"Unknown error"}. Please try again.`);
+    }
+  };
+
+  // ── Play Card — downloadable PNG after every transaction ────────────────────
+  const generatePlayCard = ({ type, title, subtitle, amount, token, signature, extra = "" }) => {
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width  = 800;
+      canvas.height = 440;
+      const ctx = canvas.getContext("2d");
+
+      // Background gradient
+      const grad = ctx.createLinearGradient(0, 0, 800, 440);
+      grad.addColorStop(0, "#0d1117");
+      grad.addColorStop(1, "#111820");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 800, 440);
+
+      // Accent border
+      ctx.strokeStyle = "#c7f284";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(1, 1, 798, 438);
+
+      // Inner glow border
+      ctx.strokeStyle = "rgba(199,242,132,0.15)";
+      ctx.lineWidth = 12;
+      ctx.strokeRect(6, 6, 788, 428);
+
+      // Type badge background
+      const badgeColors = {
+        SWAP:     "#c7f284", EARN:     "#38bdf8",
+        MULTIPLY: "#a78bfa", LIMIT:    "#a78bfa",
+        PREDICT:  "#f28484", CLAIM:    "#c7f284",
+        CLOSE:    "#f28484",
+      };
+      const badgeColor = badgeColors[type] || "#c7f284";
+      ctx.fillStyle = badgeColor + "22";
+      ctx.beginPath();
+      ctx.roundRect(40, 36, 140, 36, 18);
+      ctx.fill();
+      ctx.fillStyle = badgeColor;
+      ctx.font = "bold 14px 'DM Sans', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(type, 110, 59);
+
+      // ChatFi logo text (top right)
+      ctx.fillStyle = "#c7f284";
+      ctx.font = "bold 18px 'Lora', serif";
+      ctx.textAlign = "right";
+      ctx.fillText("ChatFi", 760, 59);
+      ctx.fillStyle = "#4d6a7a";
+      ctx.font = "11px 'DM Sans', sans-serif";
+      ctx.fillText("chat-fi-iota.vercel.app", 760, 76);
+
+      // Main title
+      ctx.fillStyle = "#e8f4f0";
+      ctx.font = "bold 42px 'DM Sans', sans-serif";
+      ctx.textAlign = "left";
+      // Truncate if too long
+      const titleText = title.length > 28 ? title.slice(0, 28) + "…" : title;
+      ctx.fillText(titleText, 40, 155);
+
+      // Subtitle
+      ctx.fillStyle = "#8fa8b8";
+      ctx.font = "18px 'DM Sans', sans-serif";
+      const subText = subtitle.length > 55 ? subtitle.slice(0, 55) + "…" : subtitle;
+      ctx.fillText(subText, 40, 195);
+
+      // Amount pill
+      if (amount) {
+        const amtText = `${amount} ${token || ""}`.trim();
+        ctx.fillStyle = badgeColor + "18";
+        ctx.beginPath();
+        ctx.roundRect(40, 220, Math.min(ctx.measureText(amtText).width + 40, 500), 52, 12);
+        ctx.fill();
+        ctx.fillStyle = badgeColor;
+        ctx.font = "bold 28px 'DM Sans', sans-serif";
+        ctx.fillText(amtText, 60, 255);
+      }
+
+      // Extra line (e.g. leverage, APY, etc.)
+      if (extra) {
+        ctx.fillStyle = "#4d6a7a";
+        ctx.font = "14px 'DM Sans', sans-serif";
+        ctx.fillText(extra, 40, 300);
+      }
+
+      // Divider
+      ctx.strokeStyle = "#1e2d3d";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(40, 328); ctx.lineTo(760, 328);
+      ctx.stroke();
+
+      // Signature
+      ctx.fillStyle = "#4d6a7a";
+      ctx.font = "12px 'JetBrains Mono', monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(`TX: ${signature ? signature.slice(0, 32) + "…" : "—"}`, 40, 358);
+
+      // Timestamp
+      ctx.fillStyle = "#4d6a7a";
+      ctx.font = "12px 'DM Sans', sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillText(new Date().toLocaleString(), 760, 358);
+
+      // Bottom tagline
+      ctx.fillStyle = "#1e2d3d";
+      ctx.font = "12px 'DM Sans', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Made with ChatFi · Powered by Jupiter · Not financial advice", 400, 410);
+
+      // Watermark dot
+      ctx.fillStyle = "#c7f284";
+      ctx.beginPath();
+      ctx.arc(40, 410, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#c7f284";
+      ctx.font = "bold 12px 'DM Sans', sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("⚡ on Solana", 52, 414);
+
+      // Download
+      const link = document.createElement("a");
+      link.download = `chatfi-${type.toLowerCase()}-${Date.now()}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    } catch (e) {
+      console.warn("Play card generation failed:", e);
     }
   };
 
@@ -2469,6 +2674,15 @@ export default function JupChat() {
                   </button>
                 ))}
               </div>
+              {/* Open / Close mode tabs */}
+              <div style={{ display:"flex", gap:6, background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:4, marginBottom:12 }}>
+                {[{id:"open",label:"⚡ Open Position"},{id:"close",label:"🔒 Close Position"}].map(tab => (
+                  <button key={tab.id} onClick={() => { setMultiplyMode(tab.id); setMultiplyVault(null); setMultiplyColAmt(""); setMultiplyCloseAmt(""); }}
+                    style={{ flex:1, padding:"7px 0", border:"none", borderRadius:8, fontSize:12, fontWeight:multiplyMode===tab.id?600:400, background:multiplyMode===tab.id?T.surface:"transparent", color:multiplyMode===tab.id?T.text1:T.text3, cursor:"pointer", transition:"all 0.15s" }}>
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
               {/* Vault cards */}
               <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                 {MULTIPLY_VAULTS.filter(v => {
@@ -2493,27 +2707,24 @@ export default function JupChat() {
                         <span style={{ fontSize:11, color:T.text3 }}>Max LTV: {v.ltv}</span>
                         <button
                           onClick={() => {
-                            if (isSelected) { setMultiplyVault(null); setMultiplyColAmt(""); }
-                            else { setMultiplyVault(v); setMultiplyLeverage(Math.min(3, maxLevNum)); setMultiplyColAmt(""); }
+                            if (isSelected) { setMultiplyVault(null); setMultiplyColAmt(""); setMultiplyCloseAmt(""); }
+                            else { setMultiplyVault(v); setMultiplyLeverage(Math.min(3, maxLevNum)); setMultiplyColAmt(""); setMultiplyCloseAmt(""); setMultiplyPositionId(0); }
                           }}
                           className="hov-btn"
                           style={{ padding:"5px 14px", background: isSelected ? T.redBg : T.accentBg, border:`1px solid ${isSelected ? T.redBd : T.accent+"66"}`, borderRadius:6, color: isSelected ? T.red : T.accent, fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                          {isSelected ? "Cancel" : "Open Position"}
+                          {isSelected ? "Cancel" : multiplyMode === "close" ? "Select Vault" : "Open Position"}
                         </button>
                       </div>
 
-                      {/* Inline open-position form */}
-                      {isSelected && (
+                      {/* ── Open position form ── */}
+                      {isSelected && multiplyMode === "open" && (
                         <div style={{ marginTop:12, padding:"12px 14px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10 }}>
-                          {/* Leverage slider */}
                           <div style={{ marginBottom:12 }}>
                             <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
                               <span style={{ fontSize:12, color:T.text2 }}>Leverage</span>
                               <span style={{ fontSize:14, fontWeight:700, color:T.purple }}>{multiplyLeverage}x</span>
                             </div>
-                            <input
-                              type="range" min={2} max={maxLevNum} step={0.5}
-                              value={multiplyLeverage}
+                            <input type="range" min={2} max={maxLevNum} step={0.5} value={multiplyLeverage}
                               onChange={e => setMultiplyLeverage(parseFloat(e.target.value))}
                               style={{ width:"100%", accentColor:T.purple }}
                             />
@@ -2521,8 +2732,6 @@ export default function JupChat() {
                               <span>2x (safe)</span><span>{maxLevNum}x (max)</span>
                             </div>
                           </div>
-
-                          {/* Collateral amount */}
                           <div style={{ marginBottom:10 }}>
                             <div style={{ fontSize:12, color:T.text2, marginBottom:4 }}>
                               Collateral ({v.collateral})
@@ -2536,15 +2745,11 @@ export default function JupChat() {
                                 </span>
                               )}
                             </div>
-                            <input
-                              type="number" placeholder={`Amount (${v.collateral})`}
-                              value={multiplyColAmt}
+                            <input type="number" placeholder={`Amount (${v.collateral})`} value={multiplyColAmt}
                               onChange={e => setMultiplyColAmt(e.target.value)}
                               style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
                             />
                           </div>
-
-                          {/* Position summary */}
                           {parseFloat(multiplyColAmt) > 0 && (
                             <div style={{ fontSize:11, color:T.text2, background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"8px 12px", marginBottom:10, lineHeight:1.7 }}>
                               <div>Collateral: <strong>{multiplyColAmt} {v.collateral}</strong></div>
@@ -2552,15 +2757,59 @@ export default function JupChat() {
                               <div>Total exposure: <strong>{(parseFloat(multiplyColAmt) * multiplyLeverage).toFixed(4)} {v.collateral}</strong></div>
                             </div>
                           )}
-
-                          <button
-                            onClick={doMultiply}
+                          <button onClick={doMultiply}
                             disabled={!multiplyColAmt || parseFloat(multiplyColAmt) <= 0 || multiplyStatus === "signing"}
                             className="hov-btn"
                             style={{ width:"100%", padding:"10px", background:T.purple, border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8, opacity:(!multiplyColAmt || parseFloat(multiplyColAmt) <= 0) ? 0.5 : 1 }}>
-                            {multiplyStatus === "signing"
-                              ? <><span className="spinner"/> Signing…</>
-                              : `Open ${multiplyLeverage}x Position`}
+                            {multiplyStatus === "signing" ? <><span className="spinner"/> Signing…</> : `Open ${multiplyLeverage}x Position`}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* ── Close position form ── */}
+                      {isSelected && multiplyMode === "close" && (
+                        <div style={{ marginTop:12, padding:"12px 14px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10 }}>
+                          <div style={{ fontSize:12, color:T.text2, marginBottom:10, padding:"8px 12px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8 }}>
+                            ⚠ Closing unwinds your leveraged loop. You'll repay the borrowed {v.debt} and receive back your {v.collateral}.
+                          </div>
+                          {/* Position ID input */}
+                          <div style={{ marginBottom:10 }}>
+                            <div style={{ fontSize:12, color:T.text2, marginBottom:4 }}>Position ID <span style={{ color:T.text3 }}>(find in your wallet or Solscan)</span></div>
+                            <input type="number" placeholder="0" value={multiplyPositionId}
+                              onChange={e => setMultiplyPositionId(parseInt(e.target.value) || 0)}
+                              style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:8 }}
+                            />
+                          </div>
+                          {/* Leverage at close */}
+                          <div style={{ marginBottom:10 }}>
+                            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
+                              <span style={{ fontSize:12, color:T.text2 }}>Current leverage</span>
+                              <span style={{ fontSize:14, fontWeight:700, color:T.red }}>{multiplyLeverage}x</span>
+                            </div>
+                            <input type="range" min={2} max={maxLevNum} step={0.5} value={multiplyLeverage}
+                              onChange={e => setMultiplyLeverage(parseFloat(e.target.value))}
+                              style={{ width:"100%", accentColor:T.red }}
+                            />
+                          </div>
+                          {/* Collateral to withdraw */}
+                          <div style={{ marginBottom:10 }}>
+                            <div style={{ fontSize:12, color:T.text2, marginBottom:4 }}>Collateral to withdraw ({v.collateral})</div>
+                            <input type="number" placeholder={`Amount (${v.collateral})`} value={multiplyCloseAmt}
+                              onChange={e => setMultiplyCloseAmt(e.target.value)}
+                              style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                            />
+                          </div>
+                          {parseFloat(multiplyCloseAmt) > 0 && (
+                            <div style={{ fontSize:11, color:T.text2, background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"8px 12px", marginBottom:10, lineHeight:1.7 }}>
+                              <div>Withdrawing: <strong>{multiplyCloseAmt} {v.collateral}</strong></div>
+                              <div>Repaying: <strong>{(parseFloat(multiplyCloseAmt) * (multiplyLeverage - 1)).toFixed(4)} {v.debt}</strong></div>
+                            </div>
+                          )}
+                          <button onClick={doCloseMultiply}
+                            disabled={!multiplyCloseAmt || parseFloat(multiplyCloseAmt) <= 0 || multiplyStatus === "signing"}
+                            className="hov-btn"
+                            style={{ width:"100%", padding:"10px", background:T.red, border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8, opacity:(!multiplyCloseAmt || parseFloat(multiplyCloseAmt) <= 0) ? 0.5 : 1 }}>
+                            {multiplyStatus === "signing" ? <><span className="spinner"/> Signing…</> : `Close Position`}
                           </button>
                         </div>
                       )}
