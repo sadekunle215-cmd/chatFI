@@ -1915,7 +1915,7 @@ export default function JupChat() {
                     const closeTs  = m.closeTime || m.metadata?.closeTime || m.endTime;
                     const cat      = m.category || m.metadata?.category || predCategory || "";
                     // Markets nested in m.markets[] or m.market{}; prefer open markets
-                    const markets  = m.markets || (m.market ? [m.market] : []);
+                    const markets  = Array.isArray(m.markets) ? m.markets : (m.market ? [m.market] : []);
                     // Per Jupiter docs: Market has { marketId, status: 'open'|'closed'|'cancelled', pricing }
                     // Prefer an open market; fallback to first market
                     const openMkt  = markets.find(mk => mk.status === "open") || markets[0];
@@ -1923,12 +1923,12 @@ export default function JupChat() {
                     // NEVER use the event-level id/eventId (UUID) — that's wrong for orders API
                     const marketId = openMkt?.marketId || openMkt?.id || openMkt?.pubkey || null;
                     // Pricing: buyYesPriceUsd / buyNoPriceUsd in native units (1_000_000 = $1.00)
-                    const pricing  = m.pricing || firstMkt?.pricing || {};
+                    const pricing  = m.pricing || openMkt?.pricing || {};
                     const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
                     const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
                     const yesPrice = rawYes ? (rawYes / 1_000_000).toFixed(2) : null;
                     const noPrice  = rawNo  ? (rawNo  / 1_000_000).toFixed(2) : null;
-                    const vol      = m.volume || m.totalVolume || firstMkt?.pricing?.volume;
+                    const vol      = m.volumeUsd || m.volume || m.totalVolume || openMkt?.pricing?.volume;
                     return (
                       <div key={marketId||i}
                         style={{ padding:"12px 14px", border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8, background:T.bg }}>
