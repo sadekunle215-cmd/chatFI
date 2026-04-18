@@ -66,8 +66,8 @@ Available actions:
 - "FETCH_PRICE"      → actionData: { "tokens": ["SOL","JUP"] }
 - "FETCH_TOKEN_INFO" → actionData: { "symbol": "BONK" }
 - "FETCH_PORTFOLIO"  → actionData: { "wallet": "address_or_connected" } — fetches wallet balances + DeFi positions + prediction positions + earn positions + pending orders
-- "SHOW_SWAP"        → actionData: { "from": "SOL", "to": "PEPE", "reason": "brief why" }
-- "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "hint": "brief why" }
+- "SHOW_SWAP"        → actionData: { "from": "SOL", "to": "PEPE", "amount": "10", "amountUSD": "10", "reason": "brief why" } — extract amount from user message if mentioned (e.g. "swap 10 SOL" → amount:"10"; "swap $10 of SOL" → amountUSD:"10"). Leave null if not mentioned.
+- "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "targetPrice": "150", "amount": "5", "hint": "brief why" } — extract targetPrice and amount from user message if mentioned.
 - "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players" }
 - "FETCH_PREDICTIONS"→ actionData: { "sport": "sports", "query": null } — sport categories (exact): sports, crypto, politics, esports, culture, economics, tech. For specific leagues/competitions like "EPL", "Champions League", "NBA playoffs", set query to the search string instead of sport. Use null sport for all.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null }
@@ -863,6 +863,15 @@ export default function JupChat() {
 
   // ── Solana balances ─────────────────────────────────────────────────────────
   const fetchSolanaBalances = async (pubkey) => {
+    // Known mint → symbol map so USDC/USDT/JupUSD always resolve even if not in cache
+    const KNOWN_MINTS = {
+      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+      "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+      "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
+      "So11111111111111111111111111111111111111112":   "SOL",
+      "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
+      "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+    };
     try {
       const solJson = await jupFetch(SOLANA_RPC, { method:"POST", body:{ jsonrpc:"2.0", id:1, method:"getBalance", params:[pubkey,{ commitment:"confirmed" }] } });
       const sol = (solJson.result?.value || 0) / 1e9;
@@ -870,7 +879,9 @@ export default function JupChat() {
       const balances = { SOL: sol };
       for (const acc of (splJson.result?.value || [])) {
         const info = acc.account.data.parsed.info;
-        const sym  = Object.entries(tokenCacheRef.current).find(([, v]) => v === info.mint)?.[0];
+        // Try cache first, then known mints map
+        const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === info.mint)?.[0]
+                 || KNOWN_MINTS[info.mint];
         if (sym && info.tokenAmount.uiAmount > 0) balances[sym] = info.tokenAmount.uiAmount;
       }
       return balances;
@@ -1736,10 +1747,21 @@ export default function JupChat() {
             const r = await resolveToken(toSym);
             if (r) { toMint = r.mint; tokenCacheRef.current[toSym]=r.mint; tokenDecimalsRef.current[toSym]=r.decimals; }
           }
+          // Autofill amount if AI extracted it from user message
+          let autoAmount = "";
+          if (actionData?.amount && parseFloat(actionData.amount) > 0) {
+            autoAmount = actionData.amount;
+          } else if (actionData?.amountUSD && parseFloat(actionData.amountUSD) > 0 && prices[fromSym] > 0) {
+            // Convert USD → token units
+            autoAmount = (parseFloat(actionData.amountUSD) / prices[fromSym]).toFixed(6).replace(/\.?0+$/, "");
+          } else if (actionData?.amountUSD && parseFloat(actionData.amountUSD) > 0) {
+            // No price yet — store raw USD value as amount (user can correct)
+            autoAmount = actionData.amountUSD;
+          }
           setSwapCfg({
             from: fromSym, fromMint: fromMint||null, fromDecimals: tokenDecimalsRef.current[fromSym]||9,
             to:   toSym,   toMint:   toMint||null,   toDecimals:   tokenDecimalsRef.current[toSym]||6,
-            amount: "",
+            amount: autoAmount,
           });
           setShowSwap(true);
         };
@@ -1755,7 +1777,13 @@ export default function JupChat() {
         if (!walletFull) {
           push("ai", text + "\n\nConnect your wallet first to set a limit order.");
         } else {
-          setTrigCfg(c => ({ ...c, token:actionData?.token||"SOL", direction:actionData?.direction||"below" }));
+          setTrigCfg(c => ({
+            ...c,
+            token:       actionData?.token       || "SOL",
+            direction:   actionData?.direction   || "below",
+            targetPrice: actionData?.targetPrice || c.targetPrice || "",
+            amount:      actionData?.amount      || c.amount      || "",
+          }));
           setShowTrig(true);
           push("ai", text);
         }
