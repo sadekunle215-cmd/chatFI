@@ -1038,12 +1038,16 @@ export default function JupChat() {
       setWcUri(uri);
       setWcStatus("waiting");
 
-      // On mobile: open wallet app directly via deep link with the WC URI embedded.
-      // iOS Safari blocks window.open() after async/await, so we use window.location.href.
-      // We try the custom scheme first (opens app if installed), universal link as fallback.
+      // On mobile: open wallet app in a new tab/window so this page stays alive
+      // to receive the WalletConnect approval callback.
       if (isMobile && preferredWallet) {
         const deepLink = getMobileWcDeepLink(preferredWallet, uri);
-        setTimeout(() => { window.location.href = deepLink; }, 200);
+        const universalLink = getMobileWcUniversalLink(preferredWallet, uri);
+        // Try deep link first, fall back to universal link after 1.5s if app not installed
+        const w = window.open(deepLink, "_blank");
+        setTimeout(() => {
+          if (!w || w.closed) window.open(universalLink, "_blank");
+        }, 1500);
       }
 
       // Await wallet approval — the WC relay keeps the session open while user is in wallet app
@@ -1060,10 +1064,10 @@ export default function JupChat() {
         signTransaction: async (tx) => {
           const raw = tx.serialize();
           const base64 = btoa(String.fromCharCode(...raw));
-          // For sign requests on mobile, redirect back to wallet app
+          // For sign requests on mobile, open wallet app without leaving page
           if (isMobile && preferredWallet) {
             const signDeepLink = getMobileWcDeepLink(preferredWallet, uri);
-            setTimeout(() => { window.location.href = signDeepLink; }, 100);
+            window.open(signDeepLink, "_blank");
           }
           const result = await client.request({
             topic: session.topic,
