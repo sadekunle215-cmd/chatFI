@@ -66,11 +66,16 @@ Available actions:
 - "FETCH_PRICE"      → actionData: { "tokens": ["SOL","JUP"] }
 - "FETCH_TOKEN_INFO" → actionData: { "symbol": "BONK" }
 - "FETCH_PORTFOLIO"  → actionData: { "wallet": "address_or_connected" } — fetches wallet balances + DeFi positions + prediction positions + earn positions + pending orders
-- "SHOW_SWAP"        → actionData: { "from": "SOL", "to": "PEPE", "amount": "10", "amountUSD": "10", "reason": "brief why" } — extract amount from user message if mentioned (e.g. "swap 10 SOL" → amount:"10"; "swap $10 of SOL" → amountUSD:"10"). Leave null if not mentioned.
-- "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "targetPrice": "150", "amount": "5", "hint": "brief why" } — extract targetPrice and amount from user message if mentioned.
-- "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players" }
+- "SHOW_SWAP"        → actionData: { "from": "SOL", "to": "PEPE", "amount": "10", "amountUSD": null, "portion": null, "reason": "brief why" }
+  Amount rules (pick ONE, others null):
+  • portion: "all" | "half" | "quarter" | "75%" | "10%" — when user says "all my X", "half my X", "25% of X", etc.
+  • amount: token units — when user says "swap 10 SOL"
+  • amountUSD: dollar value — when user says "swap $10 of SOL"
+  Examples: "swap all my USDC→SOL" → portion:"all", from:"USDC" | "swap half my SOL→BONK" → portion:"half" | "swap 25% of my JUP→SOL" → portion:"25%"
+- "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "targetPrice": "150", "amount": "5", "portion": null, "hint": "brief why" } — extract targetPrice, amount, or portion ("all","half","quarter","25%") from user message.
+- "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players", "searchQuery": "Arsenal Man City" } — ALWAYS set searchQuery to the match/teams so the UI can fetch the live market. ALSO trigger FETCH_PREDICTIONS with the same query so the real market loads beside the analysis.
 - "FETCH_PREDICTIONS"→ actionData: { "sport": "sports", "query": null } — sport categories (exact): sports, crypto, politics, esports, culture, economics, tech. For specific leagues/competitions like "EPL", "Champions League", "NBA playoffs", set query to the search string instead of sport. Use null sport for all.
-- "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null }
+- "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — if user says "put 10% of my USDC in earn" set vault:"USDC", portion:"10%". portion: "all"|"half"|"quarter"|"N%"
 - "CLAIM_PAYOUTS"    → actionData: {} — triggers fetch of claimable prediction positions
 
 Rules:
@@ -79,7 +84,7 @@ Rules:
 - "is X safe?" / "research X" / token info → FETCH_TOKEN_INFO — always attempt, UI searches Jupiter live
 - "my portfolio" / "my wallet" / "my positions" / "my orders" / "my bets" → FETCH_PORTFOLIO
 - "claim" / "claim winnings" / "claim payout" → CLAIM_PAYOUTS
-- sports + predict/bet / "EPL" / "Champions League" / specific match → SHOW_PREDICTION with thorough analysis, AND suggest FETCH_PREDICTIONS with query set
+- sports + predict/bet / "EPL" / "Champions League" / specific match → ALWAYS do BOTH: first SHOW_PREDICTION (with searchQuery set), then immediately also do FETCH_PREDICTIONS (with query set to team names). The UI will show analysis + live market together.
 - "predictions" / "show markets" / "what can I bet on" → FETCH_PREDICTIONS
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
 - "limit order" / "DCA" / "buy when price hits" → SHOW_TRIGGER
@@ -714,7 +719,8 @@ export default function JupChat() {
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
 
-    const depositAmount = Math.floor(parseFloat(betAmount) * 1_000_000).toString();
+    // depositAmount as integer (1 USDC = 1_000_000 lamports)
+    const depositAmount = Math.floor(parseFloat(betAmount) * 1_000_000);
     const isYes = betSide === "yes";
 
     if (!betMarket?.marketId) {
@@ -723,37 +729,38 @@ export default function JupChat() {
       return;
     }
 
-    // Pick deposit mint: use whichever token the user has enough of
-    const usdcBal   = portfolio.USDC   ?? 0;
-    const jupusdBal = portfolio.JUPUSD ?? 0;
-    const amt       = parseFloat(betAmount);
-    let chosenMint  = betMint === "JUPUSD" ? JUPUSD_MINT : USDC_MINT;
-    if (betMint === "USDC"   && usdcBal   < amt && jupusdBal >= amt) chosenMint = JUPUSD_MINT;
-    if (betMint === "JUPUSD" && jupusdBal < amt && usdcBal   >= amt) chosenMint = USDC_MINT;
-    const mintLabel = chosenMint === JUPUSD_MINT ? "JupUSD" : "USDC";
-
     setBetStatus("signing");
     setShowBet(false);
-    push("ai", `Placing **${betSide.toUpperCase()}** bet of **$${betAmount} ${mintLabel}** on: _${betMarket.title}_…`);
+    push("ai", `Placing **${betSide.toUpperCase()}** bet of **$${betAmount} USDC** on: _${betMarket.title}_…`);
 
+    // Try USDC first, then JupUSD as fallback
+    const tryMints = [USDC_MINT, JUPUSD_MINT];
     const placeOrder = (mint) => jupFetch(`${JUP_PRED_API}/orders`, {
       method: "POST",
-      body: { ownerPubkey:walletFull, marketId:betMarket.marketId, isYes, isBuy:true, depositAmount, depositMint:mint },
+      body: {
+        ownerPubkey:  walletFull,
+        marketId:     betMarket.marketId,
+        isYes,
+        isBuy:        true,
+        depositAmount,
+        depositMint:  mint,
+      },
     });
 
     try {
-      let orderRes = await placeOrder(chosenMint);
-      // Auto-retry with the other mint if this one fails
-      if (!orderRes.transaction && !orderRes.error) {
-        const altMint = chosenMint === USDC_MINT ? JUPUSD_MINT : USDC_MINT;
-        const retry   = await placeOrder(altMint);
-        if (retry.transaction) { orderRes = retry; chosenMint = altMint; }
+      let orderRes = null;
+      let usedMint = USDC_MINT;
+      for (const mint of tryMints) {
+        const res = await placeOrder(mint);
+        // Success = has transaction field
+        if (res?.transaction) { orderRes = res; usedMint = mint; break; }
+        // Store last response for error reporting
+        orderRes = res;
       }
-      if (orderRes.error) throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
-      if (!orderRes.transaction) {
-        const hint = orderRes.message || orderRes.msg || orderRes.code
-          || (Object.keys(orderRes).length ? JSON.stringify(orderRes).slice(0, 160) : "empty response");
-        throw new Error(hint);
+      if (!orderRes?.transaction) {
+        // Show the full raw API response so we know exactly what Jupiter said
+        const raw = JSON.stringify(orderRes).slice(0, 300);
+        throw new Error(`Jupiter API response: ${raw}`);
       }
 
       const binaryStr = atob(orderRes.transaction);
@@ -779,15 +786,8 @@ export default function JupChat() {
     } catch (err) {
       setBetStatus("error");
       const msg = err?.message || "Unknown error";
-      const isBalance = /balance|insufficient|fund|not enough/i.test(msg);
-      const isMarket  = /market.*closed|not open|no.*market/i.test(msg);
-      if (isBalance) {
-        push("ai", `Prediction bet failed: Not enough balance. You need at least **$${betAmount} USDC or JupUSD**.\n\n[Swap SOL → USDC on Jupiter →](https://jup.ag/swap/SOL-USDC)`);
-      } else if (isMarket) {
-        push("ai", "This market is no longer open for trading. Try a different market from the list.");
-      } else {
-        push("ai", `Prediction bet failed: ${msg}\n\nMake sure you have **$${betAmount} USDC or JupUSD** in your wallet. [Get USDC →](https://jup.ag/swap/SOL-USDC)`);
-      }
+      // Show the exact error so user (and dev) can see what Jupiter said
+      push("ai", `Prediction bet failed. Details: ${msg}`);
     }
     setBetStatus(null);
   };
@@ -1734,11 +1734,25 @@ export default function JupChat() {
       } else if (action === "SHOW_SWAP") {
         const fromSym = (actionData?.from || "SOL").toUpperCase();
         const toSym   = (actionData?.to   || "JUP").toUpperCase();
+
+        // Resolve a portion string ("all","half","quarter","25%","10%") → token amount using portfolio balance
+        const resolvePortion = (portion, sym) => {
+          const bal = portfolio[sym] ?? 0;
+          if (!bal || bal <= 0) return "";
+          const p = (portion || "").toLowerCase().trim();
+          if (p === "all")     return bal.toString();
+          if (p === "half")    return (bal / 2).toFixed(6).replace(/\.?0+$/, "");
+          if (p === "quarter") return (bal / 4).toFixed(6).replace(/\.?0+$/, "");
+          // percentage like "25%" or "10%"
+          const pctMatch = p.match(/^(\d+(?:\.\d+)?)%$/);
+          if (pctMatch) return (bal * parseFloat(pctMatch[1]) / 100).toFixed(6).replace(/\.?0+$/, "");
+          return "";
+        };
+
         // Resolve mints — use cache first, fallback to search
         const resolveAndSet = async () => {
           let fromMint = tokenCacheRef.current[fromSym] || TOKEN_MINTS[fromSym];
           let toMint   = tokenCacheRef.current[toSym]   || TOKEN_MINTS[toSym];
-          // If not known, try to resolve via search
           if (!fromMint) {
             const r = await resolveToken(fromSym);
             if (r) { fromMint = r.mint; tokenCacheRef.current[fromSym]=r.mint; tokenDecimalsRef.current[fromSym]=r.decimals; }
@@ -1747,15 +1761,15 @@ export default function JupChat() {
             const r = await resolveToken(toSym);
             if (r) { toMint = r.mint; tokenCacheRef.current[toSym]=r.mint; tokenDecimalsRef.current[toSym]=r.decimals; }
           }
-          // Autofill amount if AI extracted it from user message
+          // Autofill amount — priority: portion > amount > amountUSD
           let autoAmount = "";
-          if (actionData?.amount && parseFloat(actionData.amount) > 0) {
+          if (actionData?.portion) {
+            autoAmount = resolvePortion(actionData.portion, fromSym);
+          } else if (actionData?.amount && parseFloat(actionData.amount) > 0) {
             autoAmount = actionData.amount;
           } else if (actionData?.amountUSD && parseFloat(actionData.amountUSD) > 0 && prices[fromSym] > 0) {
-            // Convert USD → token units
             autoAmount = (parseFloat(actionData.amountUSD) / prices[fromSym]).toFixed(6).replace(/\.?0+$/, "");
           } else if (actionData?.amountUSD && parseFloat(actionData.amountUSD) > 0) {
-            // No price yet — store raw USD value as amount (user can correct)
             autoAmount = actionData.amountUSD;
           }
           setSwapCfg({
@@ -1777,12 +1791,24 @@ export default function JupChat() {
         if (!walletFull) {
           push("ai", text + "\n\nConnect your wallet first to set a limit order.");
         } else {
+          // Resolve portion for trigger amount too
+          const trigSym = (actionData?.token || "SOL").toUpperCase();
+          const trigBal = portfolio[trigSym] ?? 0;
+          const trigPortion = actionData?.portion ? (() => {
+            const p = actionData.portion.toLowerCase().trim();
+            if (p === "all")     return trigBal.toString();
+            if (p === "half")    return (trigBal / 2).toFixed(6).replace(/\.?0+$/, "");
+            if (p === "quarter") return (trigBal / 4).toFixed(6).replace(/\.?0+$/, "");
+            const m = p.match(/^(\d+(?:\.\d+)?)%$/);
+            if (m) return (trigBal * parseFloat(m[1]) / 100).toFixed(6).replace(/\.?0+$/, "");
+            return "";
+          })() : "";
           setTrigCfg(c => ({
             ...c,
-            token:       actionData?.token       || "SOL",
+            token:       trigSym,
             direction:   actionData?.direction   || "below",
             targetPrice: actionData?.targetPrice || c.targetPrice || "",
-            amount:      actionData?.amount      || c.amount      || "",
+            amount:      trigPortion || actionData?.amount || c.amount || "",
           }));
           setShowTrig(true);
           push("ai", text);
@@ -1793,6 +1819,18 @@ export default function JupChat() {
         setPick(null);
         setShowPred(true);
         push("ai", text);
+        // Auto-fetch the live market for this match so the bet panel appears too
+        const matchQuery = actionData?.searchQuery
+          || [actionData?.teamA, actionData?.teamB].filter(Boolean).join(" ")
+          || actionData?.league || null;
+        if (matchQuery) {
+          const result = await fetchPredictionMarkets(null, matchQuery);
+          if (result.markets?.length > 0) {
+            setPredMarkets(result.markets);
+            setPredCategory(matchQuery);
+            setShowPredList(true);
+          }
+        }
 
       } else if (action === "FETCH_PREDICTIONS") {
         push("ai", text + "\n\nFetching prediction markets…");
@@ -1807,6 +1845,36 @@ export default function JupChat() {
         push("ai", text + "\n\nFetching earn vaults…");
         await fetchEarnVaults();
         setShowEarn(true);
+        // If AI specified a vault + amount/portion, auto-open deposit panel
+        if (actionData?.vault) {
+          const vaultSym = actionData.vault.toUpperCase();
+          // Wait briefly for earnVaults state to populate, then find and open vault
+          setTimeout(() => {
+            setEarnVaults(vaults => {
+              const match = vaults.find(v => v.token?.toUpperCase() === vaultSym || v.name?.toUpperCase().includes(vaultSym));
+              if (match) {
+                // Resolve portion or amount
+                let autoAmt = "";
+                if (actionData?.portion) {
+                  const bal = portfolio[vaultSym] ?? 0;
+                  const p = actionData.portion.toLowerCase().trim();
+                  if (p === "all")     autoAmt = bal.toString();
+                  else if (p === "half")    autoAmt = (bal / 2).toFixed(6).replace(/\.?0+$/, "");
+                  else if (p === "quarter") autoAmt = (bal / 4).toFixed(6).replace(/\.?0+$/, "");
+                  else {
+                    const m = p.match(/^(\d+(?:\.\d+)?)%$/);
+                    if (m) autoAmt = (bal * parseFloat(m[1]) / 100).toFixed(6).replace(/\.?0+$/, "");
+                  }
+                } else if (actionData?.amount && parseFloat(actionData.amount) > 0) {
+                  autoAmt = actionData.amount;
+                }
+                setEarnDeposit({ vault: match, amount: autoAmt });
+                setShowEarnDeposit(true);
+              }
+              return vaults;
+            });
+          }, 800);
+        }
 
       } else if (action === "CLAIM_PAYOUTS") {
         if (!walletFull) { push("ai", text + "\n\nConnect your wallet first to check for claimable payouts."); }
@@ -2284,6 +2352,21 @@ export default function JupChat() {
                 <span style={{ fontSize:16, fontWeight:700, color:T.green }}>{earnDeposit.vault.apyDisplay} APY</span>
                 {earnDeposit.vault.tvl > 0 && <span style={{ fontSize:12, color:T.text3 }}>· TVL ${Number(earnDeposit.vault.tvl).toLocaleString()}</span>}
               </div>
+              {/* Quick % fill buttons */}
+              {(() => {
+                const tok = earnDeposit.vault?.token?.toUpperCase() || "";
+                const bal = portfolio[tok] ?? 0;
+                return bal > 0 ? (
+                  <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                    {[["25%", 0.25], ["50%", 0.5], ["75%", 0.75], ["All", 1]].map(([label, frac]) => (
+                      <button key={label} onClick={() => setEarnDeposit(d => ({ ...d, amount: (bal * frac).toFixed(6).replace(/\.?0+$/, "") }))}
+                        style={{ flex:1, padding:"5px 0", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:11, fontWeight:600, cursor:"pointer" }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null;
+              })()}
               <input type="number" placeholder={`Amount (${earnDeposit.vault.token || "SOL"})`} value={earnDeposit.amount}
                 onChange={e => setEarnDeposit(d=>({...d,amount:e.target.value}))}
                 style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:12 }}
