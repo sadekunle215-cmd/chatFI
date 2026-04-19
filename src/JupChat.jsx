@@ -352,6 +352,11 @@ export default function JupChat() {
     if (!vp) { vp = document.createElement("meta"); vp.name = "viewport"; document.head.appendChild(vp); }
     vp.content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
 
+    // Fetch public API key once so browser can call Jupiter prediction directly
+    fetch("/api/config").then(r => r.ok ? r.json() : {}).then(d => {
+      if (d && d.jupApiKey) window.__JUP_API_KEY__ = d.jupApiKey;
+    }).catch(() => {});
+
     const link = document.createElement("link");
     link.rel  = "stylesheet";
     link.href = "https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap";
@@ -758,17 +763,26 @@ export default function JupChat() {
 
     // Try USDC first, then JupUSD as fallback
     const tryMints = [USDC_MINT, JUPUSD_MINT];
-    const placeOrder = (mint) => jupFetch(`${JUP_PRED_API}/orders`, {
-      method: "POST",
-      body: {
-        ownerPubkey:  walletFull,
-        marketId:     betMarket.marketId,
-        isYes,
-        isBuy:        true,
-        depositAmount,
-        depositMint:  mint,
-      },
-    });
+    // Call prediction orders API DIRECTLY from browser (not via proxy)
+    // so Jupiter sees the user's real IP — proxy causes geo-blocking.
+    const placeOrder = async (mint) => {
+      const res = await fetch(`${JUP_PRED_API}/orders`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(window.__JUP_API_KEY__ ? { "x-api-key": window.__JUP_API_KEY__ } : {}),
+        },
+        body: JSON.stringify({
+          ownerPubkey:  walletFull,
+          marketId:     betMarket.marketId,
+          isYes,
+          isBuy:        true,
+          depositAmount,
+          depositMint:  mint,
+        }),
+      });
+      return res.json();
+    };
 
     try {
       let orderRes = null;
@@ -919,10 +933,12 @@ Transaction: \`${signature.slice(0,20)}…\`
       let claimed = 0;
       for (const pos of claimable) {
         try {
-          const claimRes = await jupFetch(`${JUP_PRED_API}/positions/${pos.pubkey}/claim`, {
+          const claimRaw = await fetch(`${JUP_PRED_API}/positions/${pos.pubkey}/claim`, {
             method: "POST",
-            body: { ownerPubkey: walletFull },
+            headers: { "Content-Type": "application/json", ...(window.__JUP_API_KEY__ ? { "x-api-key": window.__JUP_API_KEY__ } : {}) },
+            body: JSON.stringify({ ownerPubkey: walletFull }),
           });
+          const claimRes = await claimRaw.json();
           if (!claimRes.transaction) throw new Error("No transaction in claim response.");
 
           const bytes = new Uint8Array(atob(claimRes.transaction).split("").map(c => c.charCodeAt(0)));
