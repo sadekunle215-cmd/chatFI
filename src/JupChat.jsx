@@ -828,7 +828,23 @@ export default function JupChat() {
         // The fix is in /api/jupiter.js — forward the user's IP headers to Jupiter.
         push("ai", `⚠️ The prediction order was blocked by Jupiter's API with a region error. This is caused by the **server proxy** not forwarding your real IP to Jupiter.\n\nFix in your \`/api/jupiter.js\`: add these headers when calling Jupiter:\n\`x-forwarded-for: <user IP>\`\n\`cf-ipcountry: <country>\`\n\nThis passes your real location to Jupiter so it doesn't geo-block the request.`);
       } else {
-        push("ai", `Prediction bet failed. Details: ${msg}`);
+        // Parse Jupiter API error codes into human-friendly messages
+      let friendly = msg;
+      try {
+        const parsed = JSON.parse(msg.replace("Jupiter API response: ", ""));
+        const code = parsed.code || parsed.type || "";
+        const detail = parsed.message || "";
+        if (code === "INSUFFICIENT_FUNDS" || detail.toLowerCase().includes("insufficient")) {
+          friendly = `Insufficient balance. You need at least **$${betAmount} USDC or JupUSD** in your wallet.\n\n[Get USDC on Jupiter →](https://jup.ag/swap/SOL-USDC)`;
+        } else if (code === "MARKET_CLOSED" || detail.toLowerCase().includes("closed")) {
+          friendly = "This market is no longer open for trading. Try a different market.";
+        } else if (code === "MIN_AMOUNT") {
+          friendly = "Minimum bet amount not met. Try increasing your bet amount.";
+        } else if (detail) {
+          friendly = detail;
+        }
+      } catch {}
+      push("ai", `Prediction bet failed: ${friendly}`);
       }
     }
     setBetStatus(null);
@@ -850,8 +866,13 @@ export default function JupChat() {
     // For simplicity use same decimals — server SDK handles exact math
     const debtRaw = Math.floor(colRaw * (parseFloat(leverage) - 1));
 
-    // For a new position positionId should be 0 (SDK creates new NFT position)
     const positionId = 0;
+    // Pre-flight: Multiply needs ~0.01+ SOL for gas fees + Position NFT rent
+    const solBal = portfolio.SOL ?? 0;
+    if (solBal < 0.01) {
+      push("ai", `Not enough SOL for fees. Multiply needs at least **0.01 SOL** for gas and NFT mint.\nYou have: **${solBal.toFixed(6)} SOL**.\n\n[Get SOL →](https://jup.ag/swap/USDC-SOL)`);
+      return;
+    }
     setMultiplyStatus("signing");
     setShowMultiplyForm(false);
     push("ai", `Opening **${leverage}x ${vault.collateral}/${vault.debt}** Multiply position with **${colAmount} ${vault.collateral}**…
@@ -2241,21 +2262,31 @@ Transaction: \`${signature.slice(0,20)}…\`
                     const title    = m.title || m.metadata?.title || m.question || m.name || "Prediction Market";
                     const closeTs  = m.closeTime || m.metadata?.closeTime || m.endTime;
                     const cat      = m.category || m.metadata?.category || predCategory || "";
-                    // Markets nested in m.markets[] or m.market{}; prefer open markets
                     const markets  = Array.isArray(m.markets) ? m.markets : (m.market ? [m.market] : []);
-                    // Per Jupiter docs: Market has { marketId, status: 'open'|'closed'|'cancelled', pricing }
-                    // Prefer an open market; fallback to first market
                     const openMkt  = markets.find(mk => mk.status === "open") || markets[0];
-                    // marketId is the Solana pubkey used by POST /orders
-                    // NEVER use the event-level id/eventId (UUID) — that's wrong for orders API
                     const marketId = openMkt?.marketId || openMkt?.id || openMkt?.pubkey || null;
-                    // Pricing: buyYesPriceUsd / buyNoPriceUsd in native units (1_000_000 = $1.00)
                     const pricing  = m.pricing || openMkt?.pricing || {};
                     const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
                     const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
                     const yesPrice = rawYes ? (rawYes / 1_000_000).toFixed(2) : null;
                     const noPrice  = rawNo  ? (rawNo  / 1_000_000).toFixed(2) : null;
                     const vol      = m.volumeUsd || m.volume || m.totalVolume || openMkt?.pricing?.volume;
+                    // Parse YES/NO outcome labels from Jupiter market data or derive from title
+                    // Jupiter sometimes provides outcomes array: [{ label:"Team A wins" }, { label:"Team B wins" }]
+                    const outcomes = openMkt?.outcomes || m.outcomes || [];
+                    const yesOutcome = outcomes[0]?.label || outcomes[0]?.name
+                      || openMkt?.yesOutcome || m.yesOutcome
+                      || (() => {
+                           // Derive from title: "Team A vs. Team B" → YES = "Team A wins"
+                           const vs = title.match(/^(.+?)\s+(?:vs?\.?|versus)\s+(.+)$/i);
+                           return vs ? `${vs[1].trim()} wins` : "YES outcome";
+                         })();
+                    const noOutcome = outcomes[1]?.label || outcomes[1]?.name
+                      || openMkt?.noOutcome || m.noOutcome
+                      || (() => {
+                           const vs = title.match(/^(.+?)\s+(?:vs?\.?|versus)\s+(.+)$/i);
+                           return vs ? `${vs[2].trim()} wins / Draw` : "NO outcome";
+                         })();
                     return (
                       <div key={marketId||i}
                         style={{ padding:"12px 14px", border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8, background:T.bg }}>
@@ -2268,18 +2299,20 @@ Transaction: \`${signature.slice(0,20)}…\`
                         {marketId ? (
                           <div style={{ display:"flex", gap:8 }}>
                             <button onClick={() => {
-                              setBetMarket({ marketId, title, yesPrice, noPrice });
+                              setBetMarket({ marketId, title, yesPrice, noPrice, yesOutcome, noOutcome });
                               setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
                             }} className="hov-btn"
                               style={{ flex:1, padding:"7px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                              YES {yesPrice ? `$${yesPrice}` : ""}
+                              <div style={{ fontSize:12, fontWeight:700 }}>YES {yesPrice ? `$${yesPrice}` : ""}</div>
+                              <div style={{ fontSize:10, fontWeight:400, opacity:0.8, marginTop:2 }}>{yesOutcome}</div>
                             </button>
                             <button onClick={() => {
-                              setBetMarket({ marketId, title, yesPrice, noPrice });
+                              setBetMarket({ marketId, title, yesPrice, noPrice, yesOutcome, noOutcome });
                               setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
                             }} className="hov-btn"
                               style={{ flex:1, padding:"7px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                              NO {noPrice ? `$${noPrice}` : ""}
+                              <div style={{ fontSize:12, fontWeight:700 }}>NO {noPrice ? `$${noPrice}` : ""}</div>
+                              <div style={{ fontSize:10, fontWeight:400, opacity:0.8, marginTop:2 }}>{noOutcome}</div>
                             </button>
                           </div>
                         ) : (
@@ -2371,8 +2404,8 @@ Transaction: \`${signature.slice(0,20)}…\`
               <div style={{ fontSize:12, color:T.text3, marginBottom:10 }}>Choose outcome:</div>
               <div style={{ display:"flex", gap:10, marginBottom:16 }}>
                 {[
-                  { side:"yes", label:"YES", price:betMarket.yesPrice, bg:T.greenBg, bd:T.greenBd, col:T.green },
-                  { side:"no",  label:"NO",  price:betMarket.noPrice,  bg:T.redBg,  bd:T.redBd,  col:T.red  },
+                  { side:"yes", label:"YES", sublabel: betMarket.yesOutcome || "Yes outcome", price:betMarket.yesPrice, bg:T.greenBg, bd:T.greenBd, col:T.green },
+                  { side:"no",  label:"NO",  sublabel: betMarket.noOutcome  || "No outcome",  price:betMarket.noPrice,  bg:T.redBg,  bd:T.redBd,  col:T.red  },
                 ].map(({ side, label, price, bg, bd, col }) => {
                   const prob = price ? Math.round(parseFloat(price) * 100) + "%" : null;
                   const payout = price && betAmount && parseFloat(betAmount) >= 5
@@ -2381,8 +2414,9 @@ Transaction: \`${signature.slice(0,20)}…\`
                   return (
                     <button key={side} onClick={() => setBetSide(side)} className="hov-pick"
                       style={{ flex:1, padding:"12px 8px", border:`2px solid ${betSide===side?col:T.border}`, borderRadius:10, background:betSide===side?bg:T.bg, color:betSide===side?col:T.text2, fontSize:13, fontWeight:betSide===side?700:400, cursor:"pointer", transition:"all 0.15s", textAlign:"center" }}>
-                      <div style={{ fontSize:16, fontWeight:700 }}>{label}</div>
-                      {price && <div style={{ fontSize:11, opacity:0.8 }}>${price} · {prob}</div>}
+                      <div style={{ fontSize:15, fontWeight:700 }}>{label}</div>
+                      <div style={{ fontSize:11, opacity:0.85, marginTop:2, lineHeight:1.3 }}>{sublabel}</div>
+                      {price && <div style={{ fontSize:11, opacity:0.7, marginTop:3 }}>${price} · {prob}</div>}
                       {payout && betSide===side && <div style={{ fontSize:11, color:col, marginTop:2 }}>{payout}</div>}
                     </button>
                   );
