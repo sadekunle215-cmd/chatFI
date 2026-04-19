@@ -85,7 +85,7 @@ Available actions:
   • amountUSD: dollar value — when user says "swap $10 of SOL"
   Examples: "swap all my USDC→SOL" → portion:"all", from:"USDC" | "swap half my SOL→BONK" → portion:"half" | "swap 25% of my JUP→SOL" → portion:"25%"
 - "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "targetPrice": "150", "amount": "5", "portion": null, "hint": "brief why" } — extract targetPrice, amount, or portion ("all","half","quarter","25%") from user message.
-- "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players", "searchQuery": "Arsenal Man City" } — ALWAYS set searchQuery to the match/teams so the UI can fetch the live market. ALSO trigger FETCH_PREDICTIONS with the same query so the real market loads beside the analysis.
+- "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "WRITE 3-4 sentences of REAL tactical analysis here — current form, H2H record, key players, injury news, predicted outcome with reasoning. Example: 'Arsenal are in excellent form (W5 L1 last 6). Man City missing Rodri. H2H: Arsenal won last 2. Expect Arsenal to dominate midfield. Prediction: Arsenal win or draw.'", "searchQuery": "Arsenal Man City" } — ALWAYS write real analysis, NEVER use placeholder text. ALWAYS set searchQuery.
 - "FETCH_PREDICTIONS"→ actionData: { "sport": "sports", "query": null } — sport categories (exact): sports, crypto, politics, esports, culture, economics, tech. For specific leagues/competitions like "EPL", "Champions League", "NBA playoffs", set query to the search string instead of sport. Use null sport for all.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — if user says "put 10% of my USDC in earn" set vault:"USDC", portion:"10%". portion: "all"|"half"|"quarter"|"N%"
 - "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — when user asks about multiply/leverage/looping on Jupiter Lend. Multiply CAN be executed in-app via the "Open Position" button on each vault card. Explain how it works and show available strategies.
@@ -433,6 +433,10 @@ export default function JupChat() {
     const payload = { url, method: (options.method || "GET").toUpperCase() };
     if (options.body !== undefined) {
       payload.body = typeof options.body === "string" ? JSON.parse(options.body) : options.body;
+    }
+    // For prediction endpoints, pass a flag so the proxy forwards user IP
+    if (url && url.includes("/prediction/")) {
+      payload.forwardIp = true;
     }
     const res = await fetch("/api/jupiter", {
       method: "POST",
@@ -806,9 +810,9 @@ export default function JupChat() {
       setBetStatus("error");
       const msg = err?.message || "Unknown error";
       if (msg.includes("unsupported_region") || msg.includes("Trading is not available in your region")) {
-        push("ai", `⚠️ Jupiter Prediction markets are **not available in your region** — this is a geo-restriction from Jupiter, not a wallet issue.
-
-You can try using a VPN set to a supported country (e.g. US, UK, EU) and then reconnect your wallet to place bets.`);
+        // This is a SERVER-side geo-block from the Vercel proxy, not the user's location.
+        // The fix is in /api/jupiter.js — forward the user's IP headers to Jupiter.
+        push("ai", `⚠️ The prediction order was blocked by Jupiter's API with a region error. This is caused by the **server proxy** not forwarding your real IP to Jupiter.\n\nFix in your \`/api/jupiter.js\`: add these headers when calling Jupiter:\n\`x-forwarded-for: <user IP>\`\n\`cf-ipcountry: <country>\`\n\nThis passes your real location to Jupiter so it doesn't geo-block the request.`);
       } else {
         push("ai", `Prediction bet failed. Details: ${msg}`);
       }
@@ -832,9 +836,13 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     // For simplicity use same decimals — server SDK handles exact math
     const debtRaw = Math.floor(colRaw * (parseFloat(leverage) - 1));
 
+    // For a new position positionId should be 0 (SDK creates new NFT position)
+    const positionId = 0;
     setMultiplyStatus("signing");
     setShowMultiplyForm(false);
-    push("ai", `Opening **${leverage}x ${vault.collateral}/${vault.debt}** Multiply position with **${colAmount} ${vault.collateral}**…`);
+    push("ai", `Opening **${leverage}x ${vault.collateral}/${vault.debt}** Multiply position with **${colAmount} ${vault.collateral}**…
+
+_Building transaction via Jupiter Lend SDK…_`);
 
     try {
       // 1. Get unsigned transaction from backend
@@ -843,7 +851,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           vaultId:    vault.vaultId,
-          positionId: 0,
+          positionId: positionId,
           colAmount:  colRaw.toString(),
           debtAmount: debtRaw.toString(),
           signer:     walletFull,
@@ -883,9 +891,10 @@ Transaction: \`${signature.slice(0,20)}…\`
     } catch (err) {
       setMultiplyStatus("error");
       const msg = err?.message || "Unknown error";
-      push("ai", `Multiply failed: ${msg}
-
-Check your balance and try again, or open the position directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).`);
+      let hint = "";
+      if (msg.includes("vaultId") || msg.includes("vault") || msg.includes("No instructions")) hint = "\n\n💡 The vault ID may be wrong. Check that @jup-ag/lend is installed and the vaultId in MULTIPLY_VAULTS is correct for this collateral/debt pair.";
+      else if (msg.includes("insufficient") || msg.includes("balance")) hint = "\n\n💡 Not enough balance. Make sure you have enough of the collateral token.";
+      push("ai", `Multiply failed: ${msg}${hint}\n\nOr open directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).`);
     }
     setMultiplyStatus(null);
   };
