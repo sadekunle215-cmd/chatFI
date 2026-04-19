@@ -1,68 +1,54 @@
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+// api/jupiter.js — Vercel Serverless Proxy
+// Injects Jupiter API key + forwards user IP so prediction markets aren't geo-blocked
 
-  let { url, method = "GET", body } = req.body || {};
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const { url, method = "GET", body, forwardIp } = req.body;
+
   if (!url) return res.status(400).json({ error: "Missing url" });
 
-  // Frontend sends "SOLANA_RPC" as placeholder — swapped server-side so key stays secret
-  if (url === "SOLANA_RPC") {
-    url = process.env.HELIUS_RPC_URL || "https://rpc.ankr.com/solana";
-  }
+  const API_KEY   = process.env.JUPITER_API_KEY || "";
+  const SOLANA_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 
-  const allowed = [
-    "api.jup.ag",           // all Jupiter APIs: swap v2, price v3, lend, prediction, trigger, portfolio, tokens
-    "lite-api.jup.ag",      // trigger execute fallback
-    "api.mainnet-beta.solana.com",
-    "rpc.ankr.com",
-    "mainnet.helius-rpc.com",
-    "solana-mainnet.g.alchemy.com",
-  ];
+  // Resolve special RPC placeholder
+  const targetUrl = url === "SOLANA_RPC" ? SOLANA_RPC : url;
 
-  // Method allowlist — proxy only permits safe HTTP verbs needed by Jupiter APIs
-  const allowedMethods = ["GET", "POST", "DELETE"];
-  if (!allowedMethods.includes((method || "").toUpperCase())) {
-    return res.status(400).json({ error: "Method not allowed: " + method });
-  }
+  const headers = {
+    "Content-Type": "application/json",
+    ...(API_KEY ? { "x-api-key": API_KEY } : {}),
+  };
 
-  let hostname;
-  try { hostname = new URL(url).hostname; } catch {
-    return res.status(400).json({ error: "Invalid url" });
-  }
-  if (!allowed.some(d => hostname === d || hostname.endsWith("." + d))) {
-    return res.status(403).json({ error: "Domain not allowed: " + hostname });
+  // For prediction endpoints: forward user's real IP so Jupiter doesn't geo-block.
+  // Vercel sets x-forwarded-for and cf-ipcountry from the user's actual request.
+  if (forwardIp || (url && url.includes("/prediction/"))) {
+    const userIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
+                || req.headers["x-real-ip"]
+                || "";
+    const userCountry = req.headers["cf-ipcountry"] || "";
+
+    if (userIp)      headers["x-forwarded-for"] = userIp;
+    if (userCountry) headers["cf-ipcountry"]     = userCountry;
   }
 
   try {
-    const methodUpper = (method || "GET").toUpperCase();
     const fetchOptions = {
-      method: methodUpper,
-      headers: { "Content-Type": "application/json" },
+      method: method.toUpperCase(),
+      headers,
     };
 
-    // All Jupiter APIs use x-api-key. Send Authorization: Bearer as fallback for older endpoints.
-    if (process.env.JUPITER_API_KEY) {
-      fetchOptions.headers["x-api-key"] = process.env.JUPITER_API_KEY;
-      fetchOptions.headers["Authorization"] = `Bearer ${process.env.JUPITER_API_KEY}`;
+    if (body && method.toUpperCase() !== "GET") {
+      fetchOptions.body = JSON.stringify(body);
     }
 
-    // Attach body for POST and DELETE (e.g. DELETE /prediction/v1/positions needs ownerPubkey)
-    if ((methodUpper === "POST" || methodUpper === "DELETE") && body !== undefined && body !== null) {
-      fetchOptions.body = typeof body === "object" ? JSON.stringify(body) : body;
-    }
-
-    const response = await fetch(url, fetchOptions);
-    const text = await response.text();
-
-    let data;
-    try { data = JSON.parse(text); }
-    catch { data = { raw: text }; }
-
+    const response = await fetch(targetUrl, fetchOptions);
+    const data = await response.json();
     return res.status(response.status).json(data);
+
   } catch (err) {
-    return res.status(500).json({ error: err.message || "Proxy error" });
+    console.error("[api/jupiter] error:", err);
+    return res.status(500).json({ error: err?.message || "Proxy error" });
   }
 }
