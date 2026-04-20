@@ -2267,145 +2267,356 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
             </div>
           )}
 
-          {/* ── Prediction markets list ───────────────────────────────────── */}
-          {showPredList && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>
-                Prediction Markets{predCategory && predCategory !== "null" ? ` — ${predCategory}` : ""}
-              </div>
-              {predMarkets.length > 0 ? (
-                <>
-                  <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{predMarkets.length} market{predMarkets.length!==1?"s":""} found — click one to bet YES or NO</div>
-                  {predMarkets.slice(0,20).map((m, i) => {
-                    // Apr 2026: title, closeTime, category are TOP LEVEL (not nested in metadata)
-                    const title    = m.title || m.metadata?.title || m.question || m.name || "Prediction Market";
-                    const closeTs  = m.closeTime || m.metadata?.closeTime || m.endTime;
-                    const cat      = m.category || m.metadata?.category || predCategory || "";
-                    const desc     = m.description || m.metadata?.description || m.subtitle || m.resolutionCriteria || "";
-                    // Markets nested in m.markets[] or m.market{}; prefer open markets
-                    const markets  = Array.isArray(m.markets) ? m.markets : (m.market ? [m.market] : []);
-                    const openMkt  = markets.find(mk => mk.status === "open") || markets[0];
-                    const marketId = openMkt?.marketId || openMkt?.id || openMkt?.pubkey || null;
-                    // Pricing: buyYesPriceUsd / buyNoPriceUsd in native units (1_000_000 = $1.00)
+          {/* ── Prediction markets list ── Jupiter-style full detail UI ──── */}
+          {showPredList && (() => {
+            // ── helpers ────────────────────────────────────────────────────
+            const catIcons = { sports:"⚽", crypto:"₿", politics:"🏛️", esports:"🎮", culture:"🎭", economics:"📈", tech:"💻" };
+            const fmtCountdown = (ts) => {
+              if (!ts) return null;
+              const ms = typeof ts === "number" ? ts * 1000 : new Date(ts).getTime();
+              const diff = ms - Date.now();
+              if (diff <= 0) return "Ended";
+              const d = Math.floor(diff / 86400000);
+              const h = Math.floor((diff % 86400000) / 3600000);
+              const m2 = Math.floor((diff % 3600000) / 60000);
+              if (d > 30) return new Date(ms).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+              if (d > 0) return `${d}d ${h}h left`;
+              if (h > 0) return `${h}h ${m2}m left`;
+              return `${m2}m left`;
+            };
+            const fmtVol = (v) => {
+              if (!v || v <= 0) return null;
+              if (v >= 1_000_000_000) return `$${(v/1_000_000_000).toFixed(2)}B`;
+              if (v >= 1_000_000) return `$${(v/1_000_000).toFixed(1)}M`;
+              if (v >= 1_000) return `$${(v/1_000).toFixed(0)}K`;
+              return `$${v.toFixed(0)}`;
+            };
+            const parsePriceCents = (raw) => {
+              if (raw == null) return null;
+              // Jupiter returns micro-USD (1_000_000 = $1.00) OR already decimal (0.72 = 72¢)
+              const n = parseFloat(raw);
+              if (isNaN(n)) return null;
+              return n > 1 ? n / 1_000_000 : n; // normalise to 0–1
+            };
+
+            // ── active category filter state (local via closure trick) ─────
+            // We reuse predCategory for the active tab
+            const activeCat = predCategory;
+
+            // Collect all unique categories from fetched markets
+            const allCats = ["all", ...Array.from(new Set(
+              predMarkets.map(m => (m.category || m.metadata?.category || "").toLowerCase()).filter(Boolean)
+            ))];
+
+            // Filter markets by active tab
+            const displayMarkets = (activeCat && activeCat !== "all" && activeCat !== "null")
+              ? predMarkets.filter(m => (m.category || m.metadata?.category || "").toLowerCase() === activeCat.toLowerCase())
+              : predMarkets;
+
+            return (
+              <div style={{ margin:"0 0 20px 44px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, overflow:"hidden" }}>
+
+                {/* ── Header ── */}
+                <div style={{ padding:"14px 18px 0", borderBottom:`1px solid ${T.border}` }}>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ fontSize:17 }}>📊</span>
+                      <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1 }}>Jupiter Predict</span>
+                      {predMarkets.length > 0 && (
+                        <span style={{ fontSize:11, padding:"2px 8px", background:T.accentBg, border:`1px solid ${T.accent}40`, borderRadius:20, color:T.accent }}>
+                          {displayMarkets.length} markets
+                        </span>
+                      )}
+                    </div>
+                    <button onClick={() => setShowPredList(false)}
+                      style={{ background:"none", border:"none", color:T.text3, fontSize:18, cursor:"pointer", padding:"0 4px", lineHeight:1 }}>✕</button>
+                  </div>
+
+                  {/* ── Category tabs ── */}
+                  {predMarkets.length > 0 && (
+                    <div style={{ display:"flex", gap:4, overflowX:"auto", paddingBottom:12, scrollbarWidth:"none" }}>
+                      {allCats.map(cat => {
+                        const isActive = cat === "all" ? (!activeCat || activeCat === "all" || activeCat === "null") : activeCat === cat;
+                        return (
+                          <button key={cat} onClick={() => setPredCategory(cat === "all" ? null : cat)}
+                            style={{ flexShrink:0, padding:"5px 12px", borderRadius:20, border:`1px solid ${isActive ? T.accent : T.border}`,
+                              background: isActive ? T.accentBg : "none", color: isActive ? T.accent : T.text2,
+                              fontSize:12, fontWeight: isActive ? 600 : 400, cursor:"pointer", whiteSpace:"nowrap", transition:"all 0.15s" }}>
+                            {catIcons[cat] || "🔮"} {cat.charAt(0).toUpperCase() + cat.slice(1)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Markets list ── */}
+                <div style={{ maxHeight:560, overflowY:"auto", padding:"12px 14px" }}>
+                  {displayMarkets.length > 0 ? displayMarkets.slice(0, 25).map((m, i) => {
+                    const title   = m.title || m.metadata?.title || m.question || m.name || "Prediction Market";
+                    const closeTs = m.closeTime || m.metadata?.closeTime || m.endTime || m.resolutionTime;
+                    const cat     = (m.category || m.metadata?.category || predCategory || "").toLowerCase();
+                    const desc    = m.description || m.metadata?.description || m.resolutionCriteria || m.subtitle || "";
+                    const imgUrl  = m.imageUrl || m.metadata?.imageUrl || m.image || m.bannerUrl || null;
+                    const tags    = m.tags || m.metadata?.tags || [];
+                    const status  = m.status || "open";
+
+                    // Markets array — binary or multi-outcome
+                    const subMarkets = Array.isArray(m.markets) ? m.markets : (m.market ? [m.market] : []);
+                    const isBinary   = subMarkets.length <= 1;
+                    const openMkt    = subMarkets.find(mk => mk.status === "open") || subMarkets[0];
+                    const marketId   = openMkt?.marketId || openMkt?.id || openMkt?.pubkey || null;
+
+                    // Pricing (binary)
                     const pricing  = m.pricing || openMkt?.pricing || {};
                     const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
                     const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
-                    const yesPrice = rawYes != null ? (rawYes / 1_000_000).toFixed(2) : null;
-                    const noPrice  = rawNo  != null ? (rawNo  / 1_000_000).toFixed(2) : null;
-                    // Implied probability from price (prediction market price ≈ probability)
-                    const yesPct   = yesPrice ? Math.round(parseFloat(yesPrice) * 100) : null;
-                    const noPct    = noPrice  ? Math.round(parseFloat(noPrice)  * 100) : null;
-                    const vol      = m.volumeUsd || m.volume || m.totalVolume || openMkt?.pricing?.volume;
-                    const volFmt   = vol > 0 ? (vol >= 1_000_000 ? `$${(vol/1_000_000).toFixed(1)}M` : `$${(vol/1_000).toFixed(0)}K`) : null;
-                    // Parse YES/NO outcome labels — try every known field shape
-                    const outcomes = openMkt?.outcomes || m.outcomes || m.options || openMkt?.options || [];
-                    const yesOutcome = outcomes[0]?.label || outcomes[0]?.name || outcomes[0]?.title ||
-                      m.yesLabel || m.yesOutcome || openMkt?.yesLabel || (() => {
-                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
-                        if (vs) return `${vs[1].trim()} wins`;
-                        if (/will .+ win/i.test(title)) return "Yes, wins";
-                        if (/price|hit|\$|above|over|exceed/i.test(title)) return "Yes, it will";
-                        return "Yes";
-                      })();
-                    const noOutcome = outcomes[1]?.label || outcomes[1]?.name || outcomes[1]?.title ||
-                      m.noLabel || m.noOutcome || openMkt?.noLabel || (() => {
-                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
-                        if (vs) return `${vs[2].trim()} wins / Draw`;
-                        if (/will .+ win/i.test(title)) return "No, won't win";
-                        if (/price|hit|\$|above|over|exceed/i.test(title)) return "No, it won't";
-                        return "No";
-                      })();
-                    // Closes soon flag
-                    const closeSoon = closeTs && (() => {
+                    const yesPrice = parsePriceCents(rawYes);
+                    const noPrice  = parsePriceCents(rawNo);
+                    const yesPct   = yesPrice != null ? Math.round(yesPrice * 100) : null;
+                    const noPct    = noPrice  != null ? Math.round(noPrice  * 100) : null;
+
+                    // Volume
+                    const vol    = m.volumeUsd || m.volume || m.totalVolume || openMkt?.pricing?.volume || 0;
+                    const volFmt = fmtVol(vol);
+
+                    // Liquidity
+                    const liq    = m.liquidityUsd || openMkt?.pricing?.liquidityUsd || 0;
+                    const liqFmt = fmtVol(liq);
+
+                    // Outcome labels
+                    const outcomes   = openMkt?.outcomes || m.outcomes || m.options || [];
+                    const yesOutcome = outcomes[0]?.label || outcomes[0]?.name || m.yesLabel || "Yes";
+                    const noOutcome  = outcomes[1]?.label || outcomes[1]?.name || m.noLabel  || "No";
+
+                    // Countdown
+                    const countdown  = fmtCountdown(closeTs);
+                    const isUrgent   = closeTs && (() => {
                       const ms = typeof closeTs === "number" ? closeTs * 1000 : new Date(closeTs).getTime();
-                      return ms - Date.now() < 86400000 * 3; // within 3 days
+                      return ms - Date.now() < 86400000 * 2;
                     })();
+
+                    // Is this a multi-outcome market (e.g. "Who will win the election?")
+                    const multiOutcomes = subMarkets.length > 1
+                      ? subMarkets.slice(0, 6).map(mk => {
+                          const p = mk.pricing || {};
+                          const rY = p.buyYesPriceUsd ?? p.yesPriceUsd ?? p.yesPrice;
+                          const pct = rY != null ? Math.round(parsePriceCents(rY) * 100) : null;
+                          return {
+                            label: mk.outcomeLabel || mk.label || mk.name || mk.title || "Option",
+                            marketId: mk.marketId || mk.id || mk.pubkey,
+                            pct,
+                            yesPrice: rY != null ? parsePriceCents(rY).toFixed(2) : null,
+                            noPrice: (() => { const rN = p.buyNoPriceUsd??p.noPriceUsd??p.noPrice; return rN!=null?parsePriceCents(rN).toFixed(2):null; })(),
+                          };
+                        })
+                      : null;
+
                     return (
-                      <div key={marketId||i}
-                        style={{ padding:"14px", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:10, background:T.bg }}>
-                        {/* Title row */}
-                        <div style={{ fontWeight:600, fontSize:13, color:T.text1, marginBottom:5, lineHeight:1.4 }}>{title}</div>
-                        {/* Description / resolution criteria */}
-                        {desc && (
-                          <div style={{ fontSize:11, color:T.text3, marginBottom:6, lineHeight:1.4, fontStyle:"italic" }}>
-                            {desc.length > 120 ? desc.slice(0, 120) + "…" : desc}
+                      <div key={marketId || m.id || i}
+                        style={{ border:`1px solid ${T.border}`, borderRadius:12, marginBottom:12, background:T.bg, overflow:"hidden" }}>
+
+                        {/* Event image banner */}
+                        {imgUrl && (
+                          <div style={{ width:"100%", height:90, overflow:"hidden", position:"relative" }}>
+                            <img src={imgUrl} alt="" style={{ width:"100%", height:"100%", objectFit:"cover", opacity:0.85 }}
+                              onError={e => { e.target.style.display="none"; }}/>
+                            <div style={{ position:"absolute", inset:0, background:"linear-gradient(to bottom, transparent 40%, rgba(13,17,23,0.85))" }}/>
+                            {/* Category badge on image */}
+                            {cat && (
+                              <div style={{ position:"absolute", top:8, left:10, padding:"3px 8px", borderRadius:20, background:"rgba(0,0,0,0.55)", border:`1px solid ${T.border}`, fontSize:10, color:T.text2, backdropFilter:"blur(4px)" }}>
+                                {catIcons[cat] || "🔮"} {cat.charAt(0).toUpperCase()+cat.slice(1)}
+                              </div>
+                            )}
+                            {/* Urgent badge */}
+                            {isUrgent && (
+                              <div style={{ position:"absolute", top:8, right:10, padding:"3px 8px", borderRadius:20, background:"rgba(220,38,38,0.8)", fontSize:10, color:"#fff", fontWeight:600 }}>
+                                ⚡ {countdown}
+                              </div>
+                            )}
                           </div>
                         )}
-                        {/* Meta row */}
-                        <div style={{ fontSize:11, color:T.text3, display:"flex", flexWrap:"wrap", gap:10, marginBottom:10 }}>
-                          {cat && <span>📂 {cat}</span>}
-                          {closeTs && (
-                            <span style={{ color: closeSoon ? T.red : T.text3 }}>
-                              🕐 {closeSoon ? "Closes " : ""}{new Date(typeof closeTs==="number"?closeTs*1000:closeTs).toLocaleDateString()}
-                            </span>
+
+                        <div style={{ padding:"12px 14px" }}>
+                          {/* Category + close time (no image fallback) */}
+                          {!imgUrl && (
+                            <div style={{ display:"flex", gap:8, marginBottom:6, flexWrap:"wrap" }}>
+                              {cat && (
+                                <span style={{ fontSize:10, padding:"2px 8px", borderRadius:20, background:T.surface, border:`1px solid ${T.border}`, color:T.text3 }}>
+                                  {catIcons[cat] || "🔮"} {cat.charAt(0).toUpperCase()+cat.slice(1)}
+                                </span>
+                              )}
+                              {countdown && (
+                                <span style={{ fontSize:10, padding:"2px 8px", borderRadius:20, background: isUrgent ? "rgba(220,38,38,0.1)" : T.surface, border:`1px solid ${isUrgent ? T.red : T.border}`, color: isUrgent ? T.red : T.text3 }}>
+                                  🕐 {countdown}
+                                </span>
+                              )}
+                              {status !== "open" && (
+                                <span style={{ fontSize:10, padding:"2px 8px", borderRadius:20, background:"rgba(100,100,100,0.15)", border:`1px solid ${T.border}`, color:T.text3 }}>
+                                  {status}
+                                </span>
+                              )}
+                            </div>
                           )}
-                          {volFmt && <span>💰 {volFmt} vol</span>}
+
+                          {/* Title */}
+                          <div style={{ fontWeight:700, fontSize:13, color:T.text1, marginBottom:6, lineHeight:1.45 }}>{title}</div>
+
+                          {/* Description / resolution criteria */}
+                          {desc && (
+                            <div style={{ fontSize:11, color:T.text3, marginBottom:8, lineHeight:1.5, padding:"6px 10px", background:T.surface, borderRadius:7, borderLeft:`2px solid ${T.border}` }}>
+                              {desc.length > 160 ? desc.slice(0, 160) + "…" : desc}
+                            </div>
+                          )}
+
+                          {/* Stats row: volume, liquidity, close (when image shown) */}
+                          <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:10 }}>
+                            {volFmt && (
+                              <div style={{ fontSize:11, color:T.text3 }}>
+                                <span style={{ color:T.text2, fontWeight:600 }}>{volFmt}</span> vol
+                              </div>
+                            )}
+                            {liqFmt && (
+                              <div style={{ fontSize:11, color:T.text3 }}>
+                                <span style={{ color:T.text2, fontWeight:600 }}>{liqFmt}</span> liq
+                              </div>
+                            )}
+                            {imgUrl && countdown && (
+                              <div style={{ fontSize:11, color: isUrgent ? T.red : T.text3 }}>
+                                🕐 {countdown}
+                              </div>
+                            )}
+                            {tags.slice(0,3).map(tag => (
+                              <span key={tag} style={{ fontSize:10, color:T.text3 }}>#{tag}</span>
+                            ))}
+                          </div>
+
+                          {/* ── BINARY market: probability bar + YES/NO buttons ── */}
+                          {isBinary && (
+                            <>
+                              {yesPct != null && (
+                                <div style={{ marginBottom:10 }}>
+                                  {/* Probability bar */}
+                                  <div style={{ height:6, borderRadius:6, background:T.border, overflow:"hidden", marginBottom:5, display:"flex" }}>
+                                    <div style={{ height:"100%", width:`${yesPct}%`, background:`linear-gradient(90deg, ${T.green}, ${T.greenBd})` }}/>
+                                    <div style={{ height:"100%", flex:1, background:`linear-gradient(90deg, ${T.redBd}, ${T.red})` }}/>
+                                  </div>
+                                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:11 }}>
+                                    <span style={{ color:T.green, fontWeight:600 }}>YES {yesPct}%</span>
+                                    <span style={{ color:T.text3, fontSize:10 }}>implied probability</span>
+                                    <span style={{ color:T.red, fontWeight:600 }}>{noPct != null ? noPct : 100 - yesPct}% NO</span>
+                                  </div>
+                                </div>
+                              )}
+
+                              {marketId ? (
+                                <div style={{ display:"flex", gap:8 }}>
+                                  <button onClick={() => {
+                                    setBetMarket({ marketId, title, yesPrice: yesPrice?.toFixed(2), noPrice: noPrice?.toFixed(2), yesOutcome, noOutcome });
+                                    setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                  }} className="hov-btn"
+                                    style={{ flex:1, padding:"10px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:9, color:T.green, cursor:"pointer", textAlign:"center" }}>
+                                    <div style={{ fontWeight:700, fontSize:13 }}>YES {yesPrice != null ? `${(yesPrice*100).toFixed(0)}¢` : ""}</div>
+                                    <div style={{ fontSize:10, opacity:0.85, marginTop:2 }}>{yesOutcome}</div>
+                                  </button>
+                                  <button onClick={() => {
+                                    setBetMarket({ marketId, title, yesPrice: yesPrice?.toFixed(2), noPrice: noPrice?.toFixed(2), yesOutcome, noOutcome });
+                                    setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                  }} className="hov-btn"
+                                    style={{ flex:1, padding:"10px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:9, color:T.red, cursor:"pointer", textAlign:"center" }}>
+                                    <div style={{ fontWeight:700, fontSize:13 }}>NO {noPrice != null ? `${(noPrice*100).toFixed(0)}¢` : ""}</div>
+                                    <div style={{ fontSize:10, opacity:0.85, marginTop:2 }}>{noOutcome}</div>
+                                  </button>
+                                </div>
+                              ) : (
+                                <div style={{ fontSize:11, color:T.text3, fontStyle:"italic", padding:"6px 0" }}>Market not yet tradeable</div>
+                              )}
+                            </>
+                          )}
+
+                          {/* ── MULTI-OUTCOME market (election, champion, etc.) ── */}
+                          {!isBinary && multiOutcomes && (
+                            <div>
+                              {multiOutcomes.map((opt, oi) => (
+                                <div key={oi} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:7 }}>
+                                  {/* mini progress bar */}
+                                  <div style={{ flex:1 }}>
+                                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:2 }}>
+                                      <span style={{ color:T.text2, fontWeight:500 }}>{opt.label}</span>
+                                      <span style={{ color:T.accent, fontWeight:700 }}>{opt.pct != null ? `${opt.pct}%` : "—"}</span>
+                                    </div>
+                                    <div style={{ height:4, borderRadius:4, background:T.border, overflow:"hidden" }}>
+                                      <div style={{ height:"100%", width:`${opt.pct || 0}%`, background:`linear-gradient(90deg, ${T.accent}, ${T.accentHover || T.accent})`, borderRadius:4 }}/>
+                                    </div>
+                                  </div>
+                                  {/* YES/NO buttons per outcome */}
+                                  {opt.marketId && (
+                                    <div style={{ display:"flex", gap:5, flexShrink:0 }}>
+                                      <button onClick={() => {
+                                        setBetMarket({ marketId: opt.marketId, title: `${title} — ${opt.label}`, yesPrice: opt.yesPrice, noPrice: opt.noPrice, yesOutcome: opt.label, noOutcome: "No" });
+                                        setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                      }} className="hov-btn"
+                                        style={{ padding:"4px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, color:T.green, fontSize:11, fontWeight:600, cursor:"pointer" }}>
+                                        Yes
+                                      </button>
+                                      <button onClick={() => {
+                                        setBetMarket({ marketId: opt.marketId, title: `${title} — ${opt.label}`, yesPrice: opt.yesPrice, noPrice: opt.noPrice, yesOutcome: opt.label, noOutcome: "No" });
+                                        setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                      }} className="hov-btn"
+                                        style={{ padding:"4px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:6, color:T.red, fontSize:11, fontWeight:600, cursor:"pointer" }}>
+                                        No
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                              {subMarkets.length > 6 && (
+                                <div style={{ fontSize:11, color:T.text3, marginTop:4 }}>+{subMarkets.length - 6} more outcomes on jup.ag/prediction</div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Open on Jupiter link */}
+                          <div style={{ marginTop:10, textAlign:"right" }}>
+                            <a href="https://jup.ag/prediction" target="_blank" rel="noreferrer"
+                              style={{ fontSize:10, color:T.text3, textDecoration:"none" }}>
+                              View on jup.ag →
+                            </a>
+                          </div>
                         </div>
-                        {/* Probability bar */}
-                        {yesPct != null && noPct != null && (
-                          <div style={{ marginBottom:10 }}>
-                            <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3, marginBottom:3 }}>
-                              <span style={{ color:T.green }}>YES {yesPct}%</span>
-                              <span style={{ color:T.red }}>NO {noPct}%</span>
-                            </div>
-                            <div style={{ height:4, borderRadius:4, background:T.border, overflow:"hidden" }}>
-                              <div style={{ height:"100%", width:`${yesPct}%`, background:`linear-gradient(90deg, ${T.green}, ${T.greenBd})`, borderRadius:4 }}/>
-                            </div>
-                          </div>
-                        )}
-                        {/* YES / NO buttons */}
-                        {marketId ? (
-                          <div style={{ display:"flex", gap:8 }}>
-                            <button onClick={() => {
-                              setBetMarket({ marketId, title, yesPrice, noPrice, yesOutcome, noOutcome });
-                              setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                            }} className="hov-btn"
-                              style={{ flex:1, padding:"9px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
-                              <div style={{fontWeight:700, fontSize:13}}>YES {yesPrice ? `$${yesPrice}` : ""}</div>
-                              <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{yesOutcome}</div>
-                            </button>
-                            <button onClick={() => {
-                              setBetMarket({ marketId, title, yesPrice, noPrice, yesOutcome, noOutcome });
-                              setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                            }} className="hov-btn"
-                              style={{ flex:1, padding:"9px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
-                              <div style={{fontWeight:700, fontSize:13}}>NO {noPrice ? `$${noPrice}` : ""}</div>
-                              <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{noOutcome}</div>
-                            </button>
-                          </div>
-                        ) : (
-                          <div style={{ fontSize:11, color:T.text3, fontStyle:"italic" }}>
-                            Market closed or not yet tradeable
-                          </div>
-                        )}
                       </div>
                     );
-                  })}
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize:13, color:T.text2, marginBottom:16 }}>
-                    No live markets found right now. Browse by category:
-                  </div>
-                  <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:16 }}>
-                    {PRED_CATEGORIES.map(cat => (
-                      <button key={cat} onClick={() => send(`Show ${cat} prediction markets`)} className="hov-btn"
-                        style={{ padding:"8px 16px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:20, fontSize:13, color:T.text2, cursor:"pointer" }}>
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ fontSize:12, color:T.text3 }}>
-                    Or ask about a specific match: <em>"Arsenal vs Man City prediction"</em>
-                  </div>
-                </>
-              )}
-              <button onClick={() => setShowPredList(false)}
-                style={{ marginTop:14, padding:"6px 14px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
-                Close
-              </button>
-            </div>
-          )}
+                  }) : (
+                    <div style={{ padding:"16px 0" }}>
+                      <div style={{ fontSize:13, color:T.text2, marginBottom:16 }}>
+                        No markets found for this category. Try another:
+                      </div>
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:16 }}>
+                        {PRED_CATEGORIES.map(cat => (
+                          <button key={cat} onClick={() => send(`Show ${cat} prediction markets`)} className="hov-btn"
+                            style={{ padding:"7px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:20, fontSize:12, color:T.text2, cursor:"pointer" }}>
+                            {catIcons[cat] || "🔮"} {cat}
+                          </button>
+                        ))}
+                      </div>
+                      <div style={{ fontSize:12, color:T.text3 }}>
+                        Or ask: <em>"Arsenal vs Man City prediction"</em>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ── Footer ── */}
+                <div style={{ padding:"10px 16px", borderTop:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <div style={{ fontSize:11, color:T.text3 }}>Powered by Jupiter · Polymarket</div>
+                  <button onClick={() => setShowPredList(false)}
+                    style={{ padding:"5px 14px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
+                    Close
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Single prediction analysis panel (SHOW_PREDICTION) ──────────── */}
           {showPred && pred && (
