@@ -576,58 +576,54 @@ export default function JupChat() {
     return results;
   };
 
-  // ── Predictions — GET /prediction/v1/events with broader fetch ──────────────
+  // ── Predictions — GET /prediction/v1/events ──────────────────────────────
+  // Real schema (Jupiter docs): { data: [ { eventId, category, volumeUsd,
+  //   metadata:{title,closeTime,subtitle}, markets:[ { marketId, status,
+  //   metadata:{title,isTeamMarket}, pricing:{buyYesPriceUsd,buyNoPriceUsd} } ] } ] }
   const fetchPredictionMarkets = async (category = null, searchQuery = null) => {
-    const extractEvents = (data) => {
-      const arr = Array.isArray(data) ? data : (data?.data || data?.events || data?.results || []);
-      return arr;
+    const extractEvents = (raw) => {
+      if (Array.isArray(raw)) return raw;
+      if (Array.isArray(raw?.data)) return raw.data;
+      if (Array.isArray(raw?.events)) return raw.events;
+      return [];
     };
-
-    // If searching for specific match/team/league try multiple search strategies
+    const clientFilter = (events, q) => {
+      const lq = q.toLowerCase();
+      return events.filter(e =>
+        e.metadata?.title?.toLowerCase().includes(lq) ||
+        e.title?.toLowerCase().includes(lq) ||
+        e.category?.toLowerCase().includes(lq) ||
+        (e.markets||[]).some(mk => mk.metadata?.title?.toLowerCase().includes(lq))
+      );
+    };
     if (searchQuery) {
-      // Try search endpoint
       try {
         const data = await jupFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=50&includeMarkets=true`);
         const events = extractEvents(data);
         if (events.length > 0) return { markets: events, source: "search" };
       } catch {}
-      // Try events with keyword filter
       try {
-        const p = new URLSearchParams({ keyword: searchQuery, includeMarkets: "true", limit: "50" });
-        const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
-        const events = extractEvents(data);
-        if (events.length > 0) return { markets: events, source: "keyword" };
-      } catch {}
-      // Fall through to full fetch and filter client-side
-      try {
-        const p = new URLSearchParams({ includeMarkets: "true", limit: "200" });
+        const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: "200" });
         const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
         const all = extractEvents(data);
-        const q = searchQuery.toLowerCase();
-        const filtered = all.filter(e =>
-          e.title?.toLowerCase().includes(q) ||
-          e.description?.toLowerCase().includes(q) ||
-          e.category?.toLowerCase().includes(q) ||
-          (e.teams || []).some(t => t?.toLowerCase().includes(q))
-        );
+        const filtered = clientFilter(all, searchQuery);
         if (filtered.length > 0) return { markets: filtered, source: "client-filter" };
-        if (all.length > 0) return { markets: all, source: "api" };
+        if (all.length > 0) return { markets: all, source: "api-fallback" };
       } catch {}
     }
-
-    // General fetch — with or without category
-    const buildUrl = (params) => `${JUP_PRED_API}/events?${params.toString()}`;
-    const attempts = [
-      () => { const p = new URLSearchParams({ includeMarkets: "true", limit: "100" }); if (category) p.set("category", category.toLowerCase()); return buildUrl(p); },
-      () => { const p = new URLSearchParams({ includeMarkets: "true", limit: "100" }); return buildUrl(p); },
-    ];
-    for (const getUrl of attempts) {
-      try {
-        const data = await jupFetch(getUrl());
-        const events = extractEvents(data);
-        if (events.length > 0) return { markets: events, source: "api" };
-      } catch {}
-    }
+    try {
+      const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: "100" });
+      if (category && category !== "null") p.set("category", category.toLowerCase());
+      const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+      const events = extractEvents(data);
+      if (events.length > 0) return { markets: events, source: "api" };
+    } catch {}
+    try {
+      const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: "100" });
+      const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+      const events = extractEvents(data);
+      if (events.length > 0) return { markets: events, source: "api-all" };
+    } catch {}
     return { markets: [], source: "empty" };
   };
 
@@ -2272,128 +2268,38 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
               </div>
               {predMarkets.length > 0 ? (
                 <>
-                  <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{predMarkets.length} market{predMarkets.length!==1?"s":""} found — click one to bet YES or NO</div>
-                  {predMarkets.slice(0,20).map((m, i) => {
-                    // Apr 2026: title, closeTime, category are TOP LEVEL (not nested in metadata)
-                    const title    = m.title || m.metadata?.title || m.question || m.name || "Prediction Market";
-                    const closeTs  = m.closeTime || m.metadata?.closeTime || m.endTime;
-                    const cat      = m.category || m.metadata?.category || predCategory || "";
-                    const desc     = m.description || m.metadata?.description || m.subtitle || m.resolutionCriteria || "";
-                    // Markets nested in m.markets[] or m.market{}; prefer open markets
-                    const markets  = Array.isArray(m.markets) ? m.markets : (m.market ? [m.market] : []);
-                    const openMkt  = markets.find(mk => mk.status === "open") || markets[0];
-                    const marketId = openMkt?.marketId || openMkt?.id || openMkt?.pubkey || null;
-                    const vol      = m.volumeUsd || m.volume || m.totalVolume || openMkt?.pricing?.volume;
-                    const volFmt   = vol > 0 ? (vol >= 1_000_000 ? `$${(vol/1_000_000).toFixed(1)}M` : `$${(vol/1_000).toFixed(0)}K`) : null;
-                    // Closes soon flag
+                  <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{predMarkets.length} event{predMarkets.length!==1?"s":""} found</div>
+                  {predMarkets.slice(0,20).map((evt, i) => {
+                    // ── Real Jupiter API schema (from docs Apr 2026) ──────────────────
+                    // Event fields: eventId, category, volumeUsd, metadata.title,
+                    //   metadata.closeTime, metadata.subtitle
+                    // markets[]: each market IS one outcome — marketId, status, metadata.title,
+                    //   metadata.isTeamMarket, pricing.buyYesPriceUsd, pricing.buyNoPriceUsd
+                    const evtTitle  = evt.metadata?.title  || evt.title  || evt.name  || "Prediction Event";
+                    const evtSubtitle = evt.metadata?.subtitle || evt.subtitle || "";
+                    const closeTs   = evt.metadata?.closeTime || evt.closeTime || evt.endTime;
+                    const cat       = evt.category || predCategory || "";
+                    const vol       = parseFloat(evt.volumeUsd || evt.volume || 0);
+                    const volFmt    = vol > 0 ? (vol >= 1_000_000 ? `$${(vol/1_000_000).toFixed(1)}M` : `$${(vol/1_000).toFixed(0)}K`) : null;
                     const closeSoon = closeTs && (() => {
                       const ms = typeof closeTs === "number" ? closeTs * 1000 : new Date(closeTs).getTime();
                       return ms - Date.now() < 86400000 * 3;
                     })();
 
-                    // ── Full outcomes array — covers binary AND multi-outcome markets ──
-                    // Jupiter returns outcomes at multiple possible paths
-                    const rawOutcomes = openMkt?.outcomes || m.outcomes || m.options || openMkt?.options || [];
+                    // All markets for this event — each is one outcome option
+                    const allMarkets = Array.isArray(evt.markets) ? evt.markets : (evt.market ? [evt.market] : []);
+                    // Only tradeable markets
+                    const openMarkets = allMarkets.filter(mk => mk.status === "open" || !mk.status);
+                    const displayMarkets = (openMarkets.length > 0 ? openMarkets : allMarkets)
+                      // Sort by YES price desc (highest probability first)
+                      .sort((a, b) => (b.pricing?.buyYesPriceUsd ?? 0) - (a.pricing?.buyYesPriceUsd ?? 0));
 
-                    // ── MULTI-OUTCOME MARKET (3+ options, e.g. "Who wins UCL?") ──────
-                    const isMulti = rawOutcomes.length > 2;
-
-                    // ── Pricing block — lives at event level, openMkt level, or pricing sub-object ──
-                    const pricing  = m.pricing || openMkt?.pricing || {};
-                    const rawYesGlobal = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
-                    const rawNoGlobal  = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
-
-                    // ── Smart label derivation from event title ───────────────────────────────
-                    const deriveLabels = () => {
-                      // "X vs Y" → ["X wins", "Y wins / Draw"]
-                      const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
-                      if (vs) return [`${vs[1].trim()} wins`, `${vs[2].trim()} wins / Draw`];
-                      // "Will X win?" → ["Yes", "No"]
-                      if (/will .+ win/i.test(title)) return ["Yes, wins", "No / Draw"];
-                      // "Who will be X?" / "Next X?" — political / multi
-                      // "Will X happen?" generic yes/no
-                      if (/will |is |are |does |did |has |have /i.test(title)) return ["Yes", "No"];
-                      return ["Yes", "No"];
-                    };
-                    const [derivedYes, derivedNo] = deriveLabels();
-
-                    // ── Extract outcome label from a single outcome object ─────────────────────
-                    // Jupiter stores names in many different fields — try them all
-                    const extractOutcomeLabel = (o, fallback) =>
-                      o?.label       ||
-                      o?.name        ||
-                      o?.title       ||
-                      o?.outcome     ||
-                      o?.description ||
-                      o?.text        ||
-                      o?.value       ||
-                      (typeof o === "string" ? o : null) ||
-                      fallback;
-
-                    // Build a normalised outcome list with label + price for every option
-                    const buildOutcomes = () => {
-                      if (rawOutcomes.length > 0) {
-                        // Try to pull YES/NO labels from event-level fields first
-                        // Jupiter sometimes puts them at m.yesLabel / m.noLabel / openMkt.yesLabel etc.
-                        const evtYes = m.yesLabel || m.yesOutcome || m.yes_label ||
-                                       openMkt?.yesLabel || openMkt?.yesOutcome ||
-                                       m.metadata?.yesLabel || m.metadata?.yesOutcome;
-                        const evtNo  = m.noLabel  || m.noOutcome  || m.no_label  ||
-                                       openMkt?.noLabel  || openMkt?.noOutcome  ||
-                                       m.metadata?.noLabel  || m.metadata?.noOutcome;
-
-                        return rawOutcomes.map((o, idx) => {
-                          // For binary (idx 0 = YES, idx 1 = NO) fall back to event-level labels
-                          // then title-derived, then generic
-                          let label;
-                          if (idx === 0) {
-                            label = extractOutcomeLabel(o, null) || evtYes || derivedYes;
-                          } else if (idx === 1) {
-                            label = extractOutcomeLabel(o, null) || evtNo  || derivedNo;
-                          } else {
-                            label = extractOutcomeLabel(o, `Option ${idx + 1}`);
-                          }
-                          // Reject generic placeholder labels and replace with derived ones
-                          if (/^option\s*\d+$/i.test(label)) {
-                            label = idx === 0 ? (evtYes || derivedYes)
-                                  : idx === 1 ? (evtNo  || derivedNo)
-                                  : `Choice ${idx + 1}`;
-                          }
-                          // Per-outcome pricing lives at o.pricing or o.price or o.buyYesPriceUsd
-                          const raw = o.pricing?.buyYesPriceUsd ?? o.pricing?.priceUsd ??
-                                      o.priceUsd ?? o.price ??
-                                      // For binary, fall back to global pricing
-                                      (idx === 0 ? rawYesGlobal : idx === 1 ? rawNoGlobal : null);
-                          const pct = o.probability ?? o.odds ?? (raw != null ? Math.round(raw / 10_000) : null);
-                          const priceDisplay = raw != null ? `$${(raw / 1_000_000).toFixed(2)}`
-                                             : (pct != null ? `${pct}%` : null);
-                          return { label, priceDisplay, raw, pct, outcomeIndex: idx };
-                        });
-                      }
-                      // No outcomes array at all — pure binary fallback
-                      const yesLabel = m.yesLabel || m.yesOutcome || openMkt?.yesLabel || derivedYes;
-                      const noLabel  = m.noLabel  || m.noOutcome  || openMkt?.noLabel  || derivedNo;
-                      return [
-                        { label: yesLabel, priceDisplay: rawYesGlobal != null ? `$${(rawYesGlobal/1_000_000).toFixed(2)}` : null, raw: rawYesGlobal, pct: rawYesGlobal != null ? Math.round(rawYesGlobal/10_000) : null, outcomeIndex: 0 },
-                        { label: noLabel,  priceDisplay: rawNoGlobal  != null ? `$${(rawNoGlobal /1_000_000).toFixed(2)}` : null, raw: rawNoGlobal,  pct: rawNoGlobal  != null ? Math.round(rawNoGlobal /10_000) : null, outcomeIndex: 1 },
-                      ];
-                    };
-
-                    const allOutcomes = buildOutcomes();
-
-                    // Always sort by probability desc so favourites appear first
-                    const displayOutcomes = [...allOutcomes].sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0));
                     return (
-                      <div key={marketId||i}
+                      <div key={evt.eventId || i}
                         style={{ padding:"14px", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:10, background:T.bg }}>
-                        {/* Title row */}
-                        <div style={{ fontWeight:600, fontSize:13, color:T.text1, marginBottom:5, lineHeight:1.4 }}>{title}</div>
-                        {/* Description / resolution criteria */}
-                        {desc && (
-                          <div style={{ fontSize:11, color:T.text3, marginBottom:6, lineHeight:1.4, fontStyle:"italic" }}>
-                            {desc.length > 120 ? desc.slice(0, 120) + "…" : desc}
-                          </div>
-                        )}
+                        {/* Event title */}
+                        <div style={{ fontWeight:600, fontSize:13, color:T.text1, marginBottom:3, lineHeight:1.4 }}>{evtTitle}</div>
+                        {evtSubtitle && <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontStyle:"italic" }}>{evtSubtitle}</div>}
                         {/* Meta row */}
                         <div style={{ fontSize:11, color:T.text3, display:"flex", flexWrap:"wrap", gap:10, marginBottom:10 }}>
                           {cat && <span>📂 {cat}</span>}
@@ -2404,58 +2310,63 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                           )}
                           {volFmt && <span>💰 {volFmt} vol</span>}
                         </div>
-                        {/* Outcome rows — every market uses stacked rows with YES + NO per outcome */}
-                        {marketId ? (
-                          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                            {displayOutcomes.map((o, oi) => {
-                              // For binary markets: outcome[0] YES price = rawYesGlobal, outcome[1] YES price = rawNoGlobal
-                              // For multi: each outcome has its own YES price; NO = 1 - YES (complement)
-                              const yesRaw = o.raw ?? (oi === 0 ? rawYesGlobal : oi === 1 && !isMulti ? rawNoGlobal : null);
-                              const noRaw  = isMulti
-                                ? (yesRaw != null ? Math.round((1_000_000 - yesRaw)) : null)   // complement
-                                : (oi === 0 ? rawNoGlobal : rawYesGlobal);                      // binary flip
-                              const yesPr  = yesRaw != null ? `$${(yesRaw/1_000_000).toFixed(2)}` : null;
-                              const noPr   = noRaw  != null ? `$${(noRaw /1_000_000).toFixed(2)}` : null;
-                              const pctVal = o.pct ?? (yesRaw != null ? Math.round(yesRaw/10_000) : null);
+                        {/* One row per market/outcome — each has its own YES + NO price */}
+                        {displayMarkets.length > 0 ? (
+                          <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+                            {displayMarkets.map((mk, mi) => {
+                              // Market title = the outcome name (e.g. "Gavin Newsom", "Arsenal wins")
+                              const outcomeLabel = mk.metadata?.title || mk.title || mk.name || `Option ${mi+1}`;
+                              const marketId     = mk.marketId || mk.id || mk.pubkey;
+                              const yesRaw       = mk.pricing?.buyYesPriceUsd;
+                              const noRaw        = mk.pricing?.buyNoPriceUsd;
+                              const yesPr        = yesRaw != null ? `$${(yesRaw/1_000_000).toFixed(2)}` : null;
+                              const noPr         = noRaw  != null ? `$${(noRaw /1_000_000).toFixed(2)}` : null;
+                              // Probability = YES price / $1.00
+                              const pct          = yesRaw != null ? Math.round(yesRaw / 10_000) : null;
+                              const isClosed     = mk.status && mk.status !== "open";
                               return (
-                                <div key={oi} style={{ border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden" }}>
-                                  {/* Outcome label + probability bar */}
-                                  <div style={{ padding:"7px 10px 4px", background:T.surface }}>
-                                    <div style={{ fontWeight:600, fontSize:12, color:T.text1, wordBreak:"break-word", lineHeight:1.3 }}>{o.label}</div>
-                                    {pctVal != null && (
-                                      <div style={{ marginTop:4 }}>
+                                <div key={marketId || mi} style={{ border:`1px solid ${T.border}`, borderRadius:7, overflow:"hidden", opacity: isClosed ? 0.5 : 1 }}>
+                                  {/* Outcome name + probability bar */}
+                                  <div style={{ padding:"6px 10px 4px", background:T.surface }}>
+                                    <div style={{ fontWeight:600, fontSize:12, color:T.text1, lineHeight:1.3 }}>{outcomeLabel}</div>
+                                    {pct != null && (
+                                      <div style={{ marginTop:3 }}>
                                         <div style={{ height:3, borderRadius:3, background:T.border, overflow:"hidden" }}>
-                                          <div style={{ height:"100%", width:`${pctVal}%`, background:`linear-gradient(90deg,${T.green},${T.greenBd})`, borderRadius:3 }}/>
+                                          <div style={{ height:"100%", width:`${Math.min(pct,100)}%`, background:`linear-gradient(90deg,${T.green},${T.greenBd})`, borderRadius:3 }}/>
                                         </div>
-                                        <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{pctVal}%</div>
+                                        <div style={{ fontSize:10, color:T.text3, marginTop:1 }}>{pct}%</div>
                                       </div>
                                     )}
                                   </div>
-                                  {/* YES / NO buttons side by side */}
-                                  <div style={{ display:"flex" }}>
-                                    <button onClick={() => {
-                                      setBetMarket({ marketId, title, outcomeLabel: o.label, outcomeIndex: o.outcomeIndex, priceDisplay: yesPr, yesPrice: yesRaw != null ? (yesRaw/1_000_000).toFixed(2) : null });
-                                      setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                                    }} className="hov-btn"
-                                      style={{ flex:1, padding:"8px 6px", background:T.greenBg, border:"none", borderTop:`1px solid ${T.greenBd}`, borderRight:`1px solid ${T.greenBd}`, color:T.green, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
-                                      YES {yesPr || ""}
-                                    </button>
-                                    <button onClick={() => {
-                                      setBetMarket({ marketId, title, outcomeLabel: `NOT: ${o.label}`, outcomeIndex: o.outcomeIndex, priceDisplay: noPr, yesPrice: noRaw != null ? (noRaw/1_000_000).toFixed(2) : null });
-                                      setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                                    }} className="hov-btn"
-                                      style={{ flex:1, padding:"8px 6px", background:T.redBg, border:"none", borderTop:`1px solid ${T.redBd}`, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
-                                      NO {noPr || ""}
-                                    </button>
-                                  </div>
+                                  {/* YES / NO buttons */}
+                                  {!isClosed && marketId ? (
+                                    <div style={{ display:"flex" }}>
+                                      <button onClick={() => {
+                                        setBetMarket({ marketId, title: evtTitle, outcomeLabel, priceDisplay: yesPr, yesPrice: yesRaw != null ? (yesRaw/1_000_000).toFixed(2) : null });
+                                        setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                      }} className="hov-btn"
+                                        style={{ flex:1, padding:"7px 6px", background:T.greenBg, border:"none", borderTop:`1px solid ${T.greenBd}`, borderRight:`1px solid ${T.greenBd}`, color:T.green, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
+                                        YES {yesPr || ""}
+                                      </button>
+                                      <button onClick={() => {
+                                        setBetMarket({ marketId, title: evtTitle, outcomeLabel: `NO: ${outcomeLabel}`, priceDisplay: noPr, yesPrice: noRaw != null ? (noRaw/1_000_000).toFixed(2) : null });
+                                        setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                      }} className="hov-btn"
+                                        style={{ flex:1, padding:"7px 6px", background:T.redBg, border:"none", borderTop:`1px solid ${T.redBd}`, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
+                                        NO {noPr || ""}
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div style={{ padding:"6px 10px", fontSize:10, color:T.text3, fontStyle:"italic" }}>
+                                      {isClosed ? "Closed" : "Not tradeable"}
+                                    </div>
+                                  )}
                                 </div>
                               );
                             })}
                           </div>
                         ) : (
-                          <div style={{ fontSize:11, color:T.text3, fontStyle:"italic" }}>
-                            Market closed or not yet tradeable
-                          </div>
+                          <div style={{ fontSize:11, color:T.text3, fontStyle:"italic" }}>No open markets for this event</div>
                         )}
                       </div>
                     );
