@@ -16,12 +16,28 @@ import BN from "bn.js";
 import { getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
 import { getOperateIx }                         from "@jup-ag/lend/borrow";
 
-// REMOVED: import { Client } from "@jup-ag/lend-read";
-// @jup-ag/lend-read does not exist — caused Vercel cold-start crash → HTML error page
-// colMint / debtMint are now sent directly by the frontend from MULTIPLY_VAULTS config
+// NOTE: @jup-ag/lend-read was removed — that package does not exist.
+// It caused Vercel to crash at cold-start and return an HTML error page
+// ("A server error occurred") instead of JSON, producing the
+// "Unexpected token 'A'" parse error on the frontend.
+//
+// Mint addresses are now resolved server-side from VAULT_MINTS below.
+// The frontend may also send colMint/debtMint; server-side map is the fallback.
 
 const RPC_URL  = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const LITE_API = "https://lite-api.jup.ag/swap/v1";
+
+// Server-side vault mint map — keyed by vaultId integer.
+// Mirrors MULTIPLY_VAULTS in JupChat.jsx; update here if Jupiter adds new vaults.
+const VAULT_MINTS = {
+  1: { colMint: "So11111111111111111111111111111111111111112",     debtMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // SOL/USDC
+  2: { colMint: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", debtMint: "So11111111111111111111111111111111111111112"   },      // JitoSOL/SOL
+  3: { colMint: "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v",  debtMint: "So11111111111111111111111111111111111111112"   },      // JupSOL/SOL
+  4: { colMint: "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh", debtMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // WBTC/USDC
+  5: { colMint: "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4", debtMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // JLP/USDC
+  6: { colMint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",  debtMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // JUP/USDC
+  7: { colMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", debtMint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"  }, // USDC/USDT
+};
 
 // ── Helper: resolve address lookup tables ─────────────────────────────────────
 async function resolveAlts(connection, keys = []) {
@@ -59,24 +75,39 @@ export default async function handler(req, res) {
   // Frontend sends:
   //   vaultId          — integer vault ID (1–7)
   //   initialColAmount — collateral in raw token units (e.g. lamports for SOL)
-  //   debtAmount       — debt to borrow in raw DEBT token units (e.g. µUSDC @ 6 dec)
+  //   debtAmount       — debt to borrow in raw DEBT token units
   //   positionId       — 0 for new position, or existing NFT position ID
   //   signer           — user wallet public key string
-  //   colMint          — collateral token mint address (from MULTIPLY_VAULTS on frontend)
-  //   debtMint         — debt token mint address (from MULTIPLY_VAULTS on frontend)
+  //   colMint          — (optional) collateral mint; falls back to VAULT_MINTS
+  //   debtMint         — (optional) debt mint; falls back to VAULT_MINTS
   const {
     vaultId,
     initialColAmount,
     debtAmount,
     positionId = 0,
     signer,
-    colMint:  colMintStr,
-    debtMint: debtMintStr,
-  } = req.body;
+    colMint:  colMintOverride,
+    debtMint: debtMintOverride,
+  } = req.body ?? {};
 
-  if (!vaultId || !initialColAmount || !debtAmount || !signer || !colMintStr || !debtMintStr) {
+  // Validate required fields with specific error per missing field
+  const missing = [];
+  if (!vaultId)          missing.push("vaultId");
+  if (!initialColAmount) missing.push("initialColAmount");
+  if (!debtAmount)       missing.push("debtAmount");
+  if (!signer)           missing.push("signer");
+  if (missing.length) {
+    return res.status(400).json({ error: `Missing fields: ${missing.join(", ")}` });
+  }
+
+  // Resolve mints: prefer frontend-supplied values, fall back to server-side map
+  const vaultMints  = VAULT_MINTS[Number(vaultId)];
+  const colMintStr  = colMintOverride  || vaultMints?.colMint;
+  const debtMintStr = debtMintOverride || vaultMints?.debtMint;
+
+  if (!colMintStr || !debtMintStr) {
     return res.status(400).json({
-      error: "Missing fields: vaultId, initialColAmount, debtAmount, signer, colMint, debtMint",
+      error: `Unknown vaultId ${vaultId}. Use a valid vault ID (1–7) or pass colMint and debtMint explicitly.`,
     });
   }
 
@@ -158,7 +189,7 @@ export default async function handler(req, res) {
       console.error("[multiply] getOperateIx error:", msg);
       if (msg.includes("return data") || msg.includes("No return data")) {
         return res.status(500).json({
-          error: `Vault ${vaultId} simulation failed. The vault may be paused, or the amounts are outside its limits. Try a smaller amount or a different vault.`,
+          error: `Vault ${vaultId} simulation failed. The vault may be paused or amounts are outside its limits. Try a smaller amount or different vault.`,
         });
       }
       throw sdkErr;
