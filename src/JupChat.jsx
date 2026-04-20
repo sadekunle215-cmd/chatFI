@@ -847,7 +847,6 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action:           "open",
           vaultId:          vault.vaultId,
           positionId:       0,
           initialColAmount: colRaw.toString(),
@@ -855,9 +854,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
           signer:           walletFull,
         }),
       });
-      let data;
-      try { data = await res.json(); }
-      catch { throw new Error(`Server error (HTTP ${res.status}) — check Vercel logs. Make sure @jup-ag/lend-read is in package.json and deployed.`); }
+      const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned from multiply API.");
 
@@ -2286,40 +2283,65 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                     const markets  = Array.isArray(m.markets) ? m.markets : (m.market ? [m.market] : []);
                     const openMkt  = markets.find(mk => mk.status === "open") || markets[0];
                     const marketId = openMkt?.marketId || openMkt?.id || openMkt?.pubkey || null;
-                    // Pricing: buyYesPriceUsd / buyNoPriceUsd in native units (1_000_000 = $1.00)
-                    const pricing  = m.pricing || openMkt?.pricing || {};
-                    const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
-                    const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
-                    const yesPrice = rawYes != null ? (rawYes / 1_000_000).toFixed(2) : null;
-                    const noPrice  = rawNo  != null ? (rawNo  / 1_000_000).toFixed(2) : null;
-                    // Implied probability from price (prediction market price ≈ probability)
-                    const yesPct   = yesPrice ? Math.round(parseFloat(yesPrice) * 100) : null;
-                    const noPct    = noPrice  ? Math.round(parseFloat(noPrice)  * 100) : null;
                     const vol      = m.volumeUsd || m.volume || m.totalVolume || openMkt?.pricing?.volume;
                     const volFmt   = vol > 0 ? (vol >= 1_000_000 ? `$${(vol/1_000_000).toFixed(1)}M` : `$${(vol/1_000).toFixed(0)}K`) : null;
-                    // Parse YES/NO outcome labels — try every known field shape
-                    const outcomes = openMkt?.outcomes || m.outcomes || m.options || openMkt?.options || [];
-                    const yesOutcome = outcomes[0]?.label || outcomes[0]?.name || outcomes[0]?.title ||
-                      m.yesLabel || m.yesOutcome || openMkt?.yesLabel || (() => {
-                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
-                        if (vs) return `${vs[1].trim()} wins`;
-                        if (/will .+ win/i.test(title)) return "Yes, wins";
-                        if (/price|hit|\$|above|over|exceed/i.test(title)) return "Yes, it will";
-                        return "Yes";
-                      })();
-                    const noOutcome = outcomes[1]?.label || outcomes[1]?.name || outcomes[1]?.title ||
-                      m.noLabel || m.noOutcome || openMkt?.noLabel || (() => {
-                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
-                        if (vs) return `${vs[2].trim()} wins / Draw`;
-                        if (/will .+ win/i.test(title)) return "No, won't win";
-                        if (/price|hit|\$|above|over|exceed/i.test(title)) return "No, it won't";
-                        return "No";
-                      })();
                     // Closes soon flag
                     const closeSoon = closeTs && (() => {
                       const ms = typeof closeTs === "number" ? closeTs * 1000 : new Date(closeTs).getTime();
-                      return ms - Date.now() < 86400000 * 3; // within 3 days
+                      return ms - Date.now() < 86400000 * 3;
                     })();
+
+                    // ── Full outcomes array — covers binary AND multi-outcome markets ──
+                    // Jupiter returns outcomes at multiple possible paths
+                    const rawOutcomes = openMkt?.outcomes || m.outcomes || m.options || openMkt?.options || [];
+
+                    // ── MULTI-OUTCOME MARKET (3+ options, e.g. "Who wins UCL?") ──────
+                    const isMulti = rawOutcomes.length > 2;
+
+                    // Build a normalised outcome list with label + price for every option
+                    const buildOutcomes = () => {
+                      if (rawOutcomes.length > 0) {
+                        return rawOutcomes.map((o, idx) => {
+                          const label = o.label || o.name || o.title || o.outcome || `Option ${idx + 1}`;
+                          // Per-outcome pricing lives at o.pricing or o.price or o.buyYesPriceUsd
+                          const raw = o.pricing?.buyYesPriceUsd ?? o.pricing?.priceUsd ?? o.priceUsd ?? o.price ?? null;
+                          const pct = o.probability ?? o.odds ?? (raw != null ? raw / 10_000 : null);
+                          const priceDisplay = raw != null ? `$${(raw / 1_000_000).toFixed(2)}` : (pct != null ? `${Math.round(pct)}%` : null);
+                          return { label, priceDisplay, raw, pct, outcomeIndex: idx };
+                        });
+                      }
+                      // Binary fallback: no outcomes array at all
+                      const pricing  = m.pricing || openMkt?.pricing || {};
+                      const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
+                      const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
+                      const yesLabel = m.yesLabel || openMkt?.yesLabel || (() => {
+                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
+                        if (vs) return `${vs[1].trim()} wins`;
+                        if (/will .+ win/i.test(title)) return "Yes, wins";
+                        return "Yes";
+                      })();
+                      const noLabel = m.noLabel || openMkt?.noLabel || (() => {
+                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
+                        if (vs) return `${vs[2].trim()} wins / Draw`;
+                        if (/will .+ win/i.test(title)) return "No, won't win";
+                        return "No";
+                      })();
+                      return [
+                        { label: yesLabel, priceDisplay: rawYes != null ? `$${(rawYes/1_000_000).toFixed(2)}` : null, raw: rawYes, pct: rawYes != null ? Math.round(rawYes/10_000) : null, outcomeIndex: 0 },
+                        { label: noLabel,  priceDisplay: rawNo  != null ? `$${(rawNo /1_000_000).toFixed(2)}` : null, raw: rawNo,  pct: rawNo  != null ? Math.round(rawNo /10_000) : null, outcomeIndex: 1 },
+                      ];
+                    };
+
+                    const allOutcomes = buildOutcomes();
+                    // For binary only: keep the probability bar
+                    const yesPct = !isMulti ? allOutcomes[0]?.pct : null;
+                    const noPct  = !isMulti ? allOutcomes[1]?.pct : null;
+
+                    // Sort multi-outcome by probability desc so favourites are first
+                    const displayOutcomes = isMulti
+                      ? [...allOutcomes].sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0))
+                      : allOutcomes;
+
                     return (
                       <div key={marketId||i}
                         style={{ padding:"14px", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:10, background:T.bg }}>
@@ -2340,9 +2362,10 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                             </span>
                           )}
                           {volFmt && <span>💰 {volFmt} vol</span>}
+                          {isMulti && <span style={{ color:T.accent }}>🎯 {allOutcomes.length} outcomes</span>}
                         </div>
-                        {/* Probability bar */}
-                        {yesPct != null && noPct != null && (
+                        {/* Binary probability bar — only for 2-outcome markets */}
+                        {!isMulti && yesPct != null && noPct != null && (
                           <div style={{ marginBottom:10 }}>
                             <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3, marginBottom:3 }}>
                               <span style={{ color:T.green }}>YES {yesPct}%</span>
@@ -2353,26 +2376,45 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                             </div>
                           </div>
                         )}
-                        {/* YES / NO buttons */}
+                        {/* Outcome buttons — binary (side-by-side) or multi (stacked list) */}
                         {marketId ? (
-                          <div style={{ display:"flex", gap:8 }}>
-                            <button onClick={() => {
-                              setBetMarket({ marketId, title, yesPrice, noPrice, yesOutcome, noOutcome });
-                              setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                            }} className="hov-btn"
-                              style={{ flex:1, padding:"9px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
-                              <div style={{fontWeight:700, fontSize:13}}>YES {yesPrice ? `$${yesPrice}` : ""}</div>
-                              <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{yesOutcome}</div>
-                            </button>
-                            <button onClick={() => {
-                              setBetMarket({ marketId, title, yesPrice, noPrice, yesOutcome, noOutcome });
-                              setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                            }} className="hov-btn"
-                              style={{ flex:1, padding:"9px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
-                              <div style={{fontWeight:700, fontSize:13}}>NO {noPrice ? `$${noPrice}` : ""}</div>
-                              <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{noOutcome}</div>
-                            </button>
-                          </div>
+                          isMulti ? (
+                            // ── Multi-outcome: stacked rows, one per team/option ──────────
+                            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                              {displayOutcomes.map((o, oi) => (
+                                <button key={oi} onClick={() => {
+                                  setBetMarket({ marketId, title, outcomeLabel: o.label, outcomeIndex: o.outcomeIndex, priceDisplay: o.priceDisplay, yesPrice: o.raw != null ? (o.raw/1_000_000).toFixed(2) : null });
+                                  setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                }} className="hov-btn"
+                                  style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"9px 12px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"left", width:"100%" }}>
+                                  <span style={{ fontWeight:600 }}>{o.label}</span>
+                                  <span style={{ fontSize:11, opacity:0.9, marginLeft:8, whiteSpace:"nowrap" }}>
+                                    {o.pct != null ? `${o.pct}%` : ""}{o.priceDisplay ? ` · ${o.priceDisplay}` : ""}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            // ── Binary: original side-by-side YES / NO buttons ────────────
+                            <div style={{ display:"flex", gap:8 }}>
+                              <button onClick={() => {
+                                setBetMarket({ marketId, title, yesPrice: allOutcomes[0]?.raw != null ? (allOutcomes[0].raw/1_000_000).toFixed(2) : null, noPrice: allOutcomes[1]?.raw != null ? (allOutcomes[1].raw/1_000_000).toFixed(2) : null, yesOutcome: allOutcomes[0]?.label, noOutcome: allOutcomes[1]?.label });
+                                setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                              }} className="hov-btn"
+                                style={{ flex:1, padding:"9px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
+                                <div style={{fontWeight:700, fontSize:13}}>YES {allOutcomes[0]?.priceDisplay || ""}</div>
+                                <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{allOutcomes[0]?.label}</div>
+                              </button>
+                              <button onClick={() => {
+                                setBetMarket({ marketId, title, yesPrice: allOutcomes[0]?.raw != null ? (allOutcomes[0].raw/1_000_000).toFixed(2) : null, noPrice: allOutcomes[1]?.raw != null ? (allOutcomes[1].raw/1_000_000).toFixed(2) : null, yesOutcome: allOutcomes[0]?.label, noOutcome: allOutcomes[1]?.label });
+                                setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                              }} className="hov-btn"
+                                style={{ flex:1, padding:"9px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
+                                <div style={{fontWeight:700, fontSize:13}}>NO {allOutcomes[1]?.priceDisplay || ""}</div>
+                                <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{allOutcomes[1]?.label}</div>
+                              </button>
+                            </div>
+                          )
                         ) : (
                           <div style={{ fontSize:11, color:T.text3, fontStyle:"italic" }}>
                             Market closed or not yet tradeable
@@ -2459,27 +2501,47 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                 </>);
               })()}
 
-              <div style={{ fontSize:12, color:T.text3, marginBottom:10 }}>Choose outcome:</div>
-              <div style={{ display:"flex", gap:10, marginBottom:16 }}>
-                {[
-                  { side:"yes", label:"YES", sublabel: betMarket.yesOutcome || "", price:betMarket.yesPrice, bg:T.greenBg, bd:T.greenBd, col:T.green },
-                  { side:"no",  label:"NO",  sublabel: betMarket.noOutcome  || "", price:betMarket.noPrice,  bg:T.redBg,  bd:T.redBd,  col:T.red  },
-                ].map(({ side, label, sublabel, price, bg, bd, col }) => {
-                  const prob = price ? Math.round(parseFloat(price) * 100) + "%" : null;
-                  const payout = price && betAmount && parseFloat(betAmount) >= 5
-                    ? `Win $${(parseFloat(betAmount) / parseFloat(price)).toFixed(2)}`
-                    : null;
-                  return (
-                    <button key={side} onClick={() => setBetSide(side)} className="hov-pick"
-                      style={{ flex:1, padding:"12px 8px", border:`2px solid ${betSide===side?col:T.border}`, borderRadius:10, background:betSide===side?bg:T.bg, color:betSide===side?col:T.text2, fontSize:13, fontWeight:betSide===side?700:400, cursor:"pointer", transition:"all 0.15s", textAlign:"center" }}>
-                      <div style={{ fontSize:15, fontWeight:700 }}>{label}</div>
-                      {sublabel && <div style={{ fontSize:11, opacity:0.85, marginTop:1, lineHeight:1.3 }}>{sublabel}</div>}
-                      {price && <div style={{ fontSize:11, opacity:0.7, marginTop:2 }}>${price} · {prob}</div>}
-                      {payout && betSide===side && <div style={{ fontSize:11, color:col, marginTop:2 }}>{payout}</div>}
-                    </button>
-                  );
-                })}
+              <div style={{ fontSize:12, color:T.text3, marginBottom:10 }}>
+                {betMarket.outcomeLabel ? "Selected outcome:" : "Choose outcome:"}
               </div>
+              {betMarket.outcomeLabel ? (
+                <div style={{ padding:"12px 14px", background:T.greenBg, border:`2px solid ${T.greenBd}`, borderRadius:10, marginBottom:16 }}>
+                  <div style={{ fontWeight:700, fontSize:14, color:T.green }}>{betMarket.outcomeLabel}</div>
+                  {betMarket.priceDisplay && (
+                    <div style={{ fontSize:12, color:T.green, opacity:0.85, marginTop:4 }}>
+                      Price: {betMarket.priceDisplay}
+                      {betMarket.yesPrice && betAmount && parseFloat(betAmount) >= 5
+                        ? ` · Est. win: $${(parseFloat(betAmount) / parseFloat(betMarket.yesPrice)).toFixed(2)}`
+                        : ""}
+                    </div>
+                  )}
+                  <button onClick={() => { setShowBet(false); setShowPredList(true); }}
+                    style={{ marginTop:8, fontSize:11, background:"none", border:`1px solid ${T.greenBd}`, borderRadius:6, color:T.green, padding:"3px 10px", cursor:"pointer" }}>
+                    ← Pick a different outcome
+                  </button>
+                </div>
+              ) : (
+                <div style={{ display:"flex", gap:10, marginBottom:16 }}>
+                  {[
+                    { side:"yes", label:"YES", sublabel: betMarket.yesOutcome || "", price:betMarket.yesPrice, bg:T.greenBg, bd:T.greenBd, col:T.green },
+                    { side:"no",  label:"NO",  sublabel: betMarket.noOutcome  || "", price:betMarket.noPrice,  bg:T.redBg,  bd:T.redBd,  col:T.red  },
+                  ].map(({ side, label, sublabel, price, bg, bd, col }) => {
+                    const prob = price ? Math.round(parseFloat(price) * 100) + "%" : null;
+                    const payout = price && betAmount && parseFloat(betAmount) >= 5
+                      ? `Win $${(parseFloat(betAmount) / parseFloat(price)).toFixed(2)}`
+                      : null;
+                    return (
+                      <button key={side} onClick={() => setBetSide(side)} className="hov-pick"
+                        style={{ flex:1, padding:"12px 8px", border:`2px solid ${betSide===side?col:T.border}`, borderRadius:10, background:betSide===side?bg:T.bg, color:betSide===side?col:T.text2, fontSize:13, fontWeight:betSide===side?700:400, cursor:"pointer", transition:"all 0.15s", textAlign:"center" }}>
+                        <div style={{ fontSize:15, fontWeight:700 }}>{label}</div>
+                        {sublabel && <div style={{ fontSize:11, opacity:0.85, marginTop:1, lineHeight:1.3 }}>{sublabel}</div>}
+                        {price && <div style={{ fontSize:11, opacity:0.7, marginTop:2 }}>${price} · {prob}</div>}
+                        {payout && betSide===side && <div style={{ fontSize:11, color:col, marginTop:2 }}>{payout}</div>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
                 <input type="number" placeholder="Amount (USDC, min $5)" value={betAmount}
                   onChange={e => setBetAmount(e.target.value)}
