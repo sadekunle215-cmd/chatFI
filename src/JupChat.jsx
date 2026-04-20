@@ -13,8 +13,10 @@ const JUP_TOKEN_RECENT = `${JUP_BASE}/tokens/v2/recent`;       // recently liste
 const JUP_TOKEN_VERIFY = `${JUP_BASE}/tokens/v2/verify/express/check-eligibility`; // Express verification eligibility
 const JUP_SWAP_ORDER   = `${JUP_BASE}/swap/v2/order`;        // v2 meta-aggregator (RTSE auto, gasless auto)
 const JUP_SWAP_EXEC    = `${JUP_BASE}/swap/v2/execute`;      // v2 execute
-const JUP_TRIGGER_BASE = `${JUP_BASE}/trigger/v1`;
-const JUP_TRIGGER_EXEC = `${JUP_LITE}/trigger/v1/execute`;
+const JUP_TRIGGER_BASE  = `${JUP_BASE}/trigger/v1`;       // v1 kept for legacy reference
+const JUP_TRIGGER_EXEC  = `${JUP_LITE}/trigger/v1/execute`;
+const JUP_TV2           = `${JUP_BASE}/trigger/v2`;       // v2: JWT auth, USD price, vault, OCO/OTOCO
+const JUP_TV2_LITE      = `${JUP_LITE}/trigger/v2`;
 const JUP_RECUR_BASE   = `${JUP_BASE}/recurring/v1`;      // createOrder, execute, cancelOrder, getRecurringOrders
 const JUP_PORTFOLIO    = `${JUP_BASE}/portfolio/v1`;
 const JUP_PRED_API     = `${JUP_BASE}/prediction/v1`;
@@ -103,7 +105,13 @@ Available actions:
   • amount: token units — when user says "swap 10 SOL"
   • amountUSD: dollar value — when user says "swap $10 of SOL"
   Examples: "swap all my USDC→SOL" → portion:"all", from:"USDC" | "swap half my SOL→BONK" → portion:"half"
-- "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "targetPrice": "150", "amount": "5", "portion": null, "hint": "brief why" } — extract targetPrice, amount, or portion from user message.
+- "SHOW_TRIGGER_V2"  → actionData: { "orderType": "single"|"oco"|"otoco", "from": "USDC", "to": "SOL", "amount": "100", "triggerCondition": "below"|"above", "triggerPriceUsd": "150", "tpPriceUsd": "200", "slPriceUsd": "120", "slippageBps": "100", "expiryDays": "7" }
+  • single: one trigger price — standard limit order or stop-loss
+  • oco: take-profit + stop-loss pair sharing one deposit — when one fills the other cancels
+  • otoco: entry trigger fires first, then auto-activates a TP/SL (OCO) on the output
+  • triggerPriceUsd required for single/otoco; tpPriceUsd+slPriceUsd required for oco/otoco; TP must be > SL
+  • Min order: $10 USD. Default expiry: 7 days. slippage defaults: TP/buy-below=auto, SL/buy-above=20%
+- "FETCH_TRIGGER_ORDERS" → actionData: { "state": "active" } — state: "active"|"past". Show open orders with cancel buttons.
 - "SHOW_RECURRING"   → actionData: { "from": "USDC", "to": "SOL", "amountPerCycle": "10", "numberOfOrders": "10", "intervalSecs": "86400", "reason": "brief why" } — time-based DCA. intervalSecs: 60=1min,3600=1hr,86400=1day,604800=1wk,2592000=1mo
 - "FETCH_RECURRING_ORDERS" → actionData: { "status": "active" } — status: "active"|"history". Show user open or past recurring orders with cancel buttons.
 - "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players", "searchQuery": "Arsenal Man City" } — ALWAYS set searchQuery. ALSO trigger FETCH_PREDICTIONS with the same query.
@@ -130,7 +138,10 @@ Rules:
 - "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY
 - "my lend positions" / "my borrow positions" / "close position" / "unwind" / "deleverage" / "repay with collateral" → SHOW_LEND_POSITIONS
 - "flashloan" / "flash loan" → explain: zero-fee atomic loan, repay within same tx; use cases: arbitrage, liquidations, collateral swaps
-- "limit order" / "buy when price hits" → SHOW_TRIGGER
+- "limit order" / "buy below $X" / "sell above $X" / "price trigger" → SHOW_TRIGGER_V2 with orderType:"single"
+- "OCO" / "take profit and stop loss" / "TP/SL" / "bracket order" → SHOW_TRIGGER_V2 with orderType:"oco"
+- "OTOCO" / "buy then set TP/SL" / "entry + exit" / "conditional order" → SHOW_TRIGGER_V2 with orderType:"otoco"
+- "my trigger orders" / "open trigger" / "limit order history" → FETCH_TRIGGER_ORDERS
 - "DCA" / "recurring" / "buy every day/week/month" / "dollar cost average" / "auto-buy" / "schedule trades" → SHOW_RECURRING — extract from/to tokens, amount per cycle, number of orders, interval
 - "my recurring orders" / "show DCA orders" / "active recurring" / "DCA history" → FETCH_RECURRING_ORDERS
 - "cancel recurring" / "stop DCA" → FETCH_RECURRING_ORDERS (so user can see cancel buttons)
@@ -139,11 +150,11 @@ Rules:
 const SUGGESTIONS = [
   "What's the SOL price?",
   "Swap SOL to BONK",
+  "Limit order: buy SOL below $140",
+  "OCO: TP $200 SL $120 on SOL",
   "DCA $10 USDC into SOL daily",
-  "My recurring orders",
-  "Is PEPE safe to buy?",
+  "My trigger orders",
   "Top trending tokens today",
-  "Show recent token launches",
   "Arsenal vs Man City prediction",
   "Show earn vaults",
   "My portfolio & positions",
@@ -320,6 +331,26 @@ export default function JupChat() {
   const [showRecurringOrders, setShowRecurringOrders] = useState(false);
   const [recurringOrdersLoading, setRecurringOrdersLoading] = useState(false);
 
+  // Trigger v2 state — JWT, vault, orders list, active order type
+  const trigJwtRef                                    = { current: null };  // in-memory only, never persisted
+  const [trigV2Orders, setTrigV2Orders]               = useState([]);
+  const [showTrigOrders, setShowTrigOrders]           = useState(false);
+  const [trigOrdersLoading, setTrigOrdersLoading]     = useState(false);
+  const [showTrigV2, setShowTrigV2]                   = useState(false);
+  const [trigV2Cfg, setTrigV2Cfg]                     = useState({
+    orderType: 'single',          // 'single' | 'oco' | 'otoco'
+    from: 'USDC', fromMint: TOKEN_MINTS.USDC, fromDecimals: 6,
+    to: 'SOL',   toMint: TOKEN_MINTS.SOL,   toDecimals: 9,
+    amount: '',
+    triggerCondition: 'below',    // 'above' | 'below'
+    triggerPriceUsd: '',
+    tpPriceUsd: '',               // OCO / OTOCO take-profit
+    slPriceUsd: '',               // OCO / OTOCO stop-loss
+    slippageBps: '100',
+    expiryDays: '7',
+  });
+  const [trigV2Status, setTrigV2Status]               = useState(null); // null|'authing'|'signing'|'done'|'error'
+
   // Predictions — AI analysis panel (SHOW_PREDICTION action)
   const [showPred, setShowPred]   = useState(false);
   const [pred, setPred]           = useState(null);
@@ -447,7 +478,7 @@ export default function JupChat() {
     if (!container) return;
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (isNearBottom) endRef.current?.scrollIntoView({ behavior:"smooth" });
-  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders]);
+  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showTrigV2, showTrigOrders, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -1963,6 +1994,203 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     }
   };
 
+  // ── Trigger v2: authenticate (challenge → sign message → JWT) ───────────────
+  // POST /trigger/v2/auth/challenge  { walletPubkey, type:"message" }
+  // POST /trigger/v2/auth/verify     { type, walletPubkey, signature (bs58) }
+  const trigV2Authenticate = async () => {
+    const provider = getActiveProvider();
+    if (!provider) throw new Error("Wallet provider not found.");
+    // Request challenge
+    const chalRes = await jupFetch(`${JUP_TV2}/auth/challenge`, {
+      method: "POST",
+      body: { walletPubkey: walletFull, type: "message" },
+    });
+    if (chalRes.error) throw new Error("Auth challenge failed: " + (chalRes.error?.message || chalRes.error));
+    // Sign the challenge message client-side
+    const encoded = new TextEncoder().encode(chalRes.challenge);
+    if (!provider.signMessage) throw new Error("Wallet does not support message signing.");
+    const sigBytes = await provider.signMessage(encoded);
+    // bs58-encode the signature — inline without dependency
+    const B58_CHARS = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    const encodeB58 = (buf) => {
+      const digits = [0];
+      for (const byte of buf) {
+        let carry = byte;
+        for (let i = 0; i < digits.length; i++) { carry += digits[i] << 8; digits[i] = carry % 58; carry = (carry / 58) | 0; }
+        while (carry) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+      }
+      let result = "";
+      for (let i = 0; i < buf.length && buf[i] === 0; i++) result += "1";
+      for (let i = digits.length - 1; i >= 0; i--) result += B58_CHARS[digits[i]];
+      return result;
+    };
+    const sigB58 = encodeB58(sigBytes);
+    // Exchange signature for JWT
+    const verRes = await jupFetch(`${JUP_TV2}/auth/verify`, {
+      method: "POST",
+      body: { type: "message", walletPubkey: walletFull, signature: sigB58 },
+    });
+    if (!verRes.token) throw new Error("Auth verify failed: " + (verRes.error?.message || JSON.stringify(verRes)));
+    trigJwtRef.current = verRes.token;
+    return verRes.token;
+  };
+
+  // Ensure we have a valid JWT — re-authenticate if missing
+  const getOrRefreshTrigJwt = async () => {
+    if (trigJwtRef.current) return trigJwtRef.current;
+    return trigV2Authenticate();
+  };
+
+  // jupFetch wrapper that injects JWT Bearer header
+  const trigV2Fetch = async (url, opts = {}) => {
+    const jwt = await getOrRefreshTrigJwt();
+    const payload = { url, method: (opts.method || "GET").toUpperCase(), triggerJwt: jwt };
+    if (opts.body !== undefined) payload.body = typeof opts.body === "string" ? JSON.parse(opts.body) : opts.body;
+    const res = await fetch("/api/jupiter", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return res.json();
+  };
+
+  // ── Trigger v2: get or register vault ────────────────────────────────────────
+  const trigV2GetVault = async () => {
+    let v = await trigV2Fetch(`${JUP_TV2}/vault`);
+    if (v?.vaultPubkey) return v;
+    // First-time — register
+    v = await trigV2Fetch(`${JUP_TV2}/vault/register`);
+    if (!v?.vaultPubkey) throw new Error("Could not register vault: " + JSON.stringify(v));
+    return v;
+  };
+
+  // ── Trigger v2: full create flow ─────────────────────────────────────────────
+  // 1. Get vault  2. Craft deposit tx  3. Sign  4. POST /orders/price
+  const doTriggerV2 = async () => {
+    const cfg = trigV2Cfg;
+    if (!cfg.amount || !cfg.triggerPriceUsd) return;
+    if (!walletFull) { push("ai", "Connect your wallet first to place a trigger order."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found."); return; }
+    if (cfg.orderType === "oco" && (!cfg.tpPriceUsd || !cfg.slPriceUsd)) {
+      push("ai", "OCO orders require both take-profit and stop-loss prices."); return;
+    }
+    if (cfg.orderType === "otoco" && (!cfg.tpPriceUsd || !cfg.slPriceUsd)) {
+      push("ai", "OTOCO orders require trigger, take-profit, and stop-loss prices."); return;
+    }
+    setTrigV2Status("authing");
+    try {
+      // Step 1: vault
+      await trigV2GetVault();
+      // Step 2: craft deposit
+      const amountRaw = Math.floor(parseFloat(cfg.amount) * Math.pow(10, cfg.fromDecimals || 6)).toString();
+      const depRes = await trigV2Fetch(`${JUP_TV2}/deposit/craft`, {
+        method: "POST",
+        body: { inputMint: cfg.fromMint, outputMint: cfg.toMint, userAddress: walletFull, amount: amountRaw },
+      });
+      if (depRes.error) throw new Error("Deposit craft failed: " + (depRes.error?.message || depRes.error));
+      if (!depRes.transaction) throw new Error("No deposit transaction returned.");
+      // Step 3: sign deposit tx
+      setTrigV2Status("signing");
+      const binaryStr = atob(depRes.transaction);
+      const txBytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      const signedTx = await provider.signTransaction(tx);
+      const depositSignedTx = btoa(String.fromCharCode(...signedTx.serialize()));
+      // Step 4: create order
+      const expiresAt = Date.now() + parseInt(cfg.expiryDays || 7) * 86400000;
+      const orderBody = {
+        orderType: cfg.orderType,
+        depositRequestId: depRes.requestId,
+        depositSignedTx,
+        userPubkey: walletFull,
+        inputMint: cfg.fromMint,
+        inputAmount: amountRaw,
+        outputMint: cfg.toMint,
+        triggerMint: cfg.toMint,      // monitor output token price
+        expiresAt,
+      };
+      if (cfg.orderType === "single") {
+        orderBody.triggerCondition = cfg.triggerCondition;
+        orderBody.triggerPriceUsd  = parseFloat(cfg.triggerPriceUsd);
+        if (cfg.slippageBps) orderBody.slippageBps = parseInt(cfg.slippageBps);
+      } else if (cfg.orderType === "oco") {
+        orderBody.tpPriceUsd    = parseFloat(cfg.tpPriceUsd);
+        orderBody.slPriceUsd    = parseFloat(cfg.slPriceUsd);
+        if (cfg.slippageBps) { orderBody.tpSlippageBps = parseInt(cfg.slippageBps); orderBody.slSlippageBps = parseInt(cfg.slippageBps); }
+      } else if (cfg.orderType === "otoco") {
+        orderBody.triggerCondition = cfg.triggerCondition;
+        orderBody.triggerPriceUsd  = parseFloat(cfg.triggerPriceUsd);
+        orderBody.tpPriceUsd       = parseFloat(cfg.tpPriceUsd);
+        orderBody.slPriceUsd       = parseFloat(cfg.slPriceUsd);
+        if (cfg.slippageBps) { orderBody.slippageBps = parseInt(cfg.slippageBps); orderBody.tpSlippageBps = parseInt(cfg.slippageBps); orderBody.slSlippageBps = parseInt(cfg.slippageBps); }
+      }
+      const orderRes = await trigV2Fetch(`${JUP_TV2}/orders/price`, { method: "POST", body: orderBody });
+      if (orderRes.error) throw new Error("Order creation failed: " + (orderRes.error?.message || orderRes.error));
+      setTrigV2Status("done");
+      setShowTrigV2(false);
+      const typeLabel = { single: "Limit order", oco: "OCO (TP/SL)", otoco: "OTOCO (entry + TP/SL)" }[cfg.orderType];
+      const dirLabel  = cfg.triggerCondition === "below" ? "below" : "above";
+      let summary = `**${typeLabel} placed ✓**\n${cfg.amount} ${cfg.from} → ${cfg.to}\n`;
+      if (cfg.orderType === "single")  summary += `Trigger: ${cfg.from} price ${dirLabel} **$${cfg.triggerPriceUsd}**\n`;
+      if (cfg.orderType !== "single")  summary += `TP: $${cfg.tpPriceUsd}  ·  SL: $${cfg.slPriceUsd}\n`;
+      if (cfg.orderType === "otoco")   summary += `Entry trigger: ${dirLabel} $${cfg.triggerPriceUsd}\n`;
+      summary += `Expires in ${cfg.expiryDays || 7} days\nOrder ID: \`${(orderRes.id || "").slice(0, 18)}…\``;
+      push("ai", summary);
+    } catch (err) {
+      setTrigV2Status("error");
+      push("ai", "Trigger order failed: " + (err?.message || "Unknown error"));
+    }
+    setTrigV2Status(null);
+  };
+
+  // ── Trigger v2: fetch order history (active | past) ───────────────────────
+  const fetchTrigV2Orders = async (state = "active") => {
+    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+    setTrigOrdersLoading(true);
+    try {
+      const data = await trigV2Fetch(`${JUP_TV2}/orders/history?state=${state}&limit=30&offset=0`);
+      const orders = Array.isArray(data?.orders) ? data.orders : [];
+      setTrigV2Orders(orders);
+      setShowTrigOrders(true);
+      if (!orders.length) push("ai", `No ${state} trigger orders found.`);
+    } catch (err) {
+      push("ai", "Could not fetch trigger orders: " + (err?.message || "Unknown error"));
+    }
+    setTrigOrdersLoading(false);
+  };
+
+  // ── Trigger v2: cancel order (2-step: initiate → sign withdrawal → confirm) ─
+  const cancelTrigV2Order = async (orderId) => {
+    if (!orderId || !walletFull) return;
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found."); return; }
+    try {
+      // Step 1: initiate cancellation (moves order to ready_to_cancel)
+      const cancelRes = await trigV2Fetch(`${JUP_TV2}/orders/price/cancel/${orderId}`, { method: "POST" });
+      if (cancelRes.error) throw new Error(cancelRes.error?.message || cancelRes.error);
+      if (!cancelRes.transaction) throw new Error("No withdrawal transaction returned.");
+      // Step 2: sign withdrawal tx
+      const binaryStr = atob(cancelRes.transaction);
+      const txBytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      const signedTx = await provider.signTransaction(tx);
+      const signedB64 = btoa(String.fromCharCode(...signedTx.serialize()));
+      // Step 3: confirm cancellation
+      const confirmRes = await trigV2Fetch(`${JUP_TV2}/orders/price/confirm-cancel/${orderId}`, {
+        method: "POST",
+        body: { signedTransaction: signedB64, cancelRequestId: cancelRes.requestId },
+      });
+      if (confirmRes.error) throw new Error(confirmRes.error?.message || confirmRes.error);
+      push("ai", `Order cancelled ✓  Funds returned to vault.\n[View on Solscan →](https://solscan.io/tx/${confirmRes.txSignature})`);
+      setTrigV2Orders(prev => prev.filter(o => o.id !== orderId));
+    } catch (err) {
+      push("ai", "Cancel failed: " + (err?.message || "Unknown error"));
+    }
+  };
+
   // ── Recurring / DCA order — create & execute ────────────────────────────────
   // POST /recurring/v1/createOrder → { requestId, transaction }
   // POST /recurring/v1/execute     → { status, signature, order }
@@ -2103,7 +2331,7 @@ Order: \`${orderKey.slice(0,20)}…\`
     setInput("");
     push("user", raw);
     setTyping(true);
-    setShowSwap(false); setShowPred(false); setShowTrig(false); setShowRecurring(false); setShowRecurringOrders(false);
+    setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
     setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
@@ -2434,6 +2662,51 @@ Order: \`${orderKey.slice(0,20)}…\`
         if (!walletFull) { push("ai", text + "\n\nConnect your wallet first to check for claimable payouts."); }
         else { await doClaimPayouts(text); }
 
+      } else if (action === "SHOW_TRIGGER_V2") {
+        if (!walletFull) { push("ai", text + "
+
+Connect your wallet first to place a trigger order."); }
+        else {
+          const fromSym = (actionData?.from || "USDC").toUpperCase();
+          const toSym   = (actionData?.to   || "SOL").toUpperCase();
+          const rFrom   = await resolveToken(fromSym);
+          const rTo     = await resolveToken(toSym);
+          // Handle portion-based amount
+          const tSym = fromSym;
+          const tBal = portfolio[tSym] ?? 0;
+          const portion = actionData?.portion;
+          let resolvedAmt = actionData?.amount || "";
+          if (portion && tBal > 0) {
+            const p = portion.toLowerCase().trim();
+            if (p === "all")     resolvedAmt = tBal.toString();
+            else if (p === "half")    resolvedAmt = (tBal / 2).toFixed(6).replace(/\.?0+$/, "");
+            else if (p === "quarter") resolvedAmt = (tBal / 4).toFixed(6).replace(/\.?0+$/, "");
+            else { const m = p.match(/^(\d+(?:\.\d+)?)%$/); if (m) resolvedAmt = (tBal * parseFloat(m[1]) / 100).toFixed(6).replace(/\.?0+$/, ""); }
+          }
+          setTrigV2Cfg(c => ({
+            ...c,
+            orderType:        actionData?.orderType        || "single",
+            from: fromSym,    fromMint: rFrom?.mint || TOKEN_MINTS[fromSym] || c.fromMint,
+            fromDecimals: rFrom?.decimals ?? TOKEN_DECIMALS[fromSym] ?? c.fromDecimals,
+            to:   toSym,      toMint:   rTo?.mint   || TOKEN_MINTS[toSym]   || c.toMint,
+            toDecimals: rTo?.decimals   ?? TOKEN_DECIMALS[toSym]   ?? c.toDecimals,
+            amount:           resolvedAmt || c.amount,
+            triggerCondition: actionData?.triggerCondition || c.triggerCondition,
+            triggerPriceUsd:  actionData?.triggerPriceUsd  || c.triggerPriceUsd,
+            tpPriceUsd:       actionData?.tpPriceUsd        || c.tpPriceUsd,
+            slPriceUsd:       actionData?.slPriceUsd        || c.slPriceUsd,
+            slippageBps:      actionData?.slippageBps       || c.slippageBps,
+            expiryDays:       actionData?.expiryDays        || c.expiryDays,
+          }));
+          setShowTrigV2(true);
+          push("ai", text);
+        }
+
+      } else if (action === "FETCH_TRIGGER_ORDERS") {
+        const state = actionData?.state === "past" ? "past" : "active";
+        push("ai", text);
+        await fetchTrigV2Orders(state);
+
       } else if (action === "SHOW_RECURRING") {
         // Pre-populate config from AI actionData
         const fromSym = (actionData?.from || "USDC").toUpperCase();
@@ -2688,38 +2961,220 @@ Order: \`${orderKey.slice(0,20)}…\`
           )}
 
           {/* ── Limit order panel ─────────────────────────────────────────── */}
-          {showTrig && (
+          {/* ── Trigger v2 order panel ─────────────────────────────────────── */}
+          {showTrigV2 && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:16, color:T.text1 }}>Limit / DCA Order</div>
-              <div style={{ display:"flex", gap:10, marginBottom:12 }}>
-                <select value={trigCfg.token} onChange={e => setTrigCfg(c=>({...c,token:e.target.value}))}
-                  style={{ flex:1, padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}>
-                  {Object.keys(TOKEN_MINTS).filter(t=>t!=="USDC"&&t!=="USDT").map(t=><option key={t}>{t}</option>)}
-                </select>
-                <select value={trigCfg.direction} onChange={e => setTrigCfg(c=>({...c,direction:e.target.value}))}
-                  style={{ flex:1, padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}>
-                  <option value="below">Buy when below</option>
-                  <option value="above">Sell when above</option>
-                </select>
+              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>Trigger Order (v2 · USD price)</div>
+              <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>Private off-chain orders · vault-based · OCO/OTOCO supported · min $10</div>
+
+              {/* Order type tabs */}
+              <div style={{ display:"flex", gap:6, marginBottom:14 }}>
+                {[["single","Limit"],["oco","OCO TP/SL"],["otoco","OTOCO"]].map(([t,label]) => (
+                  <button key={t} onClick={() => setTrigV2Cfg(c=>({...c, orderType:t}))}
+                    style={{ flex:1, padding:"7px 4px", fontSize:12, fontWeight:600, borderRadius:8, border:"none", cursor:"pointer",
+                      background: trigV2Cfg.orderType===t ? T.purple : T.bg,
+                      color: trigV2Cfg.orderType===t ? "#fff" : T.text2 }}>
+                    {label}
+                  </button>
+                ))}
               </div>
-              <input type="number" placeholder="Target price (USD)" value={trigCfg.targetPrice}
-                onChange={e => setTrigCfg(c=>({...c,targetPrice:e.target.value}))}
-                style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:8 }}
+
+              {/* Order type description */}
+              <div style={{ fontSize:11, color:T.text3, background:T.bg, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
+                {{ single:"Single price trigger — buy or sell when the market crosses your target.",
+                   oco:"One-Cancels-Other — take-profit + stop-loss sharing one deposit. When one fills, the other cancels.",
+                   otoco:"Entry trigger fires first, then activates a TP/SL pair on the output automatically." }[trigV2Cfg.orderType]}
+              </div>
+
+              {/* From / To tokens */}
+              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Spend</div>
+                  <TokenPicker value={trigV2Cfg.from} jupFetch={jupFetch}
+                    onSelect={({symbol,mint,decimals}) => setTrigV2Cfg(c=>({...c,from:symbol,fromMint:mint,fromDecimals:decimals}))} />
+                </div>
+                <div style={{ display:"flex", alignItems:"center", paddingTop:18, color:T.text3, fontSize:18 }}>→</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Receive</div>
+                  <TokenPicker value={trigV2Cfg.to} jupFetch={jupFetch}
+                    onSelect={({symbol,mint,decimals}) => setTrigV2Cfg(c=>({...c,to:symbol,toMint:mint,toDecimals:decimals}))} />
+                </div>
+              </div>
+
+              {/* Amount */}
+              <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount ({trigV2Cfg.from})</div>
+              <input type="number" min="0" placeholder="e.g. 100"
+                value={trigV2Cfg.amount}
+                onChange={e => setTrigV2Cfg(c=>({...c, amount:e.target.value}))}
+                style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:10 }}
               />
-              <input type="number" placeholder={`Amount (${trigCfg.direction==="below"?"USDC":trigCfg.token})`} value={trigCfg.amount}
-                onChange={e => setTrigCfg(c=>({...c,amount:e.target.value}))}
-                style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:12 }}
-              />
+
+              {/* Single: trigger direction + price */}
+              {(trigV2Cfg.orderType === "single" || trigV2Cfg.orderType === "otoco") && (
+                <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Direction</div>
+                    <select value={trigV2Cfg.triggerCondition}
+                      onChange={e => setTrigV2Cfg(c=>({...c, triggerCondition:e.target.value}))}
+                      style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}>
+                      <option value="below">Buy when price is below</option>
+                      <option value="above">Sell when price is above</option>
+                    </select>
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>
+                      {trigV2Cfg.orderType === "otoco" ? "Entry price (USD)" : "Trigger price (USD)"}
+                    </div>
+                    <input type="number" min="0" placeholder="e.g. 150"
+                      value={trigV2Cfg.triggerPriceUsd}
+                      onChange={e => setTrigV2Cfg(c=>({...c, triggerPriceUsd:e.target.value}))}
+                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* OCO / OTOCO: TP + SL prices */}
+              {(trigV2Cfg.orderType === "oco" || trigV2Cfg.orderType === "otoco") && (
+                <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, color:T.accent, marginBottom:4 }}>Take-profit ($)</div>
+                    <input type="number" min="0" placeholder="e.g. 200"
+                      value={trigV2Cfg.tpPriceUsd}
+                      onChange={e => setTrigV2Cfg(c=>({...c, tpPriceUsd:e.target.value}))}
+                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.greenBd}`, borderRadius:8, background:T.bg, color:T.accent, fontSize:13 }}
+                    />
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, color:T.red, marginBottom:4 }}>Stop-loss ($)</div>
+                    <input type="number" min="0" placeholder="e.g. 120"
+                      value={trigV2Cfg.slPriceUsd}
+                      onChange={e => setTrigV2Cfg(c=>({...c, slPriceUsd:e.target.value}))}
+                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.redBd}`, borderRadius:8, background:T.bg, color:T.red, fontSize:13 }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Slippage + expiry row */}
+              <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Slippage (bps)</div>
+                  <input type="number" min="0" max="10000" placeholder="100"
+                    value={trigV2Cfg.slippageBps}
+                    onChange={e => setTrigV2Cfg(c=>({...c, slippageBps:e.target.value}))}
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  />
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Expires in (days)</div>
+                  <select value={trigV2Cfg.expiryDays}
+                    onChange={e => setTrigV2Cfg(c=>({...c, expiryDays:e.target.value}))}
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}>
+                    <option value="1">1 day</option>
+                    <option value="3">3 days</option>
+                    <option value="7">7 days</option>
+                    <option value="14">14 days</option>
+                    <option value="30">30 days</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Auth note */}
+              <div style={{ fontSize:11, color:T.text3, marginBottom:10 }}>
+                ⚡ Placing will prompt a message-sign for authentication, then a deposit transaction.
+              </div>
+
               <div style={{ display:"flex", gap:8 }}>
-                <button onClick={doTrigger} disabled={!trigCfg.targetPrice||!trigCfg.amount} className="hov-btn"
-                  style={{ flex:1, padding:"10px", background:T.purple, border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:500, cursor:"pointer" }}>
-                  Place Order
+                <button onClick={doTriggerV2}
+                  disabled={!trigV2Cfg.amount || trigV2Status === "authing" || trigV2Status === "signing"}
+                  className="hov-btn"
+                  style={{ flex:1, padding:"10px", background: trigV2Status ? T.border : T.purple, border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:600, cursor:"pointer" }}>
+                  {trigV2Status === "authing" ? "Authenticating…" : trigV2Status === "signing" ? "Sign deposit tx…" : "Place Trigger Order"}
                 </button>
-                <button onClick={() => setShowTrig(false)}
+                <button onClick={() => setShowTrigV2(false)}
                   style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
                   Cancel
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* ── Trigger orders list panel ──────────────────────────────────── */}
+          {showTrigOrders && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>My Trigger Orders</div>
+                <div style={{ display:"flex", gap:8 }}>
+                  <button onClick={() => fetchTrigV2Orders("active")}
+                    style={{ padding:"5px 12px", fontSize:12, background:T.purpleBg, border:`1px solid ${T.purple}`, borderRadius:6, color:T.purple, cursor:"pointer" }}>
+                    Active
+                  </button>
+                  <button onClick={() => fetchTrigV2Orders("past")}
+                    style={{ padding:"5px 12px", fontSize:12, background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, cursor:"pointer" }}>
+                    History
+                  </button>
+                  <button onClick={() => setShowTrigOrders(false)}
+                    style={{ padding:"5px 10px", fontSize:12, background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text3, cursor:"pointer" }}>
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              {trigOrdersLoading && <div style={{ textAlign:"center", padding:20, color:T.text3, fontSize:13 }}>Loading…</div>}
+              {!trigOrdersLoading && trigV2Orders.length === 0 && <div style={{ textAlign:"center", padding:20, color:T.text3, fontSize:13 }}>No orders found.</div>}
+
+              {!trigOrdersLoading && trigV2Orders.map((o, i) => {
+                const inSym  = Object.entries(TOKEN_MINTS).find(([,v])=>v===o.inputMint)?.[0]  || o.inputMint?.slice(0,6)  || "?";
+                const outSym = Object.entries(TOKEN_MINTS).find(([,v])=>v===o.outputMint)?.[0] || o.outputMint?.slice(0,6) || "?";
+                const stateColor = { open:T.accent, filled:T.green, cancelled:T.text3, expired:T.text3, failed:T.red, executing:T.teal }[o.orderState] || T.text3;
+                const typeLabel  = { single:"Limit", oco:"OCO", otoco:"OTOCO" }[o.orderType] || o.orderType;
+                const isCancellable = o.orderState === "open";
+                const created = o.createdAt ? new Date(o.createdAt).toLocaleDateString() : "—";
+                const expires = o.expiresAt ? new Date(o.expiresAt).toLocaleDateString() : "—";
+                // Pull price fields
+                const trigPx  = o.triggerPriceUsd != null ? `$${Number(o.triggerPriceUsd).toFixed(4)}` : null;
+                const tpPx    = o.tpPriceUsd      != null ? `$${Number(o.tpPriceUsd).toFixed(4)}`      : null;
+                const slPx    = o.slPriceUsd      != null ? `$${Number(o.slPriceUsd).toFixed(4)}`      : null;
+                return (
+                  <div key={o.id || i} style={{ padding:14, border:`1px solid ${T.border}`, borderRadius:10, marginBottom:10, background:T.bg }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+                      <div>
+                        <span style={{ fontWeight:600, fontSize:13, color:T.text1 }}>{inSym} → {outSym}</span>
+                        <span style={{ marginLeft:8, fontSize:11, color:T.text3 }}>{typeLabel}</span>
+                      </div>
+                      <span style={{ fontSize:11, padding:"2px 8px", borderRadius:10, fontWeight:600, background:T.surface, color:stateColor }}>
+                        {o.orderState}
+                      </span>
+                    </div>
+                    <div style={{ fontSize:11, color:T.text3, display:"flex", flexWrap:"wrap", gap:"4px 14px", marginBottom:8 }}>
+                      {o.initialInputAmount && <span>Size: {(parseInt(o.initialInputAmount)/1e6).toFixed(2)} {inSym}</span>}
+                      {trigPx && <span>Trigger: {o.triggerCondition} {trigPx}</span>}
+                      {tpPx   && <span style={{color:T.accent}}>TP: {tpPx}</span>}
+                      {slPx   && <span style={{color:T.red}}>SL: {slPx}</span>}
+                      <span>Created: {created}</span>
+                      <span>Expires: {expires}</span>
+                      {o.id && <span style={{fontFamily:"monospace"}}>ID: {o.id.slice(0,10)}…</span>}
+                    </div>
+                    {/* Fill info if filled */}
+                    {o.orderState === "filled" && o.outputAmount && (
+                      <div style={{ fontSize:11, color:T.accent, marginBottom:8 }}>
+                        Filled — received {o.outputAmount} {outSym}{o.fillPercent ? ` (${Math.round(o.fillPercent*100)}%)` : ""}
+                      </div>
+                    )}
+                    {isCancellable && (
+                      <button onClick={() => cancelTrigV2Order(o.id)} className="hov-btn"
+                        style={{ padding:"7px 16px", fontSize:12, background:"none", border:`1px solid ${T.red}`, borderRadius:8, color:T.red, cursor:"pointer", fontWeight:500 }}>
+                        Cancel &amp; Withdraw
+                      </button>
+                    )}
+                    {o.orderState === "filled" && o.events?.find(e=>e.type==="fill")?.txSignature && (
+                      <a href={`https://solscan.io/tx/${o.events.find(e=>e.type==="fill").txSignature}`} target="_blank" rel="noreferrer"
+                        style={{ fontSize:11, color:T.teal }}>View fill tx →</a>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
