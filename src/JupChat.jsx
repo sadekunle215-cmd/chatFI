@@ -89,6 +89,7 @@ Available actions:
 - "FETCH_PREDICTIONS"→ actionData: { "sport": "sports", "query": null } — sport categories (exact): sports, crypto, politics, esports, culture, economics, tech. For specific leagues/competitions like "EPL", "Champions League", "NBA playoffs", set query to the search string instead of sport. Use null sport for all.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — if user says "put 10% of my USDC in earn" set vault:"USDC", portion:"10%". portion: "all"|"half"|"quarter"|"N%"
 - "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — when user asks about multiply/leverage/looping on Jupiter Lend. Multiply CAN be executed in-app via the "Open Position" button on each vault card. Explain how it works and show available strategies.
+- "SHOW_LEND_POSITIONS" → actionData: {} — show user's open Jupiter Lend borrow/multiply positions with unwind buttons
 - "CLAIM_PAYOUTS"    → actionData: {} — triggers fetch of claimable prediction positions
 
 Rules:
@@ -101,6 +102,7 @@ Rules:
 - "predictions" / "show markets" / "what can I bet on" → FETCH_PREDICTIONS
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
 - "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY — explain how it works and show available strategies
+- "my lend positions" / "my borrow positions" / "close position" / "unwind" / "deleverage" → SHOW_LEND_POSITIONS
 - "limit order" / "DCA" / "buy when price hits" → SHOW_TRIGGER
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.`;
 
@@ -297,6 +299,10 @@ export default function JupChat() {
   const [multiplyPos, setMultiplyPos]       = useState({ vault:null, colAmount:"", leverage:"2" });
   const [multiplyStatus, setMultiplyStatus] = useState(null); // null | "signing" | "done" | "error"
   const [showMultiplyForm, setShowMultiplyForm] = useState(false);
+  const [lendPositions, setLendPositions]       = useState([]);
+  const [showLendPos, setShowLendPos]           = useState(false);
+  const [lendPosLoading, setLendPosLoading]     = useState(false);
+  const [unwindStatus, setUnwindStatus]         = useState(null); // null | positionId | "done"
   const [showEarn, setShowEarn]           = useState(false);
   const [earnVaults, setEarnVaults]       = useState([]);
   const [earnLoading, setEarnLoading]     = useState(false);
@@ -894,6 +900,69 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
       push("ai", `Multiply failed: ${msg}${multiplyHint}`);
     }
     setMultiplyStatus(null);
+  };
+
+  // ── Fetch open Lend positions via /api/lend-positions ───────────────────────
+  const fetchLendPositions = async () => {
+    if (!walletFull) { push("ai", "Connect your wallet first to view your Lend positions."); return; }
+    setLendPosLoading(true);
+    setShowLendPos(true);
+    try {
+      const res  = await fetch(`/api/lend-positions?wallet=${walletFull}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setLendPositions(data.positions || []);
+      if ((data.positions || []).length === 0) {
+        push("ai", "You have no open Jupiter Lend positions.");
+        setShowLendPos(false);
+      }
+    } catch (err) {
+      push("ai", `Failed to load positions: ${err?.message}`);
+      setShowLendPos(false);
+    } finally { setLendPosLoading(false); }
+  };
+
+  // ── Unwind (close) a Lend position ───────────────────────────────────────────
+  const doUnwind = async (pos, partial = false, partialColAmount = null) => {
+    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+    const provider = getActiveProvider();
+    if (!provider?.signTransaction) { push("ai", "Wallet does not support signing."); return; }
+
+    setUnwindStatus(pos.positionId);
+    setShowLendPos(false);
+    push("ai", `${partial ? "Partially closing" : "Closing"} position #${pos.positionId} (vault ${pos.vaultId})…`);
+
+    try {
+      const body = {
+        action:     "unwind",
+        vaultId:    pos.vaultId,
+        positionId: pos.positionId,
+        signer:     walletFull,
+      };
+      if (partial && partialColAmount) body.withdrawAmount = partialColAmount;
+
+      const res  = await fetch("/api/multiply", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (!data.transaction) throw new Error("No transaction returned.");
+
+      const bytes    = new Uint8Array(atob(data.transaction).split("").map(c => c.charCodeAt(0)));
+      const tx       = VersionedTransaction.deserialize(bytes);
+      const signedTx = await provider.signTransaction(tx);
+      const rpcRes   = await jupFetch("SOLANA_RPC", {
+        method:"POST",
+        body:{ jsonrpc:"2.0", id:1, method:"sendTransaction", params:[btoa(String.fromCharCode(...signedTx.serialize())), { encoding:"base64", skipPreflight:false }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed.");
+
+      setUnwindStatus("done");
+      push("ai", `Position #${pos.positionId} ${partial ? "partially closed" : "fully closed"} ✓\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      // Refresh positions
+      await fetchLendPositions();
+    } catch (err) {
+      push("ai", `Unwind failed: ${err?.message}\n\nCheck your position at [jup.ag/lend](https://jup.ag/lend).`);
+    } finally { setUnwindStatus(null); }
   };
 
   // ── Claim prediction payouts — POST /prediction/v1/positions/{pubkey}/claim ─
@@ -1975,6 +2044,9 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
         setShowMultiply(true);
         push("ai", text);
 
+      } else if (action === "SHOW_LEND_POSITIONS") {
+        push("ai", text);
+        fetchLendPositions();
       } else if (action === "CLAIM_PAYOUTS") {
         if (!walletFull) { push("ai", text + "\n\nConnect your wallet first to check for claimable payouts."); }
         else { await doClaimPayouts(text); }
@@ -2202,151 +2274,106 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                 <>
                   <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{predMarkets.length} market{predMarkets.length!==1?"s":""} found — click one to bet YES or NO</div>
                   {predMarkets.slice(0,20).map((m, i) => {
-                    // Event-level fields
-                    const eventTitle = m.title || m.metadata?.title || m.question || m.name || "Prediction Market";
-                    const closeTs    = m.closeTime || m.metadata?.closeTime || m.endTime;
-                    const cat        = m.category || m.metadata?.category || predCategory || "";
-                    const vol        = m.volumeUsd || m.volume || m.totalVolume;
-                    const volFmt     = vol > 0 ? (vol >= 1_000_000 ? `$${(vol/1_000_000).toFixed(1)}M vol` : `$${(vol/1_000).toFixed(0)}K vol`) : null;
-                    const closeSoon  = closeTs && (() => {
+                    // Apr 2026: title, closeTime, category are TOP LEVEL (not nested in metadata)
+                    const title    = m.title || m.metadata?.title || m.question || m.name || "Prediction Market";
+                    const closeTs  = m.closeTime || m.metadata?.closeTime || m.endTime;
+                    const cat      = m.category || m.metadata?.category || predCategory || "";
+                    const desc     = m.description || m.metadata?.description || m.subtitle || m.resolutionCriteria || "";
+                    // Markets nested in m.markets[] or m.market{}; prefer open markets
+                    const markets  = Array.isArray(m.markets) ? m.markets : (m.market ? [m.market] : []);
+                    const openMkt  = markets.find(mk => mk.status === "open") || markets[0];
+                    const marketId = openMkt?.marketId || openMkt?.id || openMkt?.pubkey || null;
+                    // Pricing: buyYesPriceUsd / buyNoPriceUsd in native units (1_000_000 = $1.00)
+                    const pricing  = m.pricing || openMkt?.pricing || {};
+                    const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
+                    const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
+                    const yesPrice = rawYes != null ? (rawYes / 1_000_000).toFixed(2) : null;
+                    const noPrice  = rawNo  != null ? (rawNo  / 1_000_000).toFixed(2) : null;
+                    // Implied probability from price (prediction market price ≈ probability)
+                    const yesPct   = yesPrice ? Math.round(parseFloat(yesPrice) * 100) : null;
+                    const noPct    = noPrice  ? Math.round(parseFloat(noPrice)  * 100) : null;
+                    const vol      = m.volumeUsd || m.volume || m.totalVolume || openMkt?.pricing?.volume;
+                    const volFmt   = vol > 0 ? (vol >= 1_000_000 ? `$${(vol/1_000_000).toFixed(1)}M` : `$${(vol/1_000).toFixed(0)}K`) : null;
+                    // Parse YES/NO outcome labels — try every known field shape
+                    const outcomes = openMkt?.outcomes || m.outcomes || m.options || openMkt?.options || [];
+                    const yesOutcome = outcomes[0]?.label || outcomes[0]?.name || outcomes[0]?.title ||
+                      m.yesLabel || m.yesOutcome || openMkt?.yesLabel || (() => {
+                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
+                        if (vs) return `${vs[1].trim()} wins`;
+                        if (/will .+ win/i.test(title)) return "Yes, wins";
+                        if (/price|hit|\$|above|over|exceed/i.test(title)) return "Yes, it will";
+                        return "Yes";
+                      })();
+                    const noOutcome = outcomes[1]?.label || outcomes[1]?.name || outcomes[1]?.title ||
+                      m.noLabel || m.noOutcome || openMkt?.noLabel || (() => {
+                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
+                        if (vs) return `${vs[2].trim()} wins / Draw`;
+                        if (/will .+ win/i.test(title)) return "No, won't win";
+                        if (/price|hit|\$|above|over|exceed/i.test(title)) return "No, it won't";
+                        return "No";
+                      })();
+                    // Closes soon flag
+                    const closeSoon = closeTs && (() => {
                       const ms = typeof closeTs === "number" ? closeTs * 1000 : new Date(closeTs).getTime();
-                      return ms - Date.now() < 86400000 * 3;
+                      return ms - Date.now() < 86400000 * 3; // within 3 days
                     })();
-
-                    // All sub-markets for this event (one per candidate/outcome)
-                    const allMarkets = Array.isArray(m.markets) ? m.markets : (m.market ? [m.market] : []);
-                    // Show open markets first, max 5 per event
-                    const displayMarkets = allMarkets
-                      .filter(mk => mk.status !== "closed" && mk.status !== "resolved")
-                      .slice(0, 5);
-                    // Fallback to first 5 if none are open
-                    const rows = displayMarkets.length > 0 ? displayMarkets : allMarkets.slice(0, 5);
-
                     return (
-                      <div key={i} style={{ padding:"14px", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:10, background:T.bg }}>
-                        {/* Event title */}
-                        <div style={{ fontWeight:700, fontSize:13, color:T.text1, marginBottom:4, lineHeight:1.4 }}>{eventTitle}</div>
+                      <div key={marketId||i}
+                        style={{ padding:"14px", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:10, background:T.bg }}>
+                        {/* Title row */}
+                        <div style={{ fontWeight:600, fontSize:13, color:T.text1, marginBottom:5, lineHeight:1.4 }}>{title}</div>
+                        {/* Description / resolution criteria */}
+                        {desc && (
+                          <div style={{ fontSize:11, color:T.text3, marginBottom:6, lineHeight:1.4, fontStyle:"italic" }}>
+                            {desc.length > 120 ? desc.slice(0, 120) + "…" : desc}
+                          </div>
+                        )}
                         {/* Meta row */}
-                        <div style={{ fontSize:11, color:T.text3, display:"flex", flexWrap:"wrap", gap:8, marginBottom:10 }}>
+                        <div style={{ fontSize:11, color:T.text3, display:"flex", flexWrap:"wrap", gap:10, marginBottom:10 }}>
                           {cat && <span>📂 {cat}</span>}
                           {closeTs && (
                             <span style={{ color: closeSoon ? T.red : T.text3 }}>
-                              🕐 {new Date(typeof closeTs==="number"?closeTs*1000:closeTs).toLocaleDateString()}
+                              🕐 {closeSoon ? "Closes " : ""}{new Date(typeof closeTs==="number"?closeTs*1000:closeTs).toLocaleDateString()}
                             </span>
                           )}
-                          {volFmt && <span>💰 {volFmt}</span>}
+                          {volFmt && <span>💰 {volFmt} vol</span>}
                         </div>
-
-                        {rows.length > 0 ? (
-                          // ── Multi-candidate layout (like Jupiter native UI) ──────────────
-                          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                            {rows.map((mk, j) => {
-                              // Candidate/outcome name — try every known field
-                              const candidateName =
-                                mk.title || mk.name || mk.label || mk.description ||
-                                mk.outcomes?.[0]?.label || mk.outcomes?.[0]?.name ||
-                                mk.yesLabel || null;
-
-                              const mktId = mk.marketId || mk.id || mk.pubkey || null;
-
-                              // Pricing
-                              const pricing  = mk.pricing || {};
-                              const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
-                              const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
-                              const yesPrice = rawYes != null ? (rawYes / 1_000_000).toFixed(2) : null;
-                              const noPrice  = rawNo  != null ? (rawNo  / 1_000_000).toFixed(2) : null;
-                              const yesPct   = yesPrice ? Math.round(parseFloat(yesPrice) * 100) : null;
-                              const noPct    = noPrice  ? Math.round(parseFloat(noPrice)  * 100) : null;
-
-                              // Bet title = candidate name if available, else event title
-                              const betTitle = candidateName ? `${eventTitle} — ${candidateName}` : eventTitle;
-
-                              return (
-                                <div key={mktId||j} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", background:T.surface, borderRadius:8, border:`1px solid ${T.border}` }}>
-                                  {/* Candidate name + probability bar */}
-                                  <div style={{ flex:1, minWidth:0 }}>
-                                    {candidateName && (
-                                      <div style={{ fontSize:12, fontWeight:600, color:T.text1, marginBottom:3, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
-                                        {candidateName}
-                                      </div>
-                                    )}
-                                    {yesPct != null && (
-                                      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                                        <div style={{ flex:1, height:3, borderRadius:3, background:T.border, overflow:"hidden" }}>
-                                          <div style={{ height:"100%", width:`${yesPct}%`, background:T.green, borderRadius:3 }}/>
-                                        </div>
-                                        <span style={{ fontSize:10, color:T.text3, flexShrink:0 }}>{yesPct}%</span>
-                                      </div>
-                                    )}
-                                  </div>
-                                  {/* YES / NO buttons */}
-                                  {mktId ? (
-                                    <div style={{ display:"flex", gap:5, flexShrink:0 }}>
-                                      <button onClick={() => {
-                                        setBetMarket({ marketId:mktId, title:betTitle, yesPrice, noPrice, yesOutcome:candidateName||"Yes", noOutcome:"No" });
-                                        setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                                      }} className="hov-btn"
-                                        style={{ padding:"5px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, color:T.green, fontSize:11, fontWeight:700, cursor:"pointer" }}>
-                                        YES {yesPrice ? `$${yesPrice}` : ""}
-                                      </button>
-                                      <button onClick={() => {
-                                        setBetMarket({ marketId:mktId, title:betTitle, yesPrice, noPrice, yesOutcome:candidateName||"Yes", noOutcome:"No" });
-                                        setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                                      }} className="hov-btn"
-                                        style={{ padding:"5px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:6, color:T.red, fontSize:11, fontWeight:700, cursor:"pointer" }}>
-                                        NO {noPrice ? `$${noPrice}` : ""}
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <span style={{ fontSize:10, color:T.text3 }}>Closed</span>
-                                  )}
-                                </div>
-                              );
-                            })}
-                            {allMarkets.length > 5 && (
-                              <div style={{ fontSize:11, color:T.text3, textAlign:"center", paddingTop:2 }}>
-                                +{allMarkets.length - 5} more outcomes — view all at jup.ag/prediction
-                              </div>
-                            )}
+                        {/* Probability bar */}
+                        {yesPct != null && noPct != null && (
+                          <div style={{ marginBottom:10 }}>
+                            <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3, marginBottom:3 }}>
+                              <span style={{ color:T.green }}>YES {yesPct}%</span>
+                              <span style={{ color:T.red }}>NO {noPct}%</span>
+                            </div>
+                            <div style={{ height:4, borderRadius:4, background:T.border, overflow:"hidden" }}>
+                              <div style={{ height:"100%", width:`${yesPct}%`, background:`linear-gradient(90deg, ${T.green}, ${T.greenBd})`, borderRadius:4 }}/>
+                            </div>
+                          </div>
+                        )}
+                        {/* YES / NO buttons */}
+                        {marketId ? (
+                          <div style={{ display:"flex", gap:8 }}>
+                            <button onClick={() => {
+                              setBetMarket({ marketId, title, yesPrice, noPrice, yesOutcome, noOutcome });
+                              setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                            }} className="hov-btn"
+                              style={{ flex:1, padding:"9px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
+                              <div style={{fontWeight:700, fontSize:13}}>YES {yesPrice ? `$${yesPrice}` : ""}</div>
+                              <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{yesOutcome}</div>
+                            </button>
+                            <button onClick={() => {
+                              setBetMarket({ marketId, title, yesPrice, noPrice, yesOutcome, noOutcome });
+                              setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                            }} className="hov-btn"
+                              style={{ flex:1, padding:"9px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
+                              <div style={{fontWeight:700, fontSize:13}}>NO {noPrice ? `$${noPrice}` : ""}</div>
+                              <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{noOutcome}</div>
+                            </button>
                           </div>
                         ) : (
-                          // ── Single binary market (no sub-markets) ──────────────────────
-                          (() => {
-                            const pricing  = m.pricing || {};
-                            const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd;
-                            const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd;
-                            const yesPrice = rawYes != null ? (rawYes / 1_000_000).toFixed(2) : null;
-                            const noPrice  = rawNo  != null ? (rawNo  / 1_000_000).toFixed(2) : null;
-                            const yesPct   = yesPrice ? Math.round(parseFloat(yesPrice) * 100) : null;
-                            const mktId    = m.marketId || null;
-                            return (
-                              <div>
-                                {yesPct != null && (
-                                  <div style={{ marginBottom:8 }}>
-                                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3, marginBottom:3 }}>
-                                      <span style={{ color:T.green }}>YES {yesPct}%</span>
-                                      <span style={{ color:T.red }}>NO {100-yesPct}%</span>
-                                    </div>
-                                    <div style={{ height:4, borderRadius:4, background:T.border, overflow:"hidden" }}>
-                                      <div style={{ height:"100%", width:`${yesPct}%`, background:T.green }}/>
-                                    </div>
-                                  </div>
-                                )}
-                                {mktId && (
-                                  <div style={{ display:"flex", gap:8 }}>
-                                    <button onClick={() => { setBetMarket({ marketId:mktId, title:eventTitle, yesPrice, noPrice, yesOutcome:"Yes", noOutcome:"No" }); setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false); }} className="hov-btn"
-                                      style={{ flex:1, padding:"9px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                                      YES {yesPrice ? `$${yesPrice}` : ""}
-                                    </button>
-                                    <button onClick={() => { setBetMarket({ marketId:mktId, title:eventTitle, yesPrice, noPrice, yesOutcome:"Yes", noOutcome:"No" }); setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false); }} className="hov-btn"
-                                      style={{ flex:1, padding:"9px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                                      NO {noPrice ? `$${noPrice}` : ""}
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()
+                          <div style={{ fontSize:11, color:T.text3, fontStyle:"italic" }}>
+                            Market closed or not yet tradeable
+                          </div>
                         )}
                       </div>
                     );
@@ -2538,7 +2565,69 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
             </div>
           )}
 
-          {/* ── Multiply (Leverage) panel ─────────────────────────────── */}
+          {/* ── Lend Positions panel ──────────────────────────────────── */}
+          {showLendPos && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>🏦 My Jupiter Lend Positions</div>
+              {lendPosLoading ? (
+                <div style={{ fontSize:12, color:T.text3 }}>Loading positions…</div>
+              ) : lendPositions.length === 0 ? (
+                <div style={{ fontSize:12, color:T.text3 }}>No open positions found.</div>
+              ) : (
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  {lendPositions.map((pos, i) => {
+                    const supplyNum  = parseFloat(pos.supply)  / 1e9;
+                    const borrowNum  = parseFloat(pos.borrow)  / 1e9;
+                    const riskPct    = Math.round((pos.riskRatio || 0) * 100);
+                    const ltPct      = pos.liquidationThreshold ? Math.round(pos.liquidationThreshold * 100) : null;
+                    const riskColor  = riskPct > 80 ? T.red : riskPct > 60 ? "#f59e0b" : T.green;
+                    const isUnwinding = unwindStatus === pos.positionId;
+                    return (
+                      <div key={i} style={{ padding:"12px 14px", border:`1px solid ${T.border}`, borderRadius:10, background:T.bg }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                          <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>Position #{pos.positionId} · Vault {pos.vaultId}</div>
+                          {pos.isLiquidated && <span style={{ fontSize:10, color:T.red, fontWeight:700 }}>LIQUIDATED</span>}
+                        </div>
+                        <div style={{ fontSize:11, color:T.text3, marginBottom:8, display:"flex", flexWrap:"wrap", gap:10 }}>
+                          <span>📥 Collateral: <strong style={{ color:T.text1 }}>{supplyNum.toFixed(4)}</strong></span>
+                          <span>💸 Debt: <strong style={{ color:T.red }}>{borrowNum.toFixed(4)}</strong></span>
+                        </div>
+                        {/* Risk bar */}
+                        <div style={{ marginBottom:10 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, marginBottom:3 }}>
+                            <span style={{ color:T.text3 }}>Risk ratio</span>
+                            <span style={{ color:riskColor, fontWeight:700 }}>{riskPct}%{ltPct ? ` / ${ltPct}% LT` : ""}</span>
+                          </div>
+                          <div style={{ height:4, borderRadius:4, background:T.border, overflow:"hidden" }}>
+                            <div style={{ height:"100%", width:`${Math.min(riskPct, 100)}%`, background:riskColor, borderRadius:4 }}/>
+                          </div>
+                        </div>
+                        {/* Action buttons */}
+                        {!pos.isLiquidated && (
+                          <div style={{ display:"flex", gap:8 }}>
+                            <button onClick={() => doUnwind(pos, false)} disabled={!!unwindStatus} className="hov-btn"
+                              style={{ flex:1, padding:"8px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                              {isUnwinding ? <><span className="spinner" style={{ borderTopColor:T.red }}/> Closing…</> : "⚡ Close Full Position"}
+                            </button>
+                            <button onClick={() => { setMultiplyPos({ vault: MULTIPLY_VAULTS.find(v=>v.vaultId===pos.vaultId)||{vaultId:pos.vaultId}, colAmount:"", leverage:"2" }); setShowMultiplyForm(true); setShowLendPos(false); }} className="hov-btn"
+                              style={{ padding:"8px 12px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
+                              ➕ Add
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <button onClick={() => setShowLendPos(false)}
+                style={{ marginTop:12, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
+                Close
+              </button>
+            </div>
+          )}
+
+                    {/* ── Multiply (Leverage) panel ─────────────────────────────── */}
           {showMultiply && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               {/* Header */}
