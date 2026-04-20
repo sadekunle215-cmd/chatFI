@@ -847,7 +847,6 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action:           "open",
           vaultId:          vault.vaultId,
           positionId:       0,
           initialColAmount: colRaw.toString(),
@@ -855,9 +854,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
           signer:           walletFull,
         }),
       });
-      let data;
-      try { data = await res.json(); }
-      catch { throw new Error(`Server error (HTTP ${res.status}) — check Vercel logs. Make sure @jup-ag/lend-read is in package.json and deployed.`); }
+      const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned from multiply API.");
 
