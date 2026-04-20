@@ -15,6 +15,7 @@ const JUP_SWAP_ORDER   = `${JUP_BASE}/swap/v2/order`;        // v2 meta-aggregat
 const JUP_SWAP_EXEC    = `${JUP_BASE}/swap/v2/execute`;      // v2 execute
 const JUP_TRIGGER_BASE = `${JUP_BASE}/trigger/v1`;
 const JUP_TRIGGER_EXEC = `${JUP_LITE}/trigger/v1/execute`;
+const JUP_RECUR_BASE   = `${JUP_BASE}/recurring/v1`;      // createOrder, execute, cancelOrder, getRecurringOrders
 const JUP_PORTFOLIO    = `${JUP_BASE}/portfolio/v1`;
 const JUP_PRED_API     = `${JUP_BASE}/prediction/v1`;
 const JUP_EARN_API     = `${JUP_BASE}/lend/v1/earn`;   // deposit, withdraw, mint, redeem, tokens, positions, earnings
@@ -103,6 +104,8 @@ Available actions:
   • amountUSD: dollar value — when user says "swap $10 of SOL"
   Examples: "swap all my USDC→SOL" → portion:"all", from:"USDC" | "swap half my SOL→BONK" → portion:"half"
 - "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "targetPrice": "150", "amount": "5", "portion": null, "hint": "brief why" } — extract targetPrice, amount, or portion from user message.
+- "SHOW_RECURRING"   → actionData: { "from": "USDC", "to": "SOL", "amountPerCycle": "10", "numberOfOrders": "10", "intervalSecs": "86400", "reason": "brief why" } — time-based DCA. intervalSecs: 60=1min,3600=1hr,86400=1day,604800=1wk,2592000=1mo
+- "FETCH_RECURRING_ORDERS" → actionData: { "status": "active" } — status: "active"|"history". Show user open or past recurring orders with cancel buttons.
 - "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players", "searchQuery": "Arsenal Man City" } — ALWAYS set searchQuery. ALSO trigger FETCH_PREDICTIONS with the same query.
 - "FETCH_PREDICTIONS"→ actionData: { "sport": "sports", "query": null } — sport categories (exact): sports, crypto, politics, esports, culture, economics, tech. For specific leagues set query instead.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — portion: "all"|"half"|"quarter"|"N%"
@@ -127,20 +130,23 @@ Rules:
 - "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY
 - "my lend positions" / "my borrow positions" / "close position" / "unwind" / "deleverage" / "repay with collateral" → SHOW_LEND_POSITIONS
 - "flashloan" / "flash loan" → explain: zero-fee atomic loan, repay within same tx; use cases: arbitrage, liquidations, collateral swaps
-- "limit order" / "DCA" / "buy when price hits" → SHOW_TRIGGER
+- "limit order" / "buy when price hits" → SHOW_TRIGGER
+- "DCA" / "recurring" / "buy every day/week/month" / "dollar cost average" / "auto-buy" / "schedule trades" → SHOW_RECURRING — extract from/to tokens, amount per cycle, number of orders, interval
+- "my recurring orders" / "show DCA orders" / "active recurring" / "DCA history" → FETCH_RECURRING_ORDERS
+- "cancel recurring" / "stop DCA" → FETCH_RECURRING_ORDERS (so user can see cancel buttons)
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.`;
 
 const SUGGESTIONS = [
   "What's the SOL price?",
   "Swap SOL to BONK",
+  "DCA $10 USDC into SOL daily",
+  "My recurring orders",
   "Is PEPE safe to buy?",
   "Top trending tokens today",
   "Show recent token launches",
-  "Show verified tokens",
   "Arsenal vs Man City prediction",
   "Show earn vaults",
   "My portfolio & positions",
-  "Claim my payouts",
 ];
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -302,6 +308,18 @@ export default function JupChat() {
   const [showTrig, setShowTrig]   = useState(false);
   const [trigCfg, setTrigCfg]     = useState({ token:"SOL", targetPrice:"", amount:"", direction:"below" });
 
+  // Recurring / DCA orders
+  const [showRecurring, setShowRecurring]       = useState(false);
+  const [recurringCfg, setRecurringCfg]         = useState({
+    from:"USDC", fromMint:TOKEN_MINTS.USDC, fromDecimals:6,
+    to:"SOL",   toMint:TOKEN_MINTS.SOL,   toDecimals:9,
+    amountPerCycle:"10", numberOfOrders:"10", intervalSecs:"86400"  // default: $10/day × 10 times
+  });
+  const [recurringStatus, setRecurringStatus]   = useState(null);  // null|"signing"|"done"|"error"
+  const [recurringOrders, setRecurringOrders]   = useState([]);
+  const [showRecurringOrders, setShowRecurringOrders] = useState(false);
+  const [recurringOrdersLoading, setRecurringOrdersLoading] = useState(false);
+
   // Predictions — AI analysis panel (SHOW_PREDICTION action)
   const [showPred, setShowPred]   = useState(false);
   const [pred, setPred]           = useState(null);
@@ -429,7 +447,7 @@ export default function JupChat() {
     if (!container) return;
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (isNearBottom) endRef.current?.scrollIntoView({ behavior:"smooth" });
-  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showMultiply, showMultiplyForm]);
+  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -1945,6 +1963,132 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     }
   };
 
+  // ── Recurring / DCA order — create & execute ────────────────────────────────
+  // POST /recurring/v1/createOrder → { requestId, transaction }
+  // POST /recurring/v1/execute     → { status, signature, order }
+  const doRecurring = async () => {
+    const { fromMint, fromDecimals, toMint, amountPerCycle, numberOfOrders, intervalSecs } = recurringCfg;
+    if (!amountPerCycle || !numberOfOrders || !intervalSecs) return;
+    if (!walletFull) { push("ai", "Connect your wallet first to set up a recurring order."); return; }
+    if (!fromMint || !toMint) { push("ai", "Could not resolve token mints. Use the dropdowns to select tokens."); return; }
+
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+
+    setRecurringStatus("signing");
+    try {
+      const amountRaw = Math.floor(parseFloat(amountPerCycle) * Math.pow(10, fromDecimals || 6));
+      const orderRes = await jupFetch(`${JUP_RECUR_BASE}/createOrder`, {
+        method: "POST",
+        body: {
+          user: walletFull,
+          inputMint: fromMint,
+          outputMint: toMint,
+          params: {
+            time: {
+              inAmount: amountRaw,
+              numberOfOrders: parseInt(numberOfOrders),
+              interval: parseInt(intervalSecs),
+            }
+          }
+        }
+      });
+      if (orderRes.error) throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
+      if (!orderRes.transaction) throw new Error("No transaction returned from Jupiter Recurring API.");
+
+      const binaryStr = atob(orderRes.transaction);
+      const txBytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const signedTx = await provider.signTransaction(tx);
+      const signedBase64 = btoa(String.fromCharCode(...signedTx.serialize()));
+
+      const execRes = await jupFetch(`${JUP_RECUR_BASE}/execute`, {
+        method: "POST",
+        body: { requestId: orderRes.requestId, signedTransaction: signedBase64 }
+      });
+      if (execRes.error) throw new Error(typeof execRes.error === "object" ? JSON.stringify(execRes.error) : execRes.error);
+      if (execRes.status === "Failed") throw new Error("Transaction failed on-chain.");
+
+      const sig = execRes.signature;
+      const totalSpend = (parseFloat(amountPerCycle) * parseInt(numberOfOrders)).toFixed(2);
+      const intervalLabel = { "60":"minute","300":"5 min","3600":"hour","86400":"day","604800":"week","2592000":"month" }[intervalSecs] || `${intervalSecs}s`;
+      setRecurringStatus("done");
+      setShowRecurring(false);
+      push("ai", `Recurring order created ✓
+
+**${recurringCfg.from} → ${recurringCfg.to}**
+${amountPerCycle} ${recurringCfg.from} every ${intervalLabel} × ${numberOfOrders} times
+Total spend: **${totalSpend} ${recurringCfg.from}**
+
+Transaction: \`${sig?.slice(0,20)}…\`
+
+[View on Solscan →](https://solscan.io/tx/${sig})`);
+    } catch (err) {
+      setRecurringStatus("error");
+      push("ai", `Recurring order failed: ${err?.message || "Unknown error"}. Please check your balance and try again.`);
+    }
+    setRecurringStatus(null);
+  };
+
+  // ── Fetch open/history recurring orders ─────────────────────────────────────
+  // GET /recurring/v1/getRecurringOrders?user=&recurringType=time&orderStatus=active
+  const fetchRecurringOrders = async (status = "active") => {
+    if (!walletFull) { push("ai", "Connect your wallet first to view recurring orders."); return; }
+    setRecurringOrdersLoading(true);
+    try {
+      const data = await jupFetch(`${JUP_RECUR_BASE}/getRecurringOrders?user=${walletFull}&recurringType=time&orderStatus=${status}&page=1&includeFailedTx=false`);
+      const orders = Array.isArray(data?.time) ? data.time : [];
+      setRecurringOrders(orders);
+      setShowRecurringOrders(true);
+      if (!orders.length) push("ai", `No ${status} recurring orders found for your wallet.`);
+    } catch (err) {
+      push("ai", `Could not fetch recurring orders: ${err?.message || "Unknown error"}.`);
+    }
+    setRecurringOrdersLoading(false);
+  };
+
+  // ── Cancel a recurring order ─────────────────────────────────────────────────
+  // POST /recurring/v1/cancelOrder → { requestId, transaction }
+  // POST /recurring/v1/execute     → { status, signature }
+  const cancelRecurringOrder = async (orderKey) => {
+    if (!walletFull || !orderKey) return;
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+    try {
+      const cancelRes = await jupFetch(`${JUP_RECUR_BASE}/cancelOrder`, {
+        method: "POST",
+        body: { order: orderKey, recurringType: "time", user: walletFull }
+      });
+      if (cancelRes.error) throw new Error(typeof cancelRes.error === "object" ? JSON.stringify(cancelRes.error) : cancelRes.error);
+      if (!cancelRes.transaction) throw new Error("No transaction returned for cancellation.");
+
+      const binaryStr = atob(cancelRes.transaction);
+      const txBytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      const signedTx = await provider.signTransaction(tx);
+      const signedBase64 = btoa(String.fromCharCode(...signedTx.serialize()));
+
+      const execRes = await jupFetch(`${JUP_RECUR_BASE}/execute`, {
+        method: "POST",
+        body: { requestId: cancelRes.requestId, signedTransaction: signedBase64 }
+      });
+      if (execRes.error) throw new Error(typeof execRes.error === "object" ? JSON.stringify(execRes.error) : execRes.error);
+      if (execRes.status === "Failed") throw new Error("Cancellation transaction failed.");
+
+      push("ai", `Recurring order cancelled ✓
+
+Order: \`${orderKey.slice(0,20)}…\`
+[View on Solscan →](https://solscan.io/tx/${execRes.signature})`);
+      // Refresh the orders list
+      setRecurringOrders(prev => prev.filter(o => o.orderKey !== orderKey));
+    } catch (err) {
+      push("ai", `Cancel failed: ${err?.message || "Unknown error"}.`);
+    }
+  };
+
   // ── Push message helper ─────────────────────────────────────────────────────
   const push = (role, text, extra={}) => {
     const id = Date.now() + Math.random();
@@ -1959,7 +2103,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     setInput("");
     push("user", raw);
     setTyping(true);
-    setShowSwap(false); setShowPred(false); setShowTrig(false);
+    setShowSwap(false); setShowPred(false); setShowTrig(false); setShowRecurring(false); setShowRecurringOrders(false);
     setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
@@ -2290,6 +2434,30 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
         if (!walletFull) { push("ai", text + "\n\nConnect your wallet first to check for claimable payouts."); }
         else { await doClaimPayouts(text); }
 
+      } else if (action === "SHOW_RECURRING") {
+        // Pre-populate config from AI actionData
+        const fromSym = (actionData?.from || "USDC").toUpperCase();
+        const toSym   = (actionData?.to   || "SOL").toUpperCase();
+        const rFrom   = await resolveToken(fromSym);
+        const rTo     = await resolveToken(toSym);
+        setRecurringCfg(c => ({
+          ...c,
+          from: fromSym, fromMint: rFrom?.mint || TOKEN_MINTS[fromSym] || c.fromMint,
+          fromDecimals: rFrom?.decimals ?? TOKEN_DECIMALS[fromSym] ?? c.fromDecimals,
+          to:   toSym,   toMint:   rTo?.mint   || TOKEN_MINTS[toSym]   || c.toMint,
+          toDecimals: rTo?.decimals   ?? TOKEN_DECIMALS[toSym]   ?? c.toDecimals,
+          amountPerCycle: actionData?.amountPerCycle || c.amountPerCycle,
+          numberOfOrders: actionData?.numberOfOrders || c.numberOfOrders,
+          intervalSecs:   actionData?.intervalSecs   || c.intervalSecs,
+        }));
+        setShowRecurring(true);
+        push("ai", text);
+
+      } else if (action === "FETCH_RECURRING_ORDERS") {
+        const status = actionData?.status === "history" ? "history" : "active";
+        push("ai", text);
+        await fetchRecurringOrders(status);
+
       } else if (action === "FETCH_TOKEN_TAG") {
         const tag = (actionData?.tag || "verified").toLowerCase();
         const tokens = await fetchTokensByTag(tag);
@@ -2552,6 +2720,185 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                   Cancel
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* ── Recurring / DCA order panel ──────────────────────────────────── */}
+          {showRecurring && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>Recurring Order (DCA)</div>
+              <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>Time-based: buys a fixed amount on a set schedule</div>
+
+              {/* From / To token row */}
+              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Spend token</div>
+                  <TokenPicker value={recurringCfg.from} jupFetch={jupFetch}
+                    onSelect={({symbol,mint,decimals}) => setRecurringCfg(c=>({...c, from:symbol, fromMint:mint, fromDecimals:decimals}))} />
+                </div>
+                <div style={{ display:"flex", alignItems:"center", paddingTop:18, color:T.text3, fontSize:18 }}>→</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Receive token</div>
+                  <TokenPicker value={recurringCfg.to} jupFetch={jupFetch}
+                    onSelect={({symbol,mint,decimals}) => setRecurringCfg(c=>({...c, to:symbol, toMint:mint, toDecimals:decimals}))} />
+                </div>
+              </div>
+
+              {/* Amount per cycle */}
+              <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount per order ({recurringCfg.from})</div>
+              <input type="number" min="0" placeholder="e.g. 10"
+                value={recurringCfg.amountPerCycle}
+                onChange={e => setRecurringCfg(c=>({...c, amountPerCycle:e.target.value}))}
+                style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:10 }}
+              />
+
+              {/* Interval selector */}
+              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Frequency</div>
+                  <select value={recurringCfg.intervalSecs}
+                    onChange={e => setRecurringCfg(c=>({...c, intervalSecs:e.target.value}))}
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}>
+                    <option value="60">Every minute</option>
+                    <option value="300">Every 5 minutes</option>
+                    <option value="3600">Every hour</option>
+                    <option value="86400">Every day</option>
+                    <option value="604800">Every week</option>
+                    <option value="2592000">Every month</option>
+                  </select>
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Number of orders</div>
+                  <input type="number" min="1" max="999" placeholder="e.g. 10"
+                    value={recurringCfg.numberOfOrders}
+                    onChange={e => setRecurringCfg(c=>({...c, numberOfOrders:e.target.value}))}
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  />
+                </div>
+              </div>
+
+              {/* Summary line */}
+              {recurringCfg.amountPerCycle && recurringCfg.numberOfOrders && (
+                <div style={{ fontSize:12, color:T.accent, background:T.accentBg, border:`1px solid ${T.greenBd}`, borderRadius:8, padding:"8px 12px", marginBottom:12 }}>
+                  Total: <strong>{(parseFloat(recurringCfg.amountPerCycle||0)*parseInt(recurringCfg.numberOfOrders||0)).toFixed(2)} {recurringCfg.from}</strong> spent over{" "}
+                  {{ "60":"minutes","300":"minutes","3600":"hours","86400":"days","604800":"weeks","2592000":"months" }[recurringCfg.intervalSecs] || "periods"}
+                  {" "}({recurringCfg.numberOfOrders}× {recurringCfg.amountPerCycle} {recurringCfg.from})
+                </div>
+              )}
+
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={doRecurring}
+                  disabled={!recurringCfg.amountPerCycle || !recurringCfg.numberOfOrders || recurringStatus === "signing"}
+                  className="hov-btn"
+                  style={{ flex:1, padding:"10px", background: recurringStatus==="signing" ? T.border : T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:600, cursor:"pointer" }}>
+                  {recurringStatus === "signing" ? "Signing…" : "Create Recurring Order"}
+                </button>
+                <button onClick={() => setShowRecurring(false)}
+                  style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Recurring orders list panel ───────────────────────────────────── */}
+          {showRecurringOrders && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>My Recurring Orders</div>
+                <div style={{ display:"flex", gap:8 }}>
+                  <button onClick={() => fetchRecurringOrders("active")}
+                    style={{ padding:"5px 12px", fontSize:12, background:T.accentBg, border:`1px solid ${T.greenBd}`, borderRadius:6, color:T.accent, cursor:"pointer" }}>
+                    Active
+                  </button>
+                  <button onClick={() => fetchRecurringOrders("history")}
+                    style={{ padding:"5px 12px", fontSize:12, background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, cursor:"pointer" }}>
+                    History
+                  </button>
+                  <button onClick={() => setShowRecurringOrders(false)}
+                    style={{ padding:"5px 10px", fontSize:12, background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text3, cursor:"pointer" }}>
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              {recurringOrdersLoading && (
+                <div style={{ textAlign:"center", padding:20, color:T.text3, fontSize:13 }}>Loading orders…</div>
+              )}
+
+              {!recurringOrdersLoading && recurringOrders.length === 0 && (
+                <div style={{ textAlign:"center", padding:20, color:T.text3, fontSize:13 }}>No orders found.</div>
+              )}
+
+              {!recurringOrdersLoading && recurringOrders.map((o, i) => {
+                // Resolve symbol labels from mint addresses
+                const inSym  = Object.entries(TOKEN_MINTS).find(([,v])=>v===o.inputMint)?.[0]  || o.inputMint?.slice(0,6)  || "?";
+                const outSym = Object.entries(TOKEN_MINTS).find(([,v])=>v===o.outputMint)?.[0] || o.outputMint?.slice(0,6) || "?";
+                const freq   = o.cycleFrequency;
+                const freqLabel = freq <= 60 ? "1 min" : freq <= 300 ? "5 min" : freq <= 3600 ? "1 hr" : freq <= 86400 ? "1 day" : freq <= 604800 ? "1 wk" : "1 mo";
+                const deposited  = parseFloat(o.inDeposited  || 0);
+                const used       = parseFloat(o.inUsed       || 0);
+                const received   = parseFloat(o.outReceived  || 0);
+                const withdrawn  = parseFloat(o.outWithdrawn || 0);
+                const pctDone    = deposited > 0 ? Math.round((used / deposited) * 100) : 0;
+                const tradeCount = Array.isArray(o.trades) ? o.trades.length : 0;
+                const created    = o.createdAt ? new Date(o.createdAt).toLocaleDateString() : "—";
+                const isClosed   = o.userClosed || !!o.closeTx;
+
+                return (
+                  <div key={o.orderKey || i}
+                    style={{ padding:14, border:`1px solid ${isClosed ? T.border : T.greenBd}`, borderRadius:10, marginBottom:10, background:T.bg }}>
+
+                    {/* Header row */}
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+                      <div>
+                        <span style={{ fontWeight:600, fontSize:13, color:T.text1 }}>{inSym} → {outSym}</span>
+                        <span style={{ marginLeft:8, fontSize:11, color:T.text3 }}>{o.inAmountPerCycle} {inSym} / {freqLabel}</span>
+                      </div>
+                      <span style={{ fontSize:11, padding:"2px 8px", borderRadius:10, fontWeight:600,
+                        background: isClosed ? T.border : T.accentBg,
+                        color: isClosed ? T.text3 : T.accent }}>
+                        {isClosed ? "Closed" : "Active"}
+                      </span>
+                    </div>
+
+                    {/* Progress bar */}
+                    {!isClosed && (
+                      <div style={{ marginBottom:8 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:T.text3, marginBottom:3 }}>
+                          <span>{used} / {deposited} {inSym} spent ({pctDone}%)</span>
+                          <span>{tradeCount} trade{tradeCount!==1?"s":""}</span>
+                        </div>
+                        <div style={{ height:4, borderRadius:4, background:T.border }}>
+                          <div style={{ height:"100%", width:`${pctDone}%`, borderRadius:4, background:T.accent, transition:"width 0.3s" }} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Stats */}
+                    <div style={{ fontSize:11, color:T.text3, display:"flex", flexWrap:"wrap", gap:"4px 16px", marginBottom:isClosed?0:10 }}>
+                      <span>Received: {received} {outSym}</span>
+                      {withdrawn > 0 && <span>Withdrawn: {withdrawn} {outSym}</span>}
+                      <span>Created: {created}</span>
+                      {o.orderKey && <span style={{ fontFamily:"monospace" }}>ID: {o.orderKey.slice(0,10)}…</span>}
+                    </div>
+
+                    {/* Cancel button — only for active */}
+                    {!isClosed && (
+                      <button onClick={() => cancelRecurringOrder(o.orderKey)} className="hov-btn"
+                        style={{ padding:"7px 16px", fontSize:12, background:"none", border:`1px solid ${T.red}`, borderRadius:8, color:T.red, cursor:"pointer", fontWeight:500 }}>
+                        Cancel Order
+                      </button>
+                    )}
+
+                    {/* Closed tx link */}
+                    {isClosed && o.closeTx && (
+                      <a href={`https://solscan.io/tx/${o.closeTx}`} target="_blank" rel="noreferrer"
+                        style={{ fontSize:11, color:T.teal }}>View close tx →</a>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
