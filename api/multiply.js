@@ -16,7 +16,19 @@ import {
 } from "@solana/web3.js";
 import BN from "bn.js";
 import { getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
-import { getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
+import { getOperateIx } from "@jup-ag/lend/borrow";
+
+// MAX sentinel values per Jupiter Lend docs (used for full unwind)
+// These are BN.js max i64 — signals "repay/withdraw everything"
+let MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT;
+try {
+  const borrowMod = await import("@jup-ag/lend/borrow");
+  MAX_REPAY_AMOUNT   = borrowMod.MAX_REPAY_AMOUNT;
+  MAX_WITHDRAW_AMOUNT = borrowMod.MAX_WITHDRAW_AMOUNT;
+} catch {}
+// Fallback: very large BN (2^53 - 1 in base units)
+if (!MAX_REPAY_AMOUNT)   MAX_REPAY_AMOUNT   = new BN("9007199254740991");
+if (!MAX_WITHDRAW_AMOUNT) MAX_WITHDRAW_AMOUNT = new BN("9007199254740991");
 import { Client } from "@jup-ag/lend-read";
 
 const RPC_URL  = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
@@ -62,6 +74,8 @@ async function buildAndReturn(res, connection, signerPubkey, ixs, alts) {
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
+  // Global safety net — always return JSON, never HTML
+  res.setHeader("Content-Type", "application/json");
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const {
