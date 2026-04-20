@@ -142,10 +142,12 @@ Rules:
 - "OCO" / "take profit and stop loss" / "TP/SL" / "bracket order" → SHOW_TRIGGER_V2 with orderType:"oco"
 - "OTOCO" / "buy then set TP/SL" / "entry + exit" / "conditional order" → SHOW_TRIGGER_V2 with orderType:"otoco"
 - "my trigger orders" / "open trigger" / "limit order history" → FETCH_TRIGGER_ORDERS
-- "DCA" / "recurring" / "buy every day/week/month" / "dollar cost average" / "auto-buy" / "schedule trades" → SHOW_RECURRING — extract from/to tokens, amount per cycle, number of orders, interval
+- "DCA" / "recurring" / "buy every day/week/month" / "dollar cost average" / "auto-buy" / "schedule trades" / "buy X daily" / "buy X weekly" / "recur" / "reccur" → SHOW_RECURRING — ALWAYS pre-fill all fields you can infer. If user says "$10 of SOL daily for 3 days": from:"USDC", to:"SOL", amountPerCycle:"10", numberOfOrders:"3", intervalSecs:"86400". Default from:"USDC" when user gives a dollar amount. intervalSecs defaults: daily=86400, weekly=604800, monthly=2592000. numberOfOrders = the number of cycles mentioned.
 - "my recurring orders" / "show DCA orders" / "active recurring" / "DCA history" → FETCH_RECURRING_ORDERS
 - "cancel recurring" / "stop DCA" → FETCH_RECURRING_ORDERS (so user can see cancel buttons)
-- NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.`;
+- NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
+- CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
+- CRITICAL — SHOW_RECURRING is fully supported. When user asks for a recurring/DCA order, you MUST return action:"SHOW_RECURRING" with all fields pre-filled from the user's message. Never tell the user to do it manually.`;
 
 const SUGGESTIONS = [
   "What's the SOL price?",
