@@ -1,8 +1,10 @@
 // api/multiply.js — Vercel Serverless Route
-// Full Jupiter Multiply flow: Flashloan → Swap → Operate → Flashpayback
-// Per official docs: https://developers.jup.ag/docs/lend/advanced/multiply
+// Full Jupiter Lend operations: multiply, unwind, deposit, borrow, repay, withdraw
+// Docs: https://developers.jup.ag/docs/lend/advanced/multiply
+//       https://developers.jup.ag/docs/lend/advanced/unwind
+//       https://developers.jup.ag/docs/lend/borrow/combined
 //
-// npm install @jup-ag/lend @solana/web3.js @solana/spl-token bn.js
+// npm install @jup-ag/lend @jup-ag/lend-read @solana/web3.js bn.js
 
 import {
   AddressLookupTableAccount,
@@ -12,219 +14,232 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
-import {
-  getAssociatedTokenAddressSync,
-  createAssociatedTokenAccountIdempotentInstruction,
-  TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
 import BN from "bn.js";
 import { getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
-import { getOperateIx }                         from "@jup-ag/lend/borrow";
-
-// NOTE: @jup-ag/lend-read was removed — that package does not exist.
-// It caused Vercel to crash at cold-start → HTML "A server error occurred"
-// → "Unexpected token 'A'" on the frontend JSON.parse.
-//
-// Mint addresses resolve server-side from VAULT_MINTS.
-// Frontend may also send colMint/debtMint as an override.
+import { getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
+import { Client } from "@jup-ag/lend-read";
 
 const RPC_URL  = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const LITE_API = "https://lite-api.jup.ag/swap/v1";
 
-// Server-side vault mint map — keyed by vaultId integer.
-const VAULT_MINTS = {
-  1: { colMint: "So11111111111111111111111111111111111111112",     debtMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // SOL/USDC
-  2: { colMint: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", debtMint: "So11111111111111111111111111111111111111112"   },      // JitoSOL/SOL
-  3: { colMint: "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v",  debtMint: "So11111111111111111111111111111111111111112"   },      // JupSOL/SOL
-  4: { colMint: "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh", debtMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // WBTC/USDC
-  5: { colMint: "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4", debtMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // JLP/USDC
-  6: { colMint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",   debtMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // JUP/USDC
-  7: { colMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", debtMint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"  }, // USDC/USDT
-};
-
-// ── Helper: resolve address lookup tables ─────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 async function resolveAlts(connection, keys = []) {
   if (!keys.length) return [];
   const infos = await connection.getMultipleAccountsInfo(keys.map(k => new PublicKey(k)));
   return infos.reduce((acc, info, i) => {
-    if (info) {
-      acc.push(new AddressLookupTableAccount({
-        key:   new PublicKey(keys[i]),
-        state: AddressLookupTableAccount.deserialize(info.data),
-      }));
-    }
+    if (info) acc.push(new AddressLookupTableAccount({
+      key: new PublicKey(keys[i]),
+      state: AddressLookupTableAccount.deserialize(info.data),
+    }));
     return acc;
   }, []);
 }
 
-// ── Helper: convert Jupiter Lite API instruction JSON → TransactionInstruction ─
 function toIx(ix) {
   return new TransactionInstruction({
     programId: new PublicKey(ix.programId),
-    keys: ix.accounts.map(a => ({
-      pubkey:     new PublicKey(a.pubkey),
-      isSigner:   a.isSigner,
-      isWritable: a.isWritable,
-    })),
+    keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
     data: Buffer.from(ix.data, "base64"),
   });
 }
 
-// ── Helper: idempotent ATA init ix (no-op if ATA already exists) ─────────────
-function makeAtaIx(payer, mint, owner) {
-  const ata = getAssociatedTokenAddressSync(
-    mint, owner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-  );
-  return createAssociatedTokenAccountIdempotentInstruction(
-    payer, ata, owner, mint, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-  );
+function dedupeAlts(alts) {
+  const seen = new Set();
+  return alts.filter(alt => { const k = alt.key.toString(); if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
+async function buildAndReturn(res, connection, signerPubkey, ixs, alts) {
+  if (!ixs?.length) return res.status(400).json({ error: "No instructions returned from SDK." });
+  const { blockhash } = await connection.getLatestBlockhash("finalized");
+  const message = new TransactionMessage({
+    payerKey: signerPubkey,
+    recentBlockhash: blockhash,
+    instructions: ixs,
+  }).compileToV0Message(alts || []);
+  const tx = new VersionedTransaction(message);
+  return res.status(200).json({ transaction: Buffer.from(tx.serialize()).toString("base64") });
+}
+
+// ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const {
+    action = "open",   // open | unwind | deposit | borrow | repay | withdraw
     vaultId,
-    initialColAmount,
-    debtAmount,
     positionId = 0,
+    // open/multiply: initialColAmount + debtAmount
+    initialColAmount,
+    // unwind: withdrawAmount (undefined = full unwind)
+    withdrawAmount,
+    // simple ops: colAmount and/or debtAmount (raw token units)
+    colAmount,
+    debtAmount,
     signer,
-    colMint:  colMintOverride,
-    debtMint: debtMintOverride,
-  } = req.body ?? {};
+  } = req.body;
 
-  const missing = [];
-  if (!vaultId)          missing.push("vaultId");
-  if (!initialColAmount) missing.push("initialColAmount");
-  if (!debtAmount)       missing.push("debtAmount");
-  if (!signer)           missing.push("signer");
-  if (missing.length) {
-    return res.status(400).json({ error: `Missing fields: ${missing.join(", ")}` });
-  }
+  if (!vaultId || !signer) return res.status(400).json({ error: "Missing vaultId or signer" });
 
-  const vaultMints  = VAULT_MINTS[Number(vaultId)];
-  const colMintStr  = colMintOverride  || vaultMints?.colMint;
-  const debtMintStr = debtMintOverride || vaultMints?.debtMint;
-
-  if (!colMintStr || !debtMintStr) {
-    return res.status(400).json({
-      error: `Unknown vaultId ${vaultId}. Use vault ID 1–7 or pass colMint and debtMint explicitly.`,
-    });
-  }
-
-  const colRaw  = initialColAmount.toString().replace("-", "");
-  const debtRaw = debtAmount.toString().replace("-", "");
-  if (colRaw === "0" || debtRaw === "0") {
-    return res.status(400).json({ error: "Amounts must be non-zero." });
-  }
-
-  let signerPubkey, colMint, debtMint;
+  let signerPubkey;
   try { signerPubkey = new PublicKey(signer); }
   catch { return res.status(400).json({ error: `Invalid signer: ${signer}` }); }
-  try { colMint = new PublicKey(colMintStr); }
-  catch { return res.status(400).json({ error: `Invalid colMint: ${colMintStr}` }); }
-  try { debtMint = new PublicKey(debtMintStr); }
-  catch { return res.status(400).json({ error: `Invalid debtMint: ${debtMintStr}` }); }
-
-  const colBN  = new BN(colRaw);
-  const debtBN = new BN(debtRaw);
 
   try {
-    const connection = new Connection(RPC_URL, { commitment: "confirmed" });
+    const connection = new Connection(RPC_URL, { commitment: "confirmed", confirmTransactionInitialTimeout: 60000 });
+    const readClient = new Client(connection);
 
-    console.log("[multiply] vault", vaultId, {
-      colMint:    colMint.toBase58(),
-      debtMint:   debtMint.toBase58(),
-      colAmount:  colBN.toString(),
-      debtAmount: debtBN.toString(),
+    // Resolve vault mints
+    let vaultConfig;
+    try { vaultConfig = await readClient.vault.getVaultConfig(Number(vaultId)); }
+    catch (e) { return res.status(400).json({ error: `Vault ${vaultId} not found: ${e.message}` }); }
+
+    const colMint  = vaultConfig.supplyToken;
+    const debtMint = vaultConfig.borrowToken;
+
+    console.log(`[multiply] action=${action} vault=${vaultId} positionId=${positionId}`, {
+      colMint: colMint.toBase58(), debtMint: debtMint.toBase58()
     });
 
-    // ── 1. ATA init instructions (idempotent — no-op if already exist) ────────
-    // Required: getOperateIx simulation fails if the user's colMint or debtMint
-    // ATA doesn't exist yet (e.g. wallet has never held USDT).
-    const ataColIx  = makeAtaIx(signerPubkey, colMint,  signerPubkey);
-    const ataDebtIx = makeAtaIx(signerPubkey, debtMint, signerPubkey);
+    // ── OPEN (Multiply) ───────────────────────────────────────────────────────
+    // Flow: FlashBorrow(debt) → Swap(debt→col) → Operate(+col, +debt) → FlashPayback
+    if (action === "open") {
+      if (!initialColAmount || !debtAmount)
+        return res.status(400).json({ error: "open requires initialColAmount and debtAmount" });
 
-    // ── 2. Flash borrow the debt token ────────────────────────────────────────
-    const flashParams   = { connection, signer: signerPubkey, asset: debtMint, amount: debtBN };
-    const flashBorrowIx = await getFlashBorrowIx(flashParams);
-    const flashPayIx    = await getFlashPaybackIx(flashParams);
+      const colBN  = new BN(initialColAmount.toString());
+      const debtBN = new BN(debtAmount.toString());
+      if (colBN.isZero() || debtBN.isZero())
+        return res.status(400).json({ error: "Amounts must be non-zero" });
 
-    // ── 3. Jupiter Lite API: swap debt token → collateral token ───────────────
-    const quoteUrl = `${LITE_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${debtBN.toString()}&slippageBps=100`;
-    const quoteRes = await fetch(quoteUrl).then(r => r.json());
+      const flashParams   = { connection, signer: signerPubkey, asset: debtMint, amount: debtBN };
+      const [flashBorrowIx, flashPayIx] = await Promise.all([
+        getFlashBorrowIx(flashParams),
+        getFlashPaybackIx(flashParams),
+      ]);
 
-    if (quoteRes.error || !quoteRes.routePlan) {
-      return res.status(502).json({
-        error: `Jupiter swap quote failed: ${quoteRes.error ?? "No route found for this pair"}`,
+      const quoteRes = await fetch(
+        `${LITE_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${debtBN.toString()}&slippageBps=100`
+      ).then(r => r.json());
+      if (quoteRes.error || !quoteRes.routePlan)
+        return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
+
+      const swapApiRes = await fetch(`${LITE_API}/swap-instructions`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
+      }).then(r => r.json());
+      if (swapApiRes.error) return res.status(502).json({ error: `Swap instructions failed: ${swapApiRes.error}` });
+
+      const swapIx      = toIx(swapApiRes.swapInstruction);
+      const swapOutput  = new BN(quoteRes.outAmount.toString());
+      const supplyTotal = colBN.add(swapOutput);
+
+      const { ixs: operateIxs, addressLookupTableAccounts: operateAlts } = await getOperateIx({
+        vaultId: Number(vaultId), positionId: Number(positionId),
+        colAmount: supplyTotal, debtAmount: debtBN,
+        signer: signerPubkey, connection,
       });
+
+      const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
+      const allAlts  = dedupeAlts([...(operateAlts ?? []), ...swapAlts]);
+      const allIxs   = [flashBorrowIx, swapIx, ...operateIxs, flashPayIx];
+      return buildAndReturn(res, connection, signerPubkey, allIxs, allAlts);
     }
 
-    const swapApiRes = await fetch(`${LITE_API}/swap-instructions`, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
-    }).then(r => r.json());
+    // ── UNWIND (Close/Deleverage) ─────────────────────────────────────────────
+    // Flow: FlashBorrow(col) → Swap(col→debt) → Operate(-col, -debt) → FlashPayback
+    if (action === "unwind") {
+      if (!positionId) return res.status(400).json({ error: "unwind requires positionId" });
+      const isFullUnwind = !withdrawAmount;
 
-    if (swapApiRes.error) {
-      return res.status(502).json({ error: `Jupiter swap instructions failed: ${swapApiRes.error}` });
-    }
-
-    const swapIx = toIx(swapApiRes.swapInstruction);
-
-    // ── 4. getOperateIx: total supply = initial collateral + swap output ───────
-    const swapOutput  = new BN(quoteRes.outAmount.toString());
-    const supplyTotal = colBN.add(swapOutput);
-
-    console.log("[multiply] supplyTotal:", supplyTotal.toString(), "swapOutput:", swapOutput.toString());
-
-    let operateIxs, operateAlts;
-    try {
-      ({ ixs: operateIxs, addressLookupTableAccounts: operateAlts } = await getOperateIx({
-        vaultId:    Number(vaultId),
-        positionId: Number(positionId),
-        colAmount:  supplyTotal,
-        debtAmount: debtBN,
-        signer:     signerPubkey,
-        connection,
-      }));
-    } catch (sdkErr) {
-      const msg = sdkErr?.message || "";
-      console.error("[multiply] getOperateIx error:", msg);
-      if (msg.includes("return data") || msg.includes("No return data")) {
-        return res.status(500).json({
-          error: `Vault ${vaultId} simulation failed. The vault may be paused or amounts are outside its limits. Try a smaller amount or different vault.`,
-        });
+      // For full unwind, read current position to estimate flashloan size
+      let flashColBN;
+      if (isFullUnwind) {
+        try {
+          const pos = await readClient.vault.getUserPosition({ vaultId: Number(vaultId), positionId: Number(positionId) });
+          const state = await readClient.vault.getCurrentPositionState({ vaultId: Number(vaultId), position: pos });
+          // Use colRaw as flashloan amount (add 1% buffer for price movement)
+          flashColBN = state.colRaw.muln(101).divn(100);
+        } catch {
+          return res.status(400).json({ error: `Could not read position ${positionId}. Check vaultId and positionId are correct.` });
+        }
+      } else {
+        flashColBN = new BN(withdrawAmount.toString());
       }
-      throw sdkErr;
+
+      const flashParams   = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN };
+      const [flashBorrowIx, flashPayIx] = await Promise.all([
+        getFlashBorrowIx(flashParams),
+        getFlashPaybackIx(flashParams),
+      ]);
+
+      // Swap col → debt (to get tokens to repay debt)
+      const quoteRes = await fetch(
+        `${LITE_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=100`
+      ).then(r => r.json());
+      if (quoteRes.error || !quoteRes.routePlan)
+        return res.status(502).json({ error: `Swap quote failed for unwind: ${quoteRes.error ?? "No route"}` });
+
+      const swapApiRes = await fetch(`${LITE_API}/swap-instructions`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
+      }).then(r => r.json());
+      if (swapApiRes.error) return res.status(502).json({ error: `Swap instructions failed: ${swapApiRes.error}` });
+
+      const swapIx = toIx(swapApiRes.swapInstruction);
+
+      // Use MAX amounts for full unwind, or specific amounts for partial
+      const opColAmount  = isFullUnwind ? MAX_WITHDRAW_AMOUNT : new BN(withdrawAmount.toString()).neg();
+      const opDebtAmount = isFullUnwind ? MAX_REPAY_AMOUNT    : new BN(quoteRes.otherAmountThreshold.toString()).neg();
+
+      const { ixs: operateIxs, addressLookupTableAccounts: operateAlts } = await getOperateIx({
+        vaultId: Number(vaultId), positionId: Number(positionId),
+        colAmount: opColAmount, debtAmount: opDebtAmount,
+        signer: signerPubkey, connection,
+      });
+
+      const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
+      const allAlts  = dedupeAlts([...(operateAlts ?? []), ...swapAlts]);
+      const allIxs   = [flashBorrowIx, swapIx, ...operateIxs, flashPayIx];
+      return buildAndReturn(res, connection, signerPubkey, allIxs, allAlts);
     }
 
-    if (!operateIxs?.length) {
-      return res.status(400).json({ error: "getOperateIx returned no instructions." });
+    // ── SIMPLE OPS (deposit, borrow, repay, withdraw) ─────────────────────────
+    // These use getOperateIx directly — no flashloan needed
+    const OPS = {
+      deposit:  { col: +1, debt: 0  },
+      borrow:   { col: 0,  debt: +1 },
+      repay:    { col: 0,  debt: -1 },
+      withdraw: { col: -1, debt: 0  },
+    };
+
+    if (OPS[action]) {
+      const op = OPS[action];
+      const colBNRaw  = colAmount  ? new BN(Math.abs(parseInt(colAmount)).toString())  : new BN(0);
+      const debtBNRaw = debtAmount ? new BN(Math.abs(parseInt(debtAmount)).toString()) : new BN(0);
+
+      const finalCol  = op.col  === 0 ? new BN(0) : op.col  > 0 ? colBNRaw  : colBNRaw.neg();
+      const finalDebt = op.debt === 0 ? new BN(0) : op.debt > 0 ? debtBNRaw : debtBNRaw.neg();
+
+      if (finalCol.isZero() && finalDebt.isZero())
+        return res.status(400).json({ error: `${action} requires colAmount or debtAmount` });
+
+      const { ixs, addressLookupTableAccounts } = await getOperateIx({
+        vaultId: Number(vaultId), positionId: Number(positionId),
+        colAmount: finalCol, debtAmount: finalDebt,
+        signer: signerPubkey, connection,
+      });
+      return buildAndReturn(res, connection, signerPubkey, ixs, addressLookupTableAccounts);
     }
 
-    // ── 5. Assemble: ATA inits → borrow → swap → operate → payback ───────────
-    const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
-    const allAlts  = [...(operateAlts ?? []), ...swapAlts];
-
-    const { blockhash } = await connection.getLatestBlockhash("finalized");
-    const message = new TransactionMessage({
-      payerKey:        signerPubkey,
-      recentBlockhash: blockhash,
-      instructions:    [ataColIx, ataDebtIx, flashBorrowIx, swapIx, ...operateIxs, flashPayIx],
-    }).compileToV0Message(allAlts);
-
-    const tx         = new VersionedTransaction(message);
-    const serialized = Buffer.from(tx.serialize()).toString("base64");
-
-    console.log("[multiply] transaction assembled OK — returning to client.");
-    return res.status(200).json({ transaction: serialized });
+    return res.status(400).json({ error: `Unknown action: ${action}. Valid: open, unwind, deposit, borrow, repay, withdraw` });
 
   } catch (err) {
-    console.error("[multiply] unhandled error:", err);
-    return res.status(500).json({ error: err?.message || "Internal server error" });
+    const msg = err?.message || "Internal server error";
+    console.error("[multiply] error:", msg);
+    if (msg.includes("return data") || msg.includes("No return data"))
+      return res.status(500).json({ error: `Vault ${vaultId} simulation failed. The vault may be paused or amounts are outside its limits.` });
+    if (msg.includes("AccountNotFound") || msg.includes("could not find account"))
+      return res.status(500).json({ error: `Vault or position account not found for vaultId ${vaultId}.` });
+    return res.status(500).json({ error: msg });
   }
 }
