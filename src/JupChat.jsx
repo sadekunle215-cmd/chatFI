@@ -2276,6 +2276,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
             const fmtCountdown = (ts) => {
               if (!ts) return null;
               const ms  = (typeof ts === "number" && ts < 1e12) ? ts * 1000 : Number(ts);
+              if (isNaN(ms)) return null;
               const diff = ms - Date.now();
               if (diff <= 0) return "Ended";
               const d = Math.floor(diff / 86400000);
@@ -2526,33 +2527,30 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                                       <div style={{ height:"100%", width:`${row.pct || 0}%`,
                                         background: (row.pct ?? 0) >= 50 ? T.green : T.accent, borderRadius:4 }}/>
                                     </div>
-                                    {/* YES / NO buttons */}
-                                    {marketId ? (
-                                      <div style={{ display:"flex", gap:7 }}>
-                                        <button onClick={() => {
-                                          setBetMarket({ marketId, title,
-                                            yesPrice: yP?.toFixed(2), noPrice: nP?.toFixed(2),
-                                            yesOutcome, noOutcome });
-                                          setBetSide(row.betSide); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                                        }} className="hov-btn"
-                                          style={{ flex:1, padding:"7px 6px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:7, color:T.green, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
-                                          YES {row.yFmt || ""}
-                                        </button>
-                                        <button onClick={() => {
-                                          setBetMarket({ marketId, title,
-                                            yesPrice: yP?.toFixed(2), noPrice: nP?.toFixed(2),
-                                            yesOutcome, noOutcome });
-                                          // Flipped: NO on row 0 = "no" side; NO on row 1 = "yes" side
-                                          setBetSide(row.betSide === "yes" ? "no" : "yes");
-                                          setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                                        }} className="hov-btn"
-                                          style={{ flex:1, padding:"7px 6px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:7, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
-                                          NO {row.nFmt || "$0.00"}
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <div style={{ fontSize:10, color:T.text3, fontStyle:"italic" }}>Not yet tradeable — check jup.ag/prediction</div>
-                                    )}
+                                    {/* YES / NO buttons — always visible, disabled if no marketId */}
+                                    <div style={{ display:"flex", gap:7 }}>
+                                      <button onClick={() => {
+                                        if (!marketId) { window.open("https://jup.ag/prediction","_blank"); return; }
+                                        setBetMarket({ marketId, title,
+                                          yesPrice: yP?.toFixed(2), noPrice: nP?.toFixed(2),
+                                          yesOutcome, noOutcome });
+                                        setBetSide(row.betSide); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                      }} className="hov-btn"
+                                        style={{ flex:1, padding:"7px 6px", background:marketId ? T.greenBg : "rgba(255,255,255,0.04)", border:`1px solid ${marketId ? T.greenBd : T.border}`, borderRadius:7, color: marketId ? T.green : T.text3, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center", opacity: marketId ? 1 : 0.55 }}>
+                                        YES {row.yFmt || "–"}
+                                      </button>
+                                      <button onClick={() => {
+                                        if (!marketId) { window.open("https://jup.ag/prediction","_blank"); return; }
+                                        setBetMarket({ marketId, title,
+                                          yesPrice: yP?.toFixed(2), noPrice: nP?.toFixed(2),
+                                          yesOutcome, noOutcome });
+                                        setBetSide(row.betSide === "yes" ? "no" : "yes");
+                                        setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                      }} className="hov-btn"
+                                        style={{ flex:1, padding:"7px 6px", background:marketId ? T.redBg : "rgba(255,255,255,0.04)", border:`1px solid ${marketId ? T.redBd : T.border}`, borderRadius:7, color: marketId ? T.red : T.text3, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center", opacity: marketId ? 1 : 0.55 }}>
+                                        NO {row.nFmt || "–"}
+                                      </button>
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -2580,29 +2578,39 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                                   {row.marketId ? (
                                     <div style={{ display:"flex", gap:7 }}>
                                       <button onClick={() => {
+                                        if (!row.marketId) { window.open("https://jup.ag/prediction","_blank"); return; }
                                         setBetMarket({ marketId: row.marketId,
                                           title: `${title} — ${row.label}`,
                                           yesPrice: row.yP?.toFixed(2), noPrice: row.nP?.toFixed(2),
                                           yesOutcome: row.label, noOutcome: "No" });
                                         setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
                                       }} className="hov-btn"
-                                        style={{ flex:1, padding:"7px 6px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:7, color:T.green, fontSize:11, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
-                                        YES {row.yFmt || ""}
+                                        style={{ flex:1, padding:"7px 6px", background:row.marketId ? T.greenBg : "rgba(255,255,255,0.04)", border:`1px solid ${row.marketId ? T.greenBd : T.border}`, borderRadius:7, color:row.marketId ? T.green : T.text3, fontSize:11, fontWeight:700, cursor:"pointer", textAlign:"center", opacity:row.marketId ? 1 : 0.55 }}>
+                                        YES {row.yFmt || "–"}
                                       </button>
                                       <button onClick={() => {
+                                        if (!row.marketId) { window.open("https://jup.ag/prediction","_blank"); return; }
                                         setBetMarket({ marketId: row.marketId,
                                           title: `${title} — ${row.label}`,
                                           yesPrice: row.yP?.toFixed(2), noPrice: row.nP?.toFixed(2),
                                           yesOutcome: row.label, noOutcome: "No" });
                                         setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
                                       }} className="hov-btn"
-                                        style={{ flex:1, padding:"7px 6px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:7, color:T.red, fontSize:11, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
-                                        NO {row.nFmt || ""}
+                                        style={{ flex:1, padding:"7px 6px", background:row.marketId ? T.redBg : "rgba(255,255,255,0.04)", border:`1px solid ${row.marketId ? T.redBd : T.border}`, borderRadius:7, color:row.marketId ? T.red : T.text3, fontSize:11, fontWeight:700, cursor:"pointer", textAlign:"center", opacity:row.marketId ? 1 : 0.55 }}>
+                                        NO {row.nFmt || "–"}
                                       </button>
                                     </div>
                                   ) : (
-                                    <div style={{ fontSize:10, color:T.text3, fontStyle:"italic" }}>Not tradeable</div>
-                                  )}
+                                    <div style={{ display:"flex", gap:7 }}>
+                                      <button onClick={() => window.open("https://jup.ag/prediction","_blank")} className="hov-btn"
+                                        style={{ flex:1, padding:"7px 6px", background:"rgba(255,255,255,0.04)", border:`1px solid ${T.border}`, borderRadius:7, color:T.text3, fontSize:11, fontWeight:700, cursor:"pointer", textAlign:"center", opacity:0.55 }}>
+                                        YES –
+                                      </button>
+                                      <button onClick={() => window.open("https://jup.ag/prediction","_blank")} className="hov-btn"
+                                        style={{ flex:1, padding:"7px 6px", background:"rgba(255,255,255,0.04)", border:`1px solid ${T.border}`, borderRadius:7, color:T.text3, fontSize:11, fontWeight:700, cursor:"pointer", textAlign:"center", opacity:0.55 }}>
+                                        NO –
+                                      </button>
+                                    </div>
                                 </div>
                               ))}
                               {subMkts.length > 8 && (
