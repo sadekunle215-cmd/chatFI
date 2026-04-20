@@ -2380,15 +2380,9 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                     };
 
                     const allOutcomes = buildOutcomes();
-                    // For binary only: keep the probability bar
-                    const yesPct = !isMulti ? allOutcomes[0]?.pct : null;
-                    const noPct  = !isMulti ? allOutcomes[1]?.pct : null;
 
-                    // Sort multi-outcome by probability desc so favourites are first
-                    const displayOutcomes = isMulti
-                      ? [...allOutcomes].sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0))
-                      : allOutcomes;
-
+                    // Always sort by probability desc so favourites appear first
+                    const displayOutcomes = [...allOutcomes].sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0));
                     return (
                       <div key={marketId||i}
                         style={{ padding:"14px", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:10, background:T.bg }}>
@@ -2409,59 +2403,55 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                             </span>
                           )}
                           {volFmt && <span>💰 {volFmt} vol</span>}
-                          {isMulti && <span style={{ color:T.accent }}>🎯 {allOutcomes.length} outcomes</span>}
                         </div>
-                        {/* Binary probability bar — only for 2-outcome markets */}
-                        {!isMulti && yesPct != null && noPct != null && (
-                          <div style={{ marginBottom:10 }}>
-                            <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3, marginBottom:3 }}>
-                              <span style={{ color:T.green }}>YES {yesPct}%</span>
-                              <span style={{ color:T.red }}>NO {noPct}%</span>
-                            </div>
-                            <div style={{ height:4, borderRadius:4, background:T.border, overflow:"hidden" }}>
-                              <div style={{ height:"100%", width:`${yesPct}%`, background:`linear-gradient(90deg, ${T.green}, ${T.greenBd})`, borderRadius:4 }}/>
-                            </div>
-                          </div>
-                        )}
-                        {/* Outcome buttons — binary (side-by-side) or multi (stacked list) */}
+                        {/* Outcome rows — every market uses stacked rows with YES + NO per outcome */}
                         {marketId ? (
-                          isMulti ? (
-                            // ── Multi-outcome: stacked rows, one per team/option ──────────
-                            <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                              {displayOutcomes.map((o, oi) => (
-                                <button key={oi} onClick={() => {
-                                  setBetMarket({ marketId, title, outcomeLabel: o.label, outcomeIndex: o.outcomeIndex, priceDisplay: o.priceDisplay, yesPrice: o.raw != null ? (o.raw/1_000_000).toFixed(2) : null });
-                                  setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                                }} className="hov-btn"
-                                  style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"9px 12px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"left", width:"100%" }}>
-                                  <span style={{ fontWeight:600 }}>{o.label}</span>
-                                  <span style={{ fontSize:11, opacity:0.9, marginLeft:8, whiteSpace:"nowrap" }}>
-                                    {o.pct != null ? `${o.pct}%` : ""}{o.priceDisplay ? ` · ${o.priceDisplay}` : ""}
-                                  </span>
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            // ── Binary: original side-by-side YES / NO buttons ────────────
-                            <div style={{ display:"flex", gap:8 }}>
-                              <button onClick={() => {
-                                setBetMarket({ marketId, title, yesPrice: allOutcomes[0]?.raw != null ? (allOutcomes[0].raw/1_000_000).toFixed(2) : null, noPrice: allOutcomes[1]?.raw != null ? (allOutcomes[1].raw/1_000_000).toFixed(2) : null, yesOutcome: allOutcomes[0]?.label, noOutcome: allOutcomes[1]?.label });
-                                setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                              }} className="hov-btn"
-                                style={{ flex:1, padding:"9px 10px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
-                                <div style={{fontWeight:700, fontSize:13}}>YES {allOutcomes[0]?.priceDisplay || ""}</div>
-                                <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{allOutcomes[0]?.label}</div>
-                              </button>
-                              <button onClick={() => {
-                                setBetMarket({ marketId, title, yesPrice: allOutcomes[0]?.raw != null ? (allOutcomes[0].raw/1_000_000).toFixed(2) : null, noPrice: allOutcomes[1]?.raw != null ? (allOutcomes[1].raw/1_000_000).toFixed(2) : null, yesOutcome: allOutcomes[0]?.label, noOutcome: allOutcomes[1]?.label });
-                                setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
-                              }} className="hov-btn"
-                                style={{ flex:1, padding:"9px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:600, cursor:"pointer", textAlign:"center" }}>
-                                <div style={{fontWeight:700, fontSize:13}}>NO {allOutcomes[1]?.priceDisplay || ""}</div>
-                                <div style={{fontSize:10, opacity:0.85, marginTop:2, fontWeight:400}}>{allOutcomes[1]?.label}</div>
-                              </button>
-                            </div>
-                          )
+                          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                            {displayOutcomes.map((o, oi) => {
+                              // For binary markets: outcome[0] YES price = rawYesGlobal, outcome[1] YES price = rawNoGlobal
+                              // For multi: each outcome has its own YES price; NO = 1 - YES (complement)
+                              const yesRaw = o.raw ?? (oi === 0 ? rawYesGlobal : oi === 1 && !isMulti ? rawNoGlobal : null);
+                              const noRaw  = isMulti
+                                ? (yesRaw != null ? Math.round((1_000_000 - yesRaw)) : null)   // complement
+                                : (oi === 0 ? rawNoGlobal : rawYesGlobal);                      // binary flip
+                              const yesPr  = yesRaw != null ? `$${(yesRaw/1_000_000).toFixed(2)}` : null;
+                              const noPr   = noRaw  != null ? `$${(noRaw /1_000_000).toFixed(2)}` : null;
+                              const pctVal = o.pct ?? (yesRaw != null ? Math.round(yesRaw/10_000) : null);
+                              return (
+                                <div key={oi} style={{ border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden" }}>
+                                  {/* Outcome label + probability bar */}
+                                  <div style={{ padding:"7px 10px 4px", background:T.surface }}>
+                                    <div style={{ fontWeight:600, fontSize:12, color:T.text1, wordBreak:"break-word", lineHeight:1.3 }}>{o.label}</div>
+                                    {pctVal != null && (
+                                      <div style={{ marginTop:4 }}>
+                                        <div style={{ height:3, borderRadius:3, background:T.border, overflow:"hidden" }}>
+                                          <div style={{ height:"100%", width:`${pctVal}%`, background:`linear-gradient(90deg,${T.green},${T.greenBd})`, borderRadius:3 }}/>
+                                        </div>
+                                        <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{pctVal}%</div>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {/* YES / NO buttons side by side */}
+                                  <div style={{ display:"flex" }}>
+                                    <button onClick={() => {
+                                      setBetMarket({ marketId, title, outcomeLabel: o.label, outcomeIndex: o.outcomeIndex, priceDisplay: yesPr, yesPrice: yesRaw != null ? (yesRaw/1_000_000).toFixed(2) : null });
+                                      setBetSide("yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                    }} className="hov-btn"
+                                      style={{ flex:1, padding:"8px 6px", background:T.greenBg, border:"none", borderTop:`1px solid ${T.greenBd}`, borderRight:`1px solid ${T.greenBd}`, color:T.green, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
+                                      YES {yesPr || ""}
+                                    </button>
+                                    <button onClick={() => {
+                                      setBetMarket({ marketId, title, outcomeLabel: `NOT: ${o.label}`, outcomeIndex: o.outcomeIndex, priceDisplay: noPr, yesPrice: noRaw != null ? (noRaw/1_000_000).toFixed(2) : null });
+                                      setBetSide("no"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                    }} className="hov-btn"
+                                      style={{ flex:1, padding:"8px 6px", background:T.redBg, border:"none", borderTop:`1px solid ${T.redBd}`, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
+                                      NO {noPr || ""}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         ) : (
                           <div style={{ fontSize:11, color:T.text3, fontStyle:"italic" }}>
                             Market closed or not yet tradeable
