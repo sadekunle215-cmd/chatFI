@@ -7,6 +7,10 @@ const JUP_LITE         = "https://lite-api.jup.ag";
 const JUP_PRICE_API    = `${JUP_BASE}/price/v3`;             // v3: usdPrice field, priceChange24h
 const JUP_TOKENS_API   = `${JUP_BASE}/tokens/v1/token`;      // detail by mint (v1 still works)
 const JUP_TOKEN_SEARCH = `${JUP_BASE}/tokens/v2/search`;      // v2 search: id=mint, icon, isVerified, audit.*
+const JUP_TOKEN_TAG    = `${JUP_BASE}/tokens/v2/tag`;          // ?query=lst|verified
+const JUP_TOKEN_CAT    = `${JUP_BASE}/tokens/v2`;              // /{category}/{interval} — toporganicscore|toptraded|toptrending
+const JUP_TOKEN_RECENT = `${JUP_BASE}/tokens/v2/recent`;       // recently listed (first pool)
+const JUP_TOKEN_VERIFY = `${JUP_BASE}/tokens/v2/verify/express/check-eligibility`; // Express verification eligibility
 const JUP_SWAP_ORDER   = `${JUP_BASE}/swap/v2/order`;        // v2 meta-aggregator (RTSE auto, gasless auto)
 const JUP_SWAP_EXEC    = `${JUP_BASE}/swap/v2/execute`;      // v2 execute
 const JUP_TRIGGER_BASE = `${JUP_BASE}/trigger/v1`;
@@ -86,7 +90,11 @@ ALWAYS reply in this exact raw JSON — no markdown fences, no text outside:
 Available actions:
 - null               → just chat
 - "FETCH_PRICE"      → actionData: { "tokens": ["SOL","JUP"] }
-- "FETCH_TOKEN_INFO" → actionData: { "symbol": "BONK" }
+- "FETCH_TOKEN_INFO"     → actionData: { "symbol": "BONK" } — full token details: price, supply, holders, liquidity, 24h stats, audit, social links
+- "FETCH_TOKEN_TAG"     → actionData: { "tag": "verified" } — tag must be "lst" (liquid staking) or "verified"
+- "FETCH_TOKEN_CATEGORY"→ actionData: { "category": "toptrending", "interval": "24h", "limit": 20 } — category: toporganicscore|toptraded|toptrending; interval: 5m|1h|6h|24h
+- "FETCH_TOKEN_RECENT"  → actionData: {} — newest tokens that just got their first liquidity pool
+- "CHECK_TOKEN_VERIFY"  → actionData: { "symbol": "BONK" } — check if a token is eligible for Jupiter express verification
 - "FETCH_PORTFOLIO"  → actionData: { "wallet": "address_or_connected" } — fetches wallet balances + DeFi positions + prediction positions + earn positions + pending orders
 - "SHOW_SWAP"        → actionData: { "from": "SOL", "to": "PEPE", "amount": "10", "amountUSD": null, "portion": null, "reason": "brief why" }
   Amount rules (pick ONE, others null):
@@ -105,7 +113,11 @@ Available actions:
 Rules:
 - "buy X" / "swap X to Y" / "exchange" → SHOW_SWAP — use EXACT symbol user mentioned even if unknown meme coin
 - "price of X" → FETCH_PRICE — ALWAYS use this for any token price, even unknown ones. Use the token SYMBOL (e.g. "METEOR" for Meteora).
-- "is X safe?" / "research X" / token info → FETCH_TOKEN_INFO — always attempt, UI searches Jupiter live
+- "is X safe?" / "research X" / token info → FETCH_TOKEN_INFO — always attempt, UI searches Jupiter live; shows full metadata
+- "show verified tokens" / "list verified" / "show LST tokens" / "liquid staking tokens" → FETCH_TOKEN_TAG
+- "trending tokens" / "top trending" / "top traded" / "best organic score" / "hot tokens" → FETCH_TOKEN_CATEGORY
+- "new tokens" / "recently listed" / "new listings" / "just launched" → FETCH_TOKEN_RECENT
+- "can I verify X?" / "verify eligibility" / "submit X for verification" → CHECK_TOKEN_VERIFY
 - "my portfolio" / "my wallet" / "my positions" / "my orders" / "my bets" → FETCH_PORTFOLIO
 - "claim" / "claim winnings" / "claim payout" → CLAIM_PAYOUTS
 - sports + predict/bet / "EPL" / "Champions League" / specific match → ALWAYS do BOTH: SHOW_PREDICTION then FETCH_PREDICTIONS
@@ -122,8 +134,10 @@ const SUGGESTIONS = [
   "What's the SOL price?",
   "Swap SOL to BONK",
   "Is PEPE safe to buy?",
+  "Top trending tokens today",
+  "Show recent token launches",
+  "Show verified tokens",
   "Arsenal vs Man City prediction",
-  "Show open predictions",
   "Show earn vaults",
   "My portfolio & positions",
   "Claim my payouts",
@@ -512,7 +526,10 @@ export default function JupChat() {
   }, []);
 
   // ── Token info — search by symbol, return rich metadata ────────────────────
-  // Token API v2: id=mint, icon=logo, isVerified, audit.{mintAuthorityDisabled,freezeAuthorityDisabled}
+  // Token API v2: full schema incl. holderCount, circSupply, totalSupply, fdv, mcap,
+  // usdPrice, liquidity, stats24h.{priceChange,buyVolume,sellVolume,numBuys,numSells,numTraders},
+  // firstPool, audit.{mintAuthorityDisabled,freezeAuthorityDisabled,topHoldersPercentage,devMints},
+  // organicScore, isVerified, tags, twitter/website/telegram/discord
   const fetchTokenInfo = async (symbol) => {
     if (!symbol) return null;
     const upper = symbol.toUpperCase();
@@ -522,13 +539,48 @@ export default function JupChat() {
       ...(match || {}),
       address: mint,
       logo_url: match?.icon || match?.logo_url || "",
+      // Price & market data
+      usdPrice: match?.usdPrice ?? null,
       market_cap: match?.mcap || match?.market_cap || null,
+      fdv: match?.fdv ?? null,
+      liquidity: match?.liquidity ?? null,
+      circSupply: match?.circSupply ?? null,
+      totalSupply: match?.totalSupply ?? null,
+      holderCount: match?.holderCount ?? null,
+      // Volume — prefer stats24h breakdown, fall back to legacy field
       daily_volume: match?.stats24h
         ? (match.stats24h.buyVolume || 0) + (match.stats24h.sellVolume || 0)
         : (match?.daily_volume || null),
+      // 24h trading stats
+      priceChange24h: match?.stats24h?.priceChange ?? null,
+      numBuys24h: match?.stats24h?.numBuys ?? null,
+      numSells24h: match?.stats24h?.numSells ?? null,
+      numTraders24h: match?.stats24h?.numTraders ?? null,
+      buyVolume24h: match?.stats24h?.buyVolume ?? null,
+      sellVolume24h: match?.stats24h?.sellVolume ?? null,
+      holderChange24h: match?.stats24h?.holderChange ?? null,
+      liquidityChange24h: match?.stats24h?.liquidityChange ?? null,
+      // 1h / 6h stats if available
+      stats1h: match?.stats1h ?? null,
+      stats6h: match?.stats6h ?? null,
+      // First pool (age of token)
+      firstPoolId: match?.firstPool?.id ?? null,
+      firstPoolAt: match?.firstPool?.createdAt ?? null,
+      // Audit / safety
       organicScore: match?.organicScore ?? null,
+      organicScoreLabel: match?.organicScoreLabel ?? null,
       freezeAuthority: match?.audit?.freezeAuthorityDisabled === false ? "active" : null,
       mint_authority: match?.audit?.mintAuthorityDisabled === false ? "active" : null,
+      topHoldersPercentage: match?.audit?.topHoldersPercentage ?? null,
+      devMints: match?.audit?.devMints ?? null,
+      // Social / links
+      twitter: match?.twitter ?? null,
+      website: match?.website ?? null,
+      telegram: match?.telegram ?? null,
+      discord: match?.discord ?? null,
+      // Launchpad / graduation info
+      launchpad: match?.launchpad ?? null,
+      graduatedAt: match?.graduatedAt ?? null,
       tags: match?.tags || (match?.isVerified ? ["verified"] : []),
     });
 
@@ -566,6 +618,55 @@ export default function JupChat() {
       } catch {}
     }
     return null;
+  };
+
+  // ── Token Tag — fetch all tokens with a specific tag (lst | verified) ───────
+  const fetchTokensByTag = async (tag = "verified") => {
+    try {
+      const data = await jupFetch(`${JUP_TOKEN_TAG}?query=${encodeURIComponent(tag)}`);
+      return Array.isArray(data) ? data : (data?.tokens || data?.data || []);
+    } catch { return []; }
+  };
+
+  // ── Token Category — top tokens by category + interval ──────────────────────
+  // category: toporganicscore | toptraded | toptrending
+  // interval: 5m | 1h | 6h | 24h
+  const fetchTokensByCategory = async (category = "toptrending", interval = "24h", limit = 20) => {
+    try {
+      const data = await jupFetch(`${JUP_TOKEN_CAT}/${category}/${interval}?limit=${limit}`);
+      return Array.isArray(data) ? data : (data?.tokens || data?.data || []);
+    } catch { return []; }
+  };
+
+  // ── Token Recent — newly listed tokens (first pool just created) ────────────
+  const fetchRecentTokens = async () => {
+    try {
+      const data = await jupFetch(JUP_TOKEN_RECENT);
+      return Array.isArray(data) ? data : (data?.tokens || data?.data || []);
+    } catch { return []; }
+  };
+
+  // ── Verify Eligibility — check if a token can be express-verified ───────────
+  const checkVerifyEligibility = async (mintAddress) => {
+    if (!mintAddress) return null;
+    try {
+      const data = await jupFetch(`${JUP_TOKEN_VERIFY}?tokenId=${encodeURIComponent(mintAddress)}`);
+      return data;
+    } catch { return null; }
+  };
+
+  // ── Format a token list into a readable summary string ──────────────────────
+  const fmtTokenList = (tokens, limit = 10) => {
+    if (!tokens?.length) return "No tokens found.";
+    return tokens.slice(0, limit).map((t, i) => {
+      const sym   = t.symbol || t.id?.slice(0,6) || "?";
+      const name  = t.name ? ` — ${t.name.slice(0,22)}` : "";
+      const price = t.usdPrice ? ` $${t.usdPrice < 0.001 ? t.usdPrice.toExponential(2) : t.usdPrice < 1 ? t.usdPrice.toFixed(4) : t.usdPrice.toFixed(2)}` : "";
+      const chg   = t.stats24h?.priceChange != null ? ` (${t.stats24h.priceChange > 0 ? "+" : ""}${t.stats24h.priceChange.toFixed(1)}%)` : "";
+      const score = t.organicScore != null ? ` · score ${Math.round(t.organicScore)}` : "";
+      const ver   = t.isVerified ? " ✓" : "";
+      return `${i + 1}. **${sym}**${name}${ver}${price}${chg}${score}`;
+    }).join("\n");
   };
 
   // ── Portfolio — full on-demand: wallet balances + DeFi positions + prediction + earn ─
@@ -1911,25 +2012,70 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
           push("ai", text + `\n\nCould not find **${actionData?.symbol || "that token"}** on Jupiter. It may not be listed yet or the symbol might be different — try the exact contract address.`);
         } else {
           const mint = info.address || info.id || info.mint || "";
-          const vol  = info.daily_volume ? `$${Number(info.daily_volume).toLocaleString(undefined,{maximumFractionDigits:0})}` : null;
-          const mcap = info.market_cap || info.mcap
-            ? `$${Number(info.market_cap || info.mcap).toLocaleString(undefined,{maximumFractionDigits:0})}` : null;
-          // Safety signals — v2: audit.freezeAuthorityDisabled / mintAuthorityDisabled (false = active = bad)
-          const hasFreeze   = info.freezeAuthority || info.audit?.freezeAuthorityDisabled === false ? "⚠ Freeze authority active" : null;
-          const hasMintAuth = info.mint_authority || info.audit?.mintAuthorityDisabled === false ? "⚠ Mint authority active" : null;
-          const organic     = info.organicScore != null ? `Organic score: ${Math.round(info.organicScore)}/100` : null;
-          const isSus       = info.audit?.isSus ? "🚨 Flagged as suspicious by Jupiter" : null;
-          const verified    = (info.isVerified || info.tags?.includes("verified")) ? "✓ Verified" : null;
+          const fmtUSD = (n, dp=0) => n != null ? `$${Number(n).toLocaleString(undefined,{maximumFractionDigits:dp})}` : null;
+          const fmtNum = (n) => n != null ? Number(n).toLocaleString() : null;
 
-          const safetyLines = [isSus, hasFreeze, hasMintAuth, verified, organic].filter(Boolean).join(" · ");
+          // Price & market data
+          const price   = info.usdPrice != null ? `$${info.usdPrice < 0.0001 ? info.usdPrice.toExponential(4) : info.usdPrice < 1 ? info.usdPrice.toFixed(6) : info.usdPrice.toFixed(4)}` : null;
+          const chg24h  = info.priceChange24h != null ? `${info.priceChange24h > 0 ? "+" : ""}${info.priceChange24h.toFixed(2)}%` : null;
+          const vol     = info.daily_volume ? fmtUSD(info.daily_volume) : null;
+          const mcap    = fmtUSD(info.market_cap || info.mcap);
+          const fdv     = fmtUSD(info.fdv);
+          const liq     = fmtUSD(info.liquidity);
+          const circ    = info.circSupply ? fmtNum(Math.round(info.circSupply)) : null;
+          const total   = info.totalSupply ? fmtNum(Math.round(info.totalSupply)) : null;
+          const holders = info.holderCount ? fmtNum(info.holderCount) : null;
+
+          // 24h trading stats
+          const buys    = info.numBuys24h ? fmtNum(info.numBuys24h) : null;
+          const sells   = info.numSells24h ? fmtNum(info.numSells24h) : null;
+          const traders = info.numTraders24h ? fmtNum(info.numTraders24h) : null;
+          const buyVol  = fmtUSD(info.buyVolume24h);
+          const sellVol = fmtUSD(info.sellVolume24h);
+
+          // Token age
+          const poolAge = info.firstPoolAt ? (() => {
+            const days = Math.floor((Date.now() - new Date(info.firstPoolAt)) / 86400000);
+            return days < 1 ? "< 1 day old" : days === 1 ? "1 day old" : `${days} days old`;
+          })() : null;
+
+          // Safety & audit signals
+          const hasFreeze   = info.freezeAuthority || info.audit?.freezeAuthorityDisabled === false ? "⚠ Freeze authority active" : null;
+          const hasMintAuth = info.mint_authority  || info.audit?.mintAuthorityDisabled === false   ? "⚠ Mint authority active"   : null;
+          const topHolders  = info.topHoldersPercentage != null ? `Top holders: ${info.topHoldersPercentage.toFixed(1)}%` : null;
+          const devMints    = info.devMints != null ? `Dev mints: ${info.devMints}` : null;
+          const organic     = info.organicScore != null ? `Organic score: ${Math.round(info.organicScore)}/100 (${info.organicScoreLabel || "?"})` : null;
+          const isSus       = info.audit?.isSus ? "🚨 Flagged as suspicious by Jupiter" : null;
+          const verified    = (info.isVerified || info.tags?.includes("verified")) ? "✓ Verified on Jupiter" : null;
+          const safetyLines = [isSus, hasFreeze, hasMintAuth, verified, organic, topHolders, devMints].filter(Boolean).join(" · ");
+
+          // Social links
+          const socials = [
+            info.twitter  ? `[Twitter](${info.twitter})`   : null,
+            info.website  ? `[Website](${info.website})`   : null,
+            info.telegram ? `[Telegram](${info.telegram})` : null,
+            info.discord  ? `[Discord](${info.discord})`   : null,
+          ].filter(Boolean).join("  ");
 
           let extra = `\n\n**${info.name || info.symbol || "Unknown"}** (${info.symbol || "?"})`;
           extra += `\nMint: \`${mint.slice(0,20)}…\``;
-          if (vol)  extra += `\n24h Volume: ${vol}`;
-          if (mcap) extra += `\nMarket Cap: ${mcap}`;
+          if (price)   extra += `\nPrice: ${price}${chg24h ? `  ${chg24h} 24h` : ""}`;
+          if (mcap)    extra += `\nMkt Cap: ${mcap}`;
+          if (fdv)     extra += `  ·  FDV: ${fdv}`;
+          if (liq)     extra += `\nLiquidity: ${liq}`;
+          if (vol)     extra += `\n24h Volume: ${vol}`;
+          if (buys || sells) extra += `\nBuys/Sells: ${buys || "—"} / ${sells || "—"}${traders ? `  (${traders} traders)` : ""}`;
+          if (buyVol || sellVol) extra += `\nBuy/Sell Vol: ${buyVol || "—"} / ${sellVol || "—"}`;
+          if (circ)    extra += `\nCirc Supply: ${circ}`;
+          if (total && total !== circ) extra += `  ·  Total: ${total}`;
+          if (holders) extra += `\nHolders: ${holders}`;
+          if (poolAge) extra += `\nAge: ${poolAge}`;
+          if (info.launchpad)   extra += `\nLaunchpad: ${info.launchpad}`;
+          if (info.graduatedAt) extra += `  ·  Graduated: ${new Date(info.graduatedAt).toLocaleDateString()}`;
           if (info.decimals !== undefined) extra += `\nDecimals: ${info.decimals}`;
-          if (info.tags?.length) extra += `\nTags: ${info.tags.slice(0,4).join(", ")}`;
+          if (info.tags?.length) extra += `\nTags: ${info.tags.slice(0,5).join(", ")}`;
           if (safetyLines) extra += `\n\n${safetyLines}`;
+          if (socials) extra += `\n${socials}`;
           push("ai", text + extra);
         }
 
@@ -2143,6 +2289,58 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
       } else if (action === "CLAIM_PAYOUTS") {
         if (!walletFull) { push("ai", text + "\n\nConnect your wallet first to check for claimable payouts."); }
         else { await doClaimPayouts(text); }
+
+      } else if (action === "FETCH_TOKEN_TAG") {
+        const tag = (actionData?.tag || "verified").toLowerCase();
+        const tokens = await fetchTokensByTag(tag);
+        if (!tokens.length) {
+          push("ai", text + `\n\nNo tokens found for tag **${tag}**.`);
+        } else {
+          const label = tag === "lst" ? "Liquid Staking Tokens (LST)" : "Verified Tokens";
+          push("ai", text + `\n\n**${label}** (${tokens.length} found, showing top 15):\n${fmtTokenList(tokens, 15)}`);
+        }
+
+      } else if (action === "FETCH_TOKEN_CATEGORY") {
+        const cat      = actionData?.category || "toptrending";
+        const interval = actionData?.interval || "24h";
+        const limit    = Math.min(actionData?.limit || 20, 50);
+        const tokens   = await fetchTokensByCategory(cat, interval, limit);
+        if (!tokens.length) {
+          push("ai", text + `\n\nNo data returned for category **${cat}** / **${interval}**.`);
+        } else {
+          const catLabel = { toptrending: "Top Trending", toptraded: "Top Traded", toporganicscore: "Highest Organic Score" }[cat] || cat;
+          push("ai", text + `\n\n**${catLabel}** — ${interval} (showing ${Math.min(tokens.length, 20)}):\n${fmtTokenList(tokens, 20)}`);
+        }
+
+      } else if (action === "FETCH_TOKEN_RECENT") {
+        const tokens = await fetchRecentTokens();
+        if (!tokens.length) {
+          push("ai", text + "\n\nCould not fetch recently listed tokens right now.");
+        } else {
+          push("ai", text + `\n\n**Recently Listed Tokens** (${tokens.length} found, newest first):\n${fmtTokenList(tokens, 15)}`);
+        }
+
+      } else if (action === "CHECK_TOKEN_VERIFY") {
+        const sym  = actionData?.symbol;
+        const info = await fetchTokenInfo(sym);
+        if (!info?.address) {
+          push("ai", text + `\n\nCould not find **${sym || "that token"}** on Jupiter to check eligibility.`);
+        } else {
+          const result = await checkVerifyEligibility(info.address);
+          if (!result) {
+            push("ai", text + `\n\nCould not retrieve verification status for **${sym}**. Try again shortly.`);
+          } else {
+            let vText = `\n\n**${sym?.toUpperCase()} — Express Verification Status**`;
+            vText += `\nToken exists on-chain: ${result.tokenExists ? "✅ Yes" : "❌ No"}`;
+            vText += `\nAlready verified: ${result.isVerified ? "✅ Yes" : "No"}`;
+            vText += `\nCan submit verification: ${result.canVerify ? "✅ Yes" : "❌ No"}`;
+            vText += `\nCan update metadata: ${result.canMetadata ? "✅ Yes" : "❌ No"}`;
+            if (result.verificationError) vText += `\n⚠ Verify blocked: ${result.verificationError}`;
+            if (result.metadataError)     vText += `\n⚠ Metadata blocked: ${result.metadataError}`;
+            if (result.canVerify) vText += `\n\nTo proceed, use the Jupiter token verification portal: https://developers.jup.ag/docs/tokens/verification`;
+            push("ai", text + vText);
+          }
+        }
 
       } else {
         push("ai", text);
