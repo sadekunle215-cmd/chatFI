@@ -2,7 +2,7 @@
 // Full Jupiter Multiply flow: Flashloan → Swap → Operate → Flashpayback
 // Per official docs: https://developers.jup.ag/docs/lend/advanced/multiply
 //
-// npm install @jup-ag/lend @jup-ag/lend-read @solana/web3.js bn.js
+// npm install @jup-ag/lend @solana/web3.js bn.js
 
 import {
   AddressLookupTableAccount,
@@ -15,7 +15,10 @@ import {
 import BN from "bn.js";
 import { getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
 import { getOperateIx }                         from "@jup-ag/lend/borrow";
-import { Client }                               from "@jup-ag/lend-read";
+
+// REMOVED: import { Client } from "@jup-ag/lend-read";
+// @jup-ag/lend-read does not exist — caused Vercel cold-start crash → HTML error page
+// colMint / debtMint are now sent directly by the frontend from MULTIPLY_VAULTS config
 
 const RPC_URL  = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const LITE_API = "https://lite-api.jup.ag/swap/v1";
@@ -55,21 +58,25 @@ export default async function handler(req, res) {
 
   // Frontend sends:
   //   vaultId          — integer vault ID (1–7)
-  //   initialColAmount — collateral in raw token units (e.g. lamports for SOL, µUSDC for USDC)
+  //   initialColAmount — collateral in raw token units (e.g. lamports for SOL)
   //   debtAmount       — debt to borrow in raw DEBT token units (e.g. µUSDC @ 6 dec)
   //   positionId       — 0 for new position, or existing NFT position ID
   //   signer           — user wallet public key string
+  //   colMint          — collateral token mint address (from MULTIPLY_VAULTS on frontend)
+  //   debtMint         — debt token mint address (from MULTIPLY_VAULTS on frontend)
   const {
     vaultId,
     initialColAmount,
     debtAmount,
     positionId = 0,
     signer,
+    colMint:  colMintStr,
+    debtMint: debtMintStr,
   } = req.body;
 
-  if (!vaultId || !initialColAmount || !debtAmount || !signer) {
+  if (!vaultId || !initialColAmount || !debtAmount || !signer || !colMintStr || !debtMintStr) {
     return res.status(400).json({
-      error: "Missing fields: vaultId, initialColAmount, debtAmount, signer",
+      error: "Missing fields: vaultId, initialColAmount, debtAmount, signer, colMint, debtMint",
     });
   }
 
@@ -80,9 +87,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Amounts must be non-zero." });
   }
 
-  let signerPubkey;
+  let signerPubkey, colMint, debtMint;
   try { signerPubkey = new PublicKey(signer); }
   catch { return res.status(400).json({ error: `Invalid signer: ${signer}` }); }
+
+  try { colMint = new PublicKey(colMintStr); }
+  catch { return res.status(400).json({ error: `Invalid colMint: ${colMintStr}` }); }
+
+  try { debtMint = new PublicKey(debtMintStr); }
+  catch { return res.status(400).json({ error: `Invalid debtMint: ${debtMintStr}` }); }
 
   const colBN  = new BN(colRaw);
   const debtBN = new BN(debtRaw);
@@ -90,33 +103,19 @@ export default async function handler(req, res) {
   try {
     const connection = new Connection(RPC_URL, { commitment: "confirmed" });
 
-    // ── 1. Get vault token mints from @jup-ag/lend-read ──────────────────────
-    const readClient = new Client(connection);
-    let vaultConfig;
-    try {
-      vaultConfig = await readClient.vault.getVaultConfig(Number(vaultId));
-    } catch (e) {
-      return res.status(400).json({
-        error: `Vault ${vaultId} not found. Check vaultId is valid. Details: ${e.message}`,
-      });
-    }
-
-    const colMint  = vaultConfig.supplyToken;  // collateral token mint
-    const debtMint = vaultConfig.borrowToken;  // debt token mint
-
     console.log("[multiply] vault", vaultId, {
-      colMint:   colMint.toBase58(),
-      debtMint:  debtMint.toBase58(),
-      colAmount: colBN.toString(),
+      colMint:    colMint.toBase58(),
+      debtMint:   debtMint.toBase58(),
+      colAmount:  colBN.toString(),
       debtAmount: debtBN.toString(),
     });
 
-    // ── 2. Flash borrow the debt token ────────────────────────────────────────
+    // ── 1. Flash borrow the debt token ────────────────────────────────────────
     const flashParams   = { connection, signer: signerPubkey, asset: debtMint, amount: debtBN };
     const flashBorrowIx = await getFlashBorrowIx(flashParams);
     const flashPayIx    = await getFlashPaybackIx(flashParams);
 
-    // ── 3. Jupiter Lite API: swap debt token → collateral token ───────────────
+    // ── 2. Jupiter Lite API: swap debt token → collateral token ───────────────
     const quoteUrl = `${LITE_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${debtBN.toString()}&slippageBps=100`;
     const quoteRes = await fetch(quoteUrl).then(r => r.json());
 
@@ -138,7 +137,7 @@ export default async function handler(req, res) {
 
     const swapIx = toIx(swapApiRes.swapInstruction);
 
-    // ── 4. getOperateIx: total supply = initial collateral + swap output ───────
+    // ── 3. getOperateIx: total supply = initial collateral + swap output ───────
     const swapOutput  = new BN(quoteRes.outAmount.toString());
     const supplyTotal = colBN.add(swapOutput);
 
@@ -169,7 +168,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "getOperateIx returned no instructions." });
     }
 
-    // ── 5. Assemble full transaction: borrow → swap → operate → payback ───────
+    // ── 4. Assemble full transaction: borrow → swap → operate → payback ───────
     const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
     const allAlts  = [...(operateAlts ?? []), ...swapAlts];
 
