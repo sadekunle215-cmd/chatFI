@@ -2298,37 +2298,84 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                     // ── MULTI-OUTCOME MARKET (3+ options, e.g. "Who wins UCL?") ──────
                     const isMulti = rawOutcomes.length > 2;
 
+                    // ── Pricing block — lives at event level, openMkt level, or pricing sub-object ──
+                    const pricing  = m.pricing || openMkt?.pricing || {};
+                    const rawYesGlobal = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
+                    const rawNoGlobal  = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
+
+                    // ── Smart label derivation from event title ───────────────────────────────
+                    const deriveLabels = () => {
+                      // "X vs Y" → ["X wins", "Y wins / Draw"]
+                      const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
+                      if (vs) return [`${vs[1].trim()} wins`, `${vs[2].trim()} wins / Draw`];
+                      // "Will X win?" → ["Yes", "No"]
+                      if (/will .+ win/i.test(title)) return ["Yes, wins", "No / Draw"];
+                      // "Who will be X?" / "Next X?" — political / multi
+                      // "Will X happen?" generic yes/no
+                      if (/will |is |are |does |did |has |have /i.test(title)) return ["Yes", "No"];
+                      return ["Yes", "No"];
+                    };
+                    const [derivedYes, derivedNo] = deriveLabels();
+
+                    // ── Extract outcome label from a single outcome object ─────────────────────
+                    // Jupiter stores names in many different fields — try them all
+                    const extractOutcomeLabel = (o, fallback) =>
+                      o?.label       ||
+                      o?.name        ||
+                      o?.title       ||
+                      o?.outcome     ||
+                      o?.description ||
+                      o?.text        ||
+                      o?.value       ||
+                      (typeof o === "string" ? o : null) ||
+                      fallback;
+
                     // Build a normalised outcome list with label + price for every option
                     const buildOutcomes = () => {
                       if (rawOutcomes.length > 0) {
+                        // Try to pull YES/NO labels from event-level fields first
+                        // Jupiter sometimes puts them at m.yesLabel / m.noLabel / openMkt.yesLabel etc.
+                        const evtYes = m.yesLabel || m.yesOutcome || m.yes_label ||
+                                       openMkt?.yesLabel || openMkt?.yesOutcome ||
+                                       m.metadata?.yesLabel || m.metadata?.yesOutcome;
+                        const evtNo  = m.noLabel  || m.noOutcome  || m.no_label  ||
+                                       openMkt?.noLabel  || openMkt?.noOutcome  ||
+                                       m.metadata?.noLabel  || m.metadata?.noOutcome;
+
                         return rawOutcomes.map((o, idx) => {
-                          const label = o.label || o.name || o.title || o.outcome || `Option ${idx + 1}`;
+                          // For binary (idx 0 = YES, idx 1 = NO) fall back to event-level labels
+                          // then title-derived, then generic
+                          let label;
+                          if (idx === 0) {
+                            label = extractOutcomeLabel(o, null) || evtYes || derivedYes;
+                          } else if (idx === 1) {
+                            label = extractOutcomeLabel(o, null) || evtNo  || derivedNo;
+                          } else {
+                            label = extractOutcomeLabel(o, `Option ${idx + 1}`);
+                          }
+                          // Reject generic placeholder labels and replace with derived ones
+                          if (/^option\s*\d+$/i.test(label)) {
+                            label = idx === 0 ? (evtYes || derivedYes)
+                                  : idx === 1 ? (evtNo  || derivedNo)
+                                  : `Choice ${idx + 1}`;
+                          }
                           // Per-outcome pricing lives at o.pricing or o.price or o.buyYesPriceUsd
-                          const raw = o.pricing?.buyYesPriceUsd ?? o.pricing?.priceUsd ?? o.priceUsd ?? o.price ?? null;
-                          const pct = o.probability ?? o.odds ?? (raw != null ? raw / 10_000 : null);
-                          const priceDisplay = raw != null ? `$${(raw / 1_000_000).toFixed(2)}` : (pct != null ? `${Math.round(pct)}%` : null);
+                          const raw = o.pricing?.buyYesPriceUsd ?? o.pricing?.priceUsd ??
+                                      o.priceUsd ?? o.price ??
+                                      // For binary, fall back to global pricing
+                                      (idx === 0 ? rawYesGlobal : idx === 1 ? rawNoGlobal : null);
+                          const pct = o.probability ?? o.odds ?? (raw != null ? Math.round(raw / 10_000) : null);
+                          const priceDisplay = raw != null ? `$${(raw / 1_000_000).toFixed(2)}`
+                                             : (pct != null ? `${pct}%` : null);
                           return { label, priceDisplay, raw, pct, outcomeIndex: idx };
                         });
                       }
-                      // Binary fallback: no outcomes array at all
-                      const pricing  = m.pricing || openMkt?.pricing || {};
-                      const rawYes   = pricing.buyYesPriceUsd ?? pricing.yesPriceUsd ?? pricing.yesPrice;
-                      const rawNo    = pricing.buyNoPriceUsd  ?? pricing.noPriceUsd  ?? pricing.noPrice;
-                      const yesLabel = m.yesLabel || openMkt?.yesLabel || (() => {
-                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
-                        if (vs) return `${vs[1].trim()} wins`;
-                        if (/will .+ win/i.test(title)) return "Yes, wins";
-                        return "Yes";
-                      })();
-                      const noLabel = m.noLabel || openMkt?.noLabel || (() => {
-                        const vs = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
-                        if (vs) return `${vs[2].trim()} wins / Draw`;
-                        if (/will .+ win/i.test(title)) return "No, won't win";
-                        return "No";
-                      })();
+                      // No outcomes array at all — pure binary fallback
+                      const yesLabel = m.yesLabel || m.yesOutcome || openMkt?.yesLabel || derivedYes;
+                      const noLabel  = m.noLabel  || m.noOutcome  || openMkt?.noLabel  || derivedNo;
                       return [
-                        { label: yesLabel, priceDisplay: rawYes != null ? `$${(rawYes/1_000_000).toFixed(2)}` : null, raw: rawYes, pct: rawYes != null ? Math.round(rawYes/10_000) : null, outcomeIndex: 0 },
-                        { label: noLabel,  priceDisplay: rawNo  != null ? `$${(rawNo /1_000_000).toFixed(2)}` : null, raw: rawNo,  pct: rawNo  != null ? Math.round(rawNo /10_000) : null, outcomeIndex: 1 },
+                        { label: yesLabel, priceDisplay: rawYesGlobal != null ? `$${(rawYesGlobal/1_000_000).toFixed(2)}` : null, raw: rawYesGlobal, pct: rawYesGlobal != null ? Math.round(rawYesGlobal/10_000) : null, outcomeIndex: 0 },
+                        { label: noLabel,  priceDisplay: rawNoGlobal  != null ? `$${(rawNoGlobal /1_000_000).toFixed(2)}` : null, raw: rawNoGlobal,  pct: rawNoGlobal  != null ? Math.round(rawNoGlobal /10_000) : null, outcomeIndex: 1 },
                       ];
                     };
 
