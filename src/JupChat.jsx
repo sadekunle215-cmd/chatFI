@@ -2445,19 +2445,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                       <div key={m.id || m.eventId || marketId || i}
                         style={{ border:`1px solid ${T.border}`, borderRadius:12, background:T.bg, overflow:"hidden" }}>
 
-                        {/* Banner image */}
-                        {imgUrl && (
-                          <div style={{ position:"relative", height:80, overflow:"hidden" }}>
-                            <img src={imgUrl} alt="" style={{ width:"100%", height:"100%", objectFit:"cover", opacity:0.8 }}
-                              onError={e => { e.target.parentNode.style.display="none"; }}/>
-                            <div style={{ position:"absolute", inset:0, background:"linear-gradient(to bottom, transparent 30%, rgba(13,17,23,0.9))" }}/>
-                            {urgent && countdown && (
-                              <div style={{ position:"absolute", top:8, right:10, padding:"3px 9px", borderRadius:20, background:"rgba(220,38,38,0.85)", fontSize:10, fontWeight:700, color:"#fff" }}>
-                                ⚡ {countdown}
-                              </div>
-                            )}
-                          </div>
-                        )}
+
 
                         <div style={{ padding:"12px 14px" }}>
                           {/* ── Title ── */}
