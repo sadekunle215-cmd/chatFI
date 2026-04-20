@@ -13,7 +13,8 @@ const JUP_TRIGGER_BASE = `${JUP_BASE}/trigger/v1`;
 const JUP_TRIGGER_EXEC = `${JUP_LITE}/trigger/v1/execute`;
 const JUP_PORTFOLIO    = `${JUP_BASE}/portfolio/v1`;
 const JUP_PRED_API     = `${JUP_BASE}/prediction/v1`;
-const JUP_EARN_API     = `${JUP_BASE}/lend/v1/earn`;
+const JUP_EARN_API     = `${JUP_BASE}/lend/v1/earn`;   // deposit, withdraw, mint, redeem, tokens, positions, earnings
+const JUP_BORROW_API   = `${JUP_BASE}/lend/v1/borrow`;  // borrow vault data (SDK-based ops)
 const SOLANA_RPC       = "SOLANA_RPC";
 const SPL_PROGRAM      = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 // JupUSD mint for prediction market deposits
@@ -64,7 +65,16 @@ const CHATFI_AVATAR = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gKgSU
 // ─── AI system prompt ─────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are ChatFi — a sharp, honest AI trading assistant built on Jupiter DEX (Solana). Tone: thoughtful, direct, warm — never hyped.
 
-You pull live data: token prices (Jupiter Price API v3), safety scores, metadata. You help users swap ANY Solana token, set limit/DCA orders, track full portfolios (wallet balances + DeFi positions + prediction market positions + earn positions), research tokens, analyse sports for prediction markets, and earn yield via Jupiter Lend vaults.
+You pull live data: token prices (Jupiter Price API v3), safety scores, metadata. You help users swap ANY Solana token, set limit/DCA orders, track full portfolios, research tokens, analyse sports for prediction markets, and interact with Jupiter Lend (Earn, Borrow, Multiply, Flashloans).
+
+JUPITER LEND KNOWLEDGE:
+• Earn: Deposit assets → earn yield from borrowers. No fees, no supply limits. Withdrawals use Automated Debt Ceiling (smoothed per block). Returns jlTokens (receipt tokens). Endpoints: deposit/withdraw (by asset amount) or mint/redeem (by shares). token_exchange_price (scaled 1e12) converts shares ↔ underlying.
+• Borrow: Deposit collateral into a vault → borrow against it. Positions are NFTs. Each vault has one collateral token and one debt token. Up to 95% LTV. Liquidation removes bad debt automatically.
+• Multiply (looping): Flash-borrow debt → swap to collateral → deposit + borrow → repay flashloan. All atomic in one tx. Position tracked as NFT.
+• Unwind (deleverage): Flash-borrow collateral → swap → repay debt + withdraw → repay flashloan. MAX_REPAY_AMOUNT / MAX_WITHDRAW_AMOUNT for full close.
+• Repay-with-Collateral: Use when you only hold collateral, not debt token — flash-borrow debt → repay + withdraw max collateral → swap → repay flashloan.
+• Flashloans: Zero fee, atomic, no collateral. Must repay within same tx. Use cases: arbitrage, liquidations, collateral swaps.
+• Risks: Smart contract risk, liquidation if LTV breached, borrow rate > yield erodes Multiply profits.
 
 ALWAYS reply in this exact raw JSON — no markdown fences, no text outside:
 {
@@ -83,26 +93,28 @@ Available actions:
   • portion: "all" | "half" | "quarter" | "75%" | "10%" — when user says "all my X", "half my X", "25% of X", etc.
   • amount: token units — when user says "swap 10 SOL"
   • amountUSD: dollar value — when user says "swap $10 of SOL"
-  Examples: "swap all my USDC→SOL" → portion:"all", from:"USDC" | "swap half my SOL→BONK" → portion:"half" | "swap 25% of my JUP→SOL" → portion:"25%"
-- "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "targetPrice": "150", "amount": "5", "portion": null, "hint": "brief why" } — extract targetPrice, amount, or portion ("all","half","quarter","25%") from user message.
-- "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players", "searchQuery": "Arsenal Man City" } — ALWAYS set searchQuery to the match/teams so the UI can fetch the live market. ALSO trigger FETCH_PREDICTIONS with the same query so the real market loads beside the analysis.
-- "FETCH_PREDICTIONS"→ actionData: { "sport": "sports", "query": null } — sport categories (exact): sports, crypto, politics, esports, culture, economics, tech. For specific leagues/competitions like "EPL", "Champions League", "NBA playoffs", set query to the search string instead of sport. Use null sport for all.
-- "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — if user says "put 10% of my USDC in earn" set vault:"USDC", portion:"10%". portion: "all"|"half"|"quarter"|"N%"
-- "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — when user asks about multiply/leverage/looping on Jupiter Lend. Multiply CAN be executed in-app via the "Open Position" button on each vault card. Explain how it works and show available strategies.
-- "SHOW_LEND_POSITIONS" → actionData: {} — show user's open Jupiter Lend borrow/multiply positions with unwind buttons
+  Examples: "swap all my USDC→SOL" → portion:"all", from:"USDC" | "swap half my SOL→BONK" → portion:"half"
+- "SHOW_TRIGGER"     → actionData: { "token": "SOL", "direction": "below", "targetPrice": "150", "amount": "5", "portion": null, "hint": "brief why" } — extract targetPrice, amount, or portion from user message.
+- "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players", "searchQuery": "Arsenal Man City" } — ALWAYS set searchQuery. ALSO trigger FETCH_PREDICTIONS with the same query.
+- "FETCH_PREDICTIONS"→ actionData: { "sport": "sports", "query": null } — sport categories (exact): sports, crypto, politics, esports, culture, economics, tech. For specific leagues set query instead.
+- "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — portion: "all"|"half"|"quarter"|"N%"
+- "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — leveraged looping via Jupiter Lend flashloans. Explain mechanics + show vaults.
+- "SHOW_LEND_POSITIONS" → actionData: {} — show user's open Lend positions (borrow/multiply) with unwind buttons AND earn positions with withdraw buttons
 - "CLAIM_PAYOUTS"    → actionData: {} — triggers fetch of claimable prediction positions
 
 Rules:
 - "buy X" / "swap X to Y" / "exchange" → SHOW_SWAP — use EXACT symbol user mentioned even if unknown meme coin
-- "price of X" → FETCH_PRICE — ALWAYS use this for any token price, even unknown ones. The UI will search Jupiter for the mint. Use the token SYMBOL in the tokens array (e.g. "METEOR" for Meteora, "URANUS" for Uranus).
+- "price of X" → FETCH_PRICE — ALWAYS use this for any token price, even unknown ones. Use the token SYMBOL (e.g. "METEOR" for Meteora).
 - "is X safe?" / "research X" / token info → FETCH_TOKEN_INFO — always attempt, UI searches Jupiter live
 - "my portfolio" / "my wallet" / "my positions" / "my orders" / "my bets" → FETCH_PORTFOLIO
 - "claim" / "claim winnings" / "claim payout" → CLAIM_PAYOUTS
-- sports + predict/bet / "EPL" / "Champions League" / specific match → ALWAYS do BOTH: first SHOW_PREDICTION (with searchQuery set), then immediately also do FETCH_PREDICTIONS (with query set to team names). The UI will show analysis + live market together.
+- sports + predict/bet / "EPL" / "Champions League" / specific match → ALWAYS do BOTH: SHOW_PREDICTION then FETCH_PREDICTIONS
 - "predictions" / "show markets" / "what can I bet on" → FETCH_PREDICTIONS
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
-- "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY — explain how it works and show available strategies
-- "my lend positions" / "my borrow positions" / "close position" / "unwind" / "deleverage" → SHOW_LEND_POSITIONS
+- "withdraw from earn" / "redeem jlTokens" / "take out my earn" → SHOW_LEND_POSITIONS (earn panel has withdraw buttons)
+- "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY
+- "my lend positions" / "my borrow positions" / "close position" / "unwind" / "deleverage" / "repay with collateral" → SHOW_LEND_POSITIONS
+- "flashloan" / "flash loan" → explain: zero-fee atomic loan, repay within same tx; use cases: arbitrage, liquidations, collateral swaps
 - "limit order" / "DCA" / "buy when price hits" → SHOW_TRIGGER
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.`;
 
@@ -308,6 +320,8 @@ export default function JupChat() {
   const [earnLoading, setEarnLoading]     = useState(false);
   const [earnDeposit, setEarnDeposit]     = useState({ vault:null, amount:"" });
   const [showEarnDeposit, setShowEarnDeposit] = useState(false);
+  const [earnWithdraw, setEarnWithdraw]       = useState({ vault:null, amount:"" });
+  const [showEarnWithdraw, setShowEarnWithdraw] = useState(false);
 
   // UI
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -440,6 +454,8 @@ export default function JupChat() {
     if (options.body !== undefined) {
       payload.body = typeof options.body === "string" ? JSON.parse(options.body) : options.body;
     }
+    // Pass x-api-key for Jupiter Lend endpoints (beta API requires it even if empty)
+    if (url.includes("/lend/v1/")) payload.apiKey = options.apiKey || "";
     const res = await fetch("/api/jupiter", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -570,7 +586,9 @@ export default function JupChat() {
     } catch {}
     // 4. Earn (lend) positions
     try {
-      const earn = await jupFetch(`${JUP_EARN_API}/positions?users=${walletAddress}`);
+      // Jupiter Lend Earn positions: GET /lend/v1/earn/positions?wallets=<address>
+      const earn = await jupFetch(`${JUP_EARN_API}/positions?wallets=${walletAddress}`);
+      if (!earn || earn.error) throw new Error("earn positions empty");
       results.earnPositions = Array.isArray(earn) ? earn : (earn?.data || []);
     } catch {}
     return results;
@@ -655,6 +673,13 @@ export default function JupChat() {
           };
 
           const decimals = v.asset?.decimals ?? v.decimals ?? 6;
+          // token_exchange_price (scaled 1e12): shares → underlying. liquidity_exchange_price excludes rewards.
+          const tokenExchangePrice   = parseFloat(v.tokenExchangePrice  || v.token_exchange_price  || 0);
+          const liquidityExchangePrice = parseFloat(v.liquidityExchangePrice || v.liquidity_exchange_price || 0);
+          // Utilization: how much of TVL is borrowed (0–100%)
+          const totalAssets  = parseFloat(v.totalAssets  || v.total_assets  || 0);
+          const totalBorrows = parseFloat(v.totalBorrows || v.total_borrows || 0);
+          const utilization  = totalAssets > 0 ? Math.min(100, Math.round((totalBorrows / totalAssets) * 100)) : null;
           return {
             id:           v.id || v.address || Math.random().toString(36).slice(2),
             name:         v.name || `Jupiter Lend ${v.asset?.symbol || v.symbol || ""}`,
@@ -665,7 +690,10 @@ export default function JupChat() {
             apyDisplay:   fmtApy(apyVal),
             supplyApy:    fmtApy(supplyRateRaw),
             rewardsApy:   rewardsRateRaw > 0 ? fmtApy(rewardsRateRaw) : null,
-            tvl:          v.totalAssets ? (parseFloat(v.totalAssets) / Math.pow(10, decimals)) : 0,
+            tvl:          totalAssets > 0 ? (totalAssets / Math.pow(10, decimals)) : 0,
+            utilization,
+            tokenExchangePrice,
+            liquidityExchangePrice,
             protocol:     "Jupiter Lend",
             description:  `Supply ${v.asset?.symbol || v.symbol || ""}${rewardsRateRaw > 0 ? ` · Rewards ${fmtApy(rewardsRateRaw)}` : ""}`,
             logoUrl:      v.asset?.logo_url || v.logoUrl || "",
@@ -732,6 +760,53 @@ export default function JupChat() {
       push("ai", `Deposit failed: ${err?.message || "Unknown error"}. Please check your balance and try again.`);
     }
   };
+
+  // ── Earn withdraw — POST /lend/v1/earn/withdraw ────────────────────────────
+  const doEarnWithdraw = async () => {
+    const { vault, amount } = earnWithdraw;
+    if (!amount || parseFloat(amount) <= 0) return;
+    if (!walletFull) { push("ai", "Connect your wallet first to withdraw."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+
+    const assetMint = vault.assetMint;
+    if (!assetMint) { push("ai", `Could not resolve asset mint for **${vault.name}**. Please try again.`); return; }
+    const decimals = vault.assetDecimals || 6;
+    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
+
+    setShowEarnWithdraw(false);
+    push("ai", `Preparing withdrawal of **${amount} ${vault.token}** from **${vault.name}**…`);
+    try {
+      const res = await jupFetch(`${JUP_EARN_API}/withdraw`, {
+        method: "POST",
+        body: { asset: assetMint, amount: amountRaw, signer: walletFull },
+      });
+      if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
+      if (!res.transaction) throw new Error("No transaction returned from Jupiter Lend withdraw.");
+
+      const binaryStr = atob(res.transaction);
+      const txBytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const signedTx = await provider.signTransaction(tx);
+
+      const signedBytes = signedTx.serialize();
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [btoa(String.fromCharCode(...signedBytes)), { encoding: "base64", skipPreflight: true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      push("ai", `Withdrawal submitted ✓\n\n**${amount} ${vault.token}** withdrawn from **${vault.name}**\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+    } catch (err) {
+      push("ai", `Withdrawal failed: ${err?.message || "Unknown error"}. Please check your earn balance and try again.`);
+    }
+  };
+
 
   // ── Prediction on-chain bet — POST /prediction/v1/orders ────────────────────
   const doPredictionBet = async () => {
@@ -924,9 +999,13 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     const provider = getActiveProvider();
     if (!provider?.signTransaction) { push("ai", "Wallet does not support signing."); return; }
 
+    const vaultMeta = MULTIPLY_VAULTS.find(v => v.vaultId === pos.vaultId);
+    const colSym    = vaultMeta?.collateral || "collateral";
+    const debtSym   = vaultMeta?.debt       || "debt";
+
     setUnwindStatus(pos.positionId);
     setShowLendPos(false);
-    push("ai", `${partial ? "Partially closing" : "Closing"} position #${pos.positionId} (vault ${pos.vaultId})…`);
+    push("ai", `${partial ? "Partially closing" : "Closing"} position #${pos.positionId} (${colSym}/${debtSym}, vault ${pos.vaultId}) via flashloan…`);
 
     try {
       const body = {
@@ -947,13 +1026,13 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
       const signedTx = await provider.signTransaction(tx);
       const rpcRes   = await jupFetch("SOLANA_RPC", {
         method:"POST",
-        body:{ jsonrpc:"2.0", id:1, method:"sendTransaction", params:[btoa(String.fromCharCode(...signedTx.serialize())), { encoding:"base64", skipPreflight:false }] },
+        body:{ jsonrpc:"2.0", id:1, method:"sendTransaction", params:[btoa(String.fromCharCode(...signedTx.serialize())), { encoding:"base64", skipPreflight:true }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed.");
 
       setUnwindStatus("done");
-      push("ai", `Position #${pos.positionId} ${partial ? "partially closed" : "fully closed"} ✓\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      push("ai", `Position #${pos.positionId} ${partial ? "partially closed" : "fully closed"} ✓\n\nThe flashloan was repaid atomically — your ${colSym || "collateral"} is back in your wallet.\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
       // Refresh positions
       await fetchLendPositions();
     } catch (err) {
@@ -1870,13 +1949,24 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                 return `${side} on _${title.slice(0,40)}_ ${cost}${claim}`;
               }).join("\n")
             : "";
-          // Earn positions
+          // Earn positions — Jupiter API returns shares + underlyingAssets (already in human units) + asset symbol
           const earnPos = pData?.earnPositions || [];
-          const earnStr = earnPos.filter(e => parseFloat(e.underlyingAssets||e.shares||0) > 0).length > 0
-            ? `\n\n**Earn Positions:**\n` +
-              earnPos.filter(e => parseFloat(e.underlyingAssets||e.shares||0)>0).slice(0,5).map(e =>
-                `${e.asset || e.underlyingAddress?.slice(0,8) || "Token"}: ${(parseFloat(e.underlyingAssets||0)/1e6).toFixed(4)} deposited`
-              ).join("\n")
+          const earnActive = earnPos.filter(e => {
+            const ua = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
+            const sh = parseFloat(e.shares || e.jlTokens || 0);
+            return ua > 0 || sh > 0;
+          });
+          const earnStr = earnActive.length > 0
+            ? `\n\n**Earn Positions (${earnActive.length}):**\n` +
+              earnActive.slice(0,5).map(e => {
+                const sym = e.asset?.symbol || e.assetSymbol || e.symbol || e.underlyingMint?.slice(0,6) || "Token";
+                const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
+                const sh  = parseFloat(e.shares || e.jlTokens || 0);
+                const decimals = e.asset?.decimals ?? e.decimals ?? 6;
+                // underlyingAssets may already be human-readable or still in raw units
+                const displayAmt = ua > 1e6 ? (ua / Math.pow(10, decimals)).toFixed(4) : ua > 0 ? ua.toFixed(4) : (sh / Math.pow(10, decimals)).toFixed(4);
+                return `${sym}: ${displayAmt} deposited`;
+              }).join("\n")
             : "";
           // Pending orders
           const orders = pData?.predOrders || [];
@@ -2540,10 +2630,16 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                   style={{ padding:"14px 16px", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:10, background:T.bg, transition:"all 0.15s", cursor:"default" }}>
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
                     <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontWeight:600, fontSize:14, color:T.text1 }}>{v.token} Earn Vault</div>
+                      <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                        {v.logoUrl && <img src={v.logoUrl} alt={v.token} style={{ width:20, height:20, borderRadius:"50%", objectFit:"cover", flexShrink:0 }} onError={e=>e.target.style.display="none"} />}
+                        <div style={{ fontWeight:600, fontSize:14, color:T.text1 }}>{v.token} Earn Vault</div>
+                      </div>
                       <div style={{ fontSize:12, color:T.text3, marginTop:2 }}>
                         by Jupiter Lend
                         {v.tvl > 0 && <span style={{ marginLeft:8 }}>· TVL: ${Number(v.tvl).toLocaleString(undefined,{maximumFractionDigits:0})}</span>}
+                        {v.utilization !== null && v.utilization !== undefined && (
+                          <span style={{ marginLeft:8 }}>· Util: {v.utilization}%</span>
+                        )}
                       </div>
                       <div style={{ display:"flex", gap:8, marginTop:6, flexWrap:"wrap" }}>
                         {v.supplyApy && v.supplyApy !== "N/A" && (
@@ -2561,11 +2657,18 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                     <div style={{ textAlign:"right", flexShrink:0, marginLeft:12 }}>
                       <div style={{ fontSize:22, fontWeight:800, color:T.green, lineHeight:1 }}>{v.apyDisplay}</div>
                       <div style={{ fontSize:10, color:T.text3, marginBottom:8, marginTop:2 }}>Total APY</div>
-                      <button
-                        onClick={() => { setEarnDeposit({ vault:v, amount:"" }); setShowEarnDeposit(true); }} className="hov-btn"
-                        style={{ padding:"6px 16px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                        Deposit
-                      </button>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6, alignItems:"flex-end" }}>
+                        <button
+                          onClick={() => { setEarnDeposit({ vault:v, amount:"" }); setShowEarnDeposit(true); }} className="hov-btn"
+                          style={{ padding:"6px 16px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                          Deposit
+                        </button>
+                        <button
+                          onClick={() => { setEarnWithdraw({ vault:v, amount:"" }); setShowEarnWithdraw(true); }} className="hov-btn"
+                          style={{ padding:"5px 14px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:11, cursor:"pointer" }}>
+                          Withdraw
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2589,8 +2692,14 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
               ) : (
                 <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                   {lendPositions.map((pos, i) => {
-                    const supplyNum  = parseFloat(pos.supply)  / 1e9;
-                    const borrowNum  = parseFloat(pos.borrow)  / 1e9;
+                    // Look up vault to get correct decimals; fall back to 9 (SOL default)
+                    const vaultMeta   = MULTIPLY_VAULTS.find(v => v.vaultId === pos.vaultId);
+                    const colDec      = vaultMeta?.colDecimals  ?? 9;
+                    const debtDec     = vaultMeta?.debtDecimals ?? 6;
+                    const colSym      = vaultMeta?.collateral || "Col";
+                    const debtSym     = vaultMeta?.debt       || "Debt";
+                    const supplyNum   = parseFloat(pos.supply) / Math.pow(10, colDec);
+                    const borrowNum   = parseFloat(pos.borrow) / Math.pow(10, debtDec);
                     const riskPct    = Math.round((pos.riskRatio || 0) * 100);
                     const ltPct      = pos.liquidationThreshold ? Math.round(pos.liquidationThreshold * 100) : null;
                     const riskColor  = riskPct > 80 ? T.red : riskPct > 60 ? "#f59e0b" : T.green;
@@ -2651,7 +2760,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
               {/* How it works box */}
               <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 14px", marginBottom:14, fontSize:12, color:T.text2, lineHeight:1.7 }}>
                 <div style={{ fontWeight:600, color:T.text1, marginBottom:6 }}>How Multiply works</div>
-                <div>Multiply uses flash-loans (powered by Fluid) to loop your position in a single atomic transaction:</div>
+                <div>Multiply uses <strong>zero-fee Jupiter Flashloans</strong> to loop your position in a single atomic Solana transaction. <a href="https://developers.jup.ag/docs/lend/advanced/multiply" target="_blank" rel="noreferrer" style={{ color:T.teal, fontSize:11 }}>Docs ↗</a></div>
                 <div style={{ margin:"6px 0 0 0", color:T.text3, fontSize:11 }}>
                   1. Deposit collateral (e.g. JupSOL)<br/>
                   2. Flash-loan borrows the debt asset (e.g. SOL)<br/>
@@ -2660,7 +2769,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                   5. You now hold 3x–10x amplified exposure to yield
                 </div>
                 <div style={{ marginTop:8, padding:"6px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:6, color:T.red, fontSize:11 }}>
-                  ⚠ Risk: Positions can be liquidated if borrow rates exceed yield or collateral drops sharply. Start at 2x–3x.
+                  ⚠ Risk: Liquidation if LTV breached. High borrow rate may erode yield. Start conservative at 2x–3x. Monitor at jup.ag/lend.
                 </div>
               </div>
               {/* Filter tabs */}
@@ -2825,6 +2934,38 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                   Confirm Deposit
                 </button>
                 <button onClick={() => setShowEarnDeposit(false)}
+                  style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Earn Withdraw modal ──────────────────────────────────── */}
+          {showEarnWithdraw && earnWithdraw.vault && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>
+                Withdraw from {earnWithdraw.vault.name}
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                <span style={{ fontSize:16, fontWeight:700, color:T.green }}>{earnWithdraw.vault.apyDisplay} APY</span>
+                {earnWithdraw.vault.tvl > 0 && <span style={{ fontSize:12, color:T.text3 }}>· TVL ${Number(earnWithdraw.vault.tvl).toLocaleString()}</span>}
+              </div>
+              <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>
+                Enter the amount of <strong style={{ color:T.text2 }}>{earnWithdraw.vault.token}</strong> to withdraw. Withdrawals are subject to the Automated Debt Ceiling — large amounts may be smoothed over blocks.
+              </div>
+              <input type="number" placeholder={`Amount (${earnWithdraw.vault.token})`} value={earnWithdraw.amount}
+                onChange={e => setEarnWithdraw(d=>({...d,amount:e.target.value}))}
+                style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:12 }}
+              />
+              <div style={{ display:"flex", gap:8 }}>
+                <button
+                  onClick={doEarnWithdraw}
+                  disabled={!earnWithdraw.amount||parseFloat(earnWithdraw.amount)<=0} className="hov-btn"
+                  style={{ flex:1, padding:"10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:14, fontWeight:600, cursor:"pointer" }}>
+                  Confirm Withdraw
+                </button>
+                <button onClick={() => setShowEarnWithdraw(false)}
                   style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
                   Cancel
                 </button>
