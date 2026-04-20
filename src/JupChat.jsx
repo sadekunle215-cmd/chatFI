@@ -748,16 +748,6 @@ export default function JupChat() {
       return;
     }
 
-    // ── Pre-flight balance check ──────────────────────────────────────────────
-    const usdcBal = portfolio?.USDC ?? 0;
-    const betAmt  = parseFloat(betAmount);
-    if (usdcBal < betAmt) {
-      setBetStatus("error");
-      push("ai", `❌ Insufficient USDC balance. You have **${usdcBal.toFixed(2)} USDC** but need **$${betAmount} USDC** to place this bet.\n\nDeposit more USDC to your wallet and try again.`);
-      setBetStatus(null);
-      return;
-    }
-
     setBetStatus("signing");
     setShowBet(false);
     push("ai", `Placing **${betSide.toUpperCase()}** bet of **$${betAmount} USDC** on: _${betMarket.title}_…`);
@@ -835,12 +825,11 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
     if (!provider.signTransaction) { push("ai", "Your wallet does not support transaction signing."); return; }
 
-    const colDecimals = vault.colDecimals ?? 9;
+    const colDecimals  = vault.colDecimals  ?? 9;
     const debtDecimals = vault.debtDecimals ?? 9;
     const colRaw  = Math.floor(parseFloat(colAmount) * Math.pow(10, colDecimals));
-    // debtAmount = colAmount * (leverage - 1) converted to debt token units
-    // For simplicity use same decimals — server SDK handles exact math
-    const debtRaw = Math.floor(colRaw * (parseFloat(leverage) - 1));
+    // debtAmount = colateral * (leverage-1) in DEBT token decimals (not collateral decimals)
+    const debtRaw = Math.floor(parseFloat(colAmount) * (parseFloat(leverage) - 1) * Math.pow(10, debtDecimals));
 
     setMultiplyStatus("signing");
     setShowMultiplyForm(false);
@@ -852,11 +841,11 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          vaultId:    vault.vaultId,
-          positionId: 0,
-          colAmount:  colRaw.toString(),
-          debtAmount: debtRaw.toString(),
-          signer:     walletFull,
+          vaultId:          vault.vaultId,
+          positionId:       0,
+          initialColAmount: colRaw.toString(),
+          debtAmount:       debtRaw.toString(),
+          signer:           walletFull,
         }),
       });
       const data = await res.json();
@@ -895,8 +884,8 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
       setMultiplyStatus("error");
       const msg = err?.message || "Unknown error";
       let multiplyHint = "\n\nOpen [jup.ag/lend/multiply](https://jup.ag/lend/multiply) to check your positions.";
-      if (msg.includes("on-chain") || msg.includes("vaultId") || msg.includes("No instructions") || msg.includes("return data") || msg.includes("logs")) {
-        multiplyHint = "\n\n💡 The vault parameters may be incorrect or the vault is currently paused. Try a different vault (e.g. JupSOL/SOL or JitoSOL/SOL) and verify at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).";
+      if (msg.includes("on-chain") || msg.includes("vaultId") || msg.includes("No instructions")) {
+        multiplyHint = "\n\n💡 The vault ID may be incorrect — the transaction was built but may have failed on-chain. Verify on Solscan and at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).";
       } else if (msg.includes("insufficient") || msg.includes("balance") || msg.includes("funds")) {
         multiplyHint = "\n\n💡 Insufficient balance. Make sure you have enough of the collateral token.";
       } else if (msg.includes("SOL") || msg.includes("rent") || msg.includes("fee")) {
