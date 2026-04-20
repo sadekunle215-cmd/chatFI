@@ -748,6 +748,16 @@ export default function JupChat() {
       return;
     }
 
+    // ── Pre-flight balance check ──────────────────────────────────────────────
+    const usdcBal = portfolio?.USDC ?? 0;
+    const betAmt  = parseFloat(betAmount);
+    if (usdcBal < betAmt) {
+      setBetStatus("error");
+      push("ai", `❌ Insufficient USDC balance. You have **${usdcBal.toFixed(2)} USDC** but need **$${betAmount} USDC** to place this bet.\n\nDeposit more USDC to your wallet and try again.`);
+      setBetStatus(null);
+      return;
+    }
+
     setBetStatus("signing");
     setShowBet(false);
     push("ai", `Placing **${betSide.toUpperCase()}** bet of **$${betAmount} USDC** on: _${betMarket.title}_…`);
@@ -885,8 +895,8 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
       setMultiplyStatus("error");
       const msg = err?.message || "Unknown error";
       let multiplyHint = "\n\nOpen [jup.ag/lend/multiply](https://jup.ag/lend/multiply) to check your positions.";
-      if (msg.includes("on-chain") || msg.includes("vaultId") || msg.includes("No instructions")) {
-        multiplyHint = "\n\n💡 The vault ID may be incorrect — the transaction was built but may have failed on-chain. Verify on Solscan and at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).";
+      if (msg.includes("on-chain") || msg.includes("vaultId") || msg.includes("No instructions") || msg.includes("return data") || msg.includes("logs")) {
+        multiplyHint = "\n\n💡 The vault parameters may be incorrect or the vault is currently paused. Try a different vault (e.g. JupSOL/SOL or JitoSOL/SOL) and verify at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).";
       } else if (msg.includes("insufficient") || msg.includes("balance") || msg.includes("funds")) {
         multiplyHint = "\n\n💡 Insufficient balance. Make sure you have enough of the collateral token.";
       } else if (msg.includes("SOL") || msg.includes("rent") || msg.includes("fee")) {
