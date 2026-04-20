@@ -884,9 +884,15 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     } catch (err) {
       setMultiplyStatus("error");
       const msg = err?.message || "Unknown error";
-      push("ai", `Multiply failed: ${msg}
-
-Check your balance and try again, or open the position directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).`);
+      let multiplyHint = "\n\nOpen [jup.ag/lend/multiply](https://jup.ag/lend/multiply) to check your positions.";
+      if (msg.includes("on-chain") || msg.includes("vaultId") || msg.includes("No instructions")) {
+        multiplyHint = "\n\n💡 The vault ID may be incorrect — the transaction was built but may have failed on-chain. Verify on Solscan and at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).";
+      } else if (msg.includes("insufficient") || msg.includes("balance") || msg.includes("funds")) {
+        multiplyHint = "\n\n💡 Insufficient balance. Make sure you have enough of the collateral token.";
+      } else if (msg.includes("SOL") || msg.includes("rent") || msg.includes("fee")) {
+        multiplyHint = "\n\n💡 Not enough SOL for transaction fees. You need at least 0.01 SOL.";
+      }
+      push("ai", `Multiply failed: ${msg}${multiplyHint}`);
     }
     setMultiplyStatus(null);
   };
@@ -2345,7 +2351,7 @@ Check your balance and try again, or open the position directly at [jup.ag/lend/
                 {[
                   { side:"yes", label:"YES", sublabel: betMarket.yesOutcome || "", price:betMarket.yesPrice, bg:T.greenBg, bd:T.greenBd, col:T.green },
                   { side:"no",  label:"NO",  sublabel: betMarket.noOutcome  || "", price:betMarket.noPrice,  bg:T.redBg,  bd:T.redBd,  col:T.red  },
-                ].map(({ side, label, price, bg, bd, col }) => {
+                ].map(({ side, label, sublabel, price, bg, bd, col }) => {
                   const prob = price ? Math.round(parseFloat(price) * 100) + "%" : null;
                   const payout = price && betAmount && parseFloat(betAmount) >= 5
                     ? `Win $${(parseFloat(betAmount) / parseFloat(price)).toFixed(2)}`
