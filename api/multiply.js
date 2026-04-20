@@ -1,9 +1,6 @@
 // api/multiply.js — Vercel Serverless Route
-// Handles both OPEN and CLOSE of Jupiter Multiply positions via @jup-ag/lend SDK
-//
+// Uses @jup-ag/lend/borrow (undocumented beta — official "Borrow" SDK is "Coming Soon")
 // Install: npm install @jup-ag/lend @solana/web3.js bn.js
-// IMPORTANT: Set SOLANA_RPC in your Vercel env vars to a premium RPC (Helius/QuickNode).
-// The public RPC does NOT return simulation returnData, causing "No return data in logs".
 
 import {
   Connection,
@@ -12,21 +9,11 @@ import {
   VersionedTransaction,
 } from "@solana/web3.js";
 
-// ── FIX 1: Correct import path — NOT "@jup-ag/lend/borrow" ───────────────────
-import { getOperateIx } from "@jup-ag/lend";
+// IMPORTANT: /borrow subpath is correct per npm docs — do NOT change to @jup-ag/lend
+import { getOperateIx } from "@jup-ag/lend/borrow";
 import BN from "bn.js";
 
-const SOLANA_RPC = process.env.SOLANA_RPC;
-
-if (!SOLANA_RPC) {
-  console.warn(
-    "[api/multiply] WARNING: SOLANA_RPC env var not set. " +
-    "Falling back to public RPC — simulation returnData will likely fail. " +
-    "Set SOLANA_RPC to a Helius or QuickNode endpoint."
-  );
-}
-
-const RPC_URL = SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+const RPC_URL = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -42,24 +29,19 @@ export default async function handler(req, res) {
     action = "open",
   } = req.body;
 
-  // ── Basic validation ───────────────────────────────────────────────────────
   if (!vaultId || !colAmount || !debtAmount || !signer) {
     return res.status(400).json({
       error: "Missing required fields: vaultId, colAmount, debtAmount, signer",
     });
   }
 
-  const colStr  = colAmount.toString();
-  const debtStr = debtAmount.toString();
-
-  // ── FIX 2: Validate amounts before calling SDK ────────────────────────────
-  const colRaw  = colStr.replace("-", "");
-  const debtRaw = debtStr.replace("-", "");
+  const colStr = colAmount.toString();
+  const colRaw = colStr.replace("-", "");
+  const debtRaw = debtAmount.toString().replace("-", "");
 
   if (!colRaw || colRaw === "0" || !debtRaw || debtRaw === "0") {
     return res.status(400).json({
-      error: "colAmount and debtAmount must be non-zero. " +
-             "Check that leverage > 1 and collateral amount is positive.",
+      error: "colAmount and debtAmount must be non-zero. Ensure leverage > 1.",
     });
   }
 
@@ -74,9 +56,6 @@ export default async function handler(req, res) {
   const isClose = action === "close" || colStr.startsWith("-");
 
   try {
-    // ── FIX 3: Use confirmed commitment + enable returnData in simulation ────
-    // The public RPC strips returnData from simulateTransaction responses.
-    // A premium RPC (Helius, QuickNode, Triton) returns it correctly.
     const connection = new Connection(RPC_URL, {
       commitment: "confirmed",
       confirmTransactionInitialTimeout: 60000,
@@ -89,13 +68,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: `Invalid signer public key: ${signer}` });
     }
 
-    console.log("[api/multiply] calling getOperateIx", {
+    console.log("[api/multiply] getOperateIx params:", {
       vaultId:    Number(vaultId),
       positionId: Number(positionId),
-      colAmount:  (isClose ? colBN.neg() : colBN).toString(),
-      debtAmount: (isClose ? debtBN.neg() : debtBN).toString(),
+      colAmount:  colBN.toString(),
+      debtAmount: debtBN.toString(),
+      isClose,
       signer,
-      action,
     });
 
     let ixs, addressLookupTableAccounts;
@@ -109,51 +88,44 @@ export default async function handler(req, res) {
         connection,
       }));
     } catch (sdkErr) {
-      // ── FIX 4: Intercept SDK simulation errors with actionable messages ───
-      const sdkMsg = sdkErr?.message || "";
-      console.error("[api/multiply] getOperateIx SDK error:", sdkMsg);
+      const msg = sdkErr?.message || "";
+      console.error("[api/multiply] SDK error:", msg);
 
-      if (sdkMsg.includes("return data") || sdkMsg.includes("No return data")) {
+      if (msg.includes("return data") || msg.includes("No return data")) {
         return res.status(500).json({
           error:
-            "Jupiter Lend vault simulation failed — no return data in logs. " +
-            "Likely causes: (1) Your SOLANA_RPC is the public endpoint which doesn't return simulation returnData — " +
-            "switch to Helius or QuickNode in your Vercel env. " +
-            "(2) The vaultId " + vaultId + " may be invalid or the vault is paused. " +
-            "(3) The collateral/debt amounts are too small for this vault.",
+            `Vault simulation failed (vaultId: ${vaultId}) — no return data in logs. ` +
+            "Possible causes: (1) vaultId doesn't match an active vault, " +
+            "(2) debtAmount is in the wrong unit (may need to be in shares, not token decimals), " +
+            "(3) amounts too small for this vault's minimum.",
         });
       }
-
-      if (sdkMsg.includes("AccountNotFound") || sdkMsg.includes("could not find account")) {
+      if (msg.includes("AccountNotFound") || msg.includes("could not find account")) {
         return res.status(500).json({
-          error: `Vault account not found for vaultId ${vaultId}. ` +
-                 "Check that this vault ID matches a live Jupiter Lend vault.",
+          error: `Vault account not found for vaultId ${vaultId}. Verify this is a live vault.`,
         });
       }
-
-      // Re-throw any other SDK error
       throw sdkErr;
     }
 
     if (!ixs || ixs.length === 0) {
       return res.status(400).json({
-        error: "SDK returned no instructions. Check vaultId, positionId and amounts.",
+        error: "SDK returned no instructions. Check vaultId and amounts.",
       });
     }
 
     const { blockhash } = await connection.getLatestBlockhash("finalized");
-
     const message = new TransactionMessage({
       payerKey:        signerPubkey,
       recentBlockhash: blockhash,
       instructions:    ixs,
     }).compileToV0Message(addressLookupTableAccounts || []);
 
-    const tx         = new VersionedTransaction(message);
-    const serialized = Buffer.from(tx.serialize()).toString("base64");
-
-    console.log("[api/multiply] transaction built successfully, returning to client.");
-    return res.status(200).json({ transaction: serialized });
+    const tx = new VersionedTransaction(message);
+    console.log("[api/multiply] transaction built OK");
+    return res.status(200).json({
+      transaction: Buffer.from(tx.serialize()).toString("base64"),
+    });
 
   } catch (err) {
     console.error("[api/multiply] unhandled error:", err);
