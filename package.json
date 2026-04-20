@@ -22,3 +22,8 @@
       "vite-plugin-node-polyfills": "^0.22.0"
     }
 }
+"dependencies": {
+  "@jup-ag/lend": "latest",
+  "@solana/web3.js": "^1.95.4",
+  "bn.js": "^5.2.1"
+}
