@@ -893,6 +893,14 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     setBetStatus(null);
   };
 
+  // ── Safe API fetch — always returns JSON, never throws on HTML error pages ──
+  const safeApiFetch = async (url, opts = {}) => {
+    const res = await fetch(url, opts);
+    const text = await res.text();
+    try { return { ok: res.ok, status: res.status, data: JSON.parse(text) }; }
+    catch { return { ok: false, status: res.status, data: { error: `Server error (${res.status}): ${text.slice(0, 200)}` } }; }
+  };
+
   // ── Jupiter Multiply — calls /api/multiply serverless → signs → sends ────────
   const doMultiply = async () => {
     const { vault, colAmount, leverage } = multiplyPos;
@@ -914,10 +922,11 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
 
     try {
       // 1. Get unsigned transaction from backend
-      const res = await fetch("/api/multiply", {
+      const { ok: mOk, data } = await safeApiFetch("/api/multiply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          action:           "open",
           vaultId:          vault.vaultId,
           positionId:       0,
           initialColAmount: colRaw.toString(),
@@ -925,7 +934,6 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
           signer:           walletFull,
         }),
       });
-      const data = await res.json();
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned from multiply API.");
 
@@ -1016,8 +1024,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
       };
       if (partial && partialColAmount) body.withdrawAmount = partialColAmount;
 
-      const res  = await fetch("/api/multiply", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
-      const data = await res.json();
+      const { data } = await safeApiFetch("/api/multiply", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned.");
 
