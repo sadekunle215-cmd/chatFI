@@ -285,6 +285,7 @@ export default function JupChat() {
   const [showPredList, setShowPredList] = useState(false);
   const [predMarkets, setPredMarkets]   = useState([]);
   const [predCategory, setPredCategory] = useState(null);
+  const [expandedPreds, setExpandedPreds] = useState(new Set());
   // Prediction on-chain bet panel (opened from live market list)
   const [showBet, setShowBet]         = useState(false);
   const [betMarket, setBetMarket]     = useState(null);
@@ -2487,75 +2488,56 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
                             </div>
                           )}
 
-                          {/* ══ BINARY market — rendered as two outcome rows (matches Jupiter UI) ══ */}
-                          {!isMulti && (() => {
-                            // Build two synthetic outcome rows from the binary YES/NO sides
-                            const binaryRows = [
-                              {
-                                label:    yesOutcome,
-                                pct:      yesPct,
-                                yP,
-                                nP,
-                                yFmt:     fmtCents(yP),
-                                nFmt:     nP != null ? fmtCents(nP) : null,
-                                betSide:  "yes",
-                              },
-                              {
-                                label:    noOutcome,
-                                pct:      noPct,
-                                yP:       nP,          // "YES on team B" price = binary NO price
-                                nP:       yP,
-                                yFmt:     fmtCents(nP),
-                                nFmt:     yP != null ? fmtCents(yP) : null,
-                                betSide:  "no",
-                              },
-                            ];
-
-                            return (
+                          {/* ══ BINARY market ══ */}
+                          {!isMulti && (
+                            marketId ? (
                               <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                                {binaryRows.map((row, ri) => (
+                                {[
+                                  { label:yesOutcome, pct:yesPct, yFmt:fmtCents(yP), nFmt:nP!=null?fmtCents(nP):null, betSide:"yes" },
+                                  { label:noOutcome,  pct:noPct,  yFmt:fmtCents(nP), nFmt:yP!=null?fmtCents(yP):null, betSide:"no"  },
+                                ].map((row, ri) => (
                                   <div key={ri} style={{ background:T.surface, borderRadius:9, padding:"10px 12px", border:`1px solid ${T.border}` }}>
-                                    {/* Outcome label + probability */}
                                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
                                       <span style={{ fontWeight:600, fontSize:13, color:T.text1 }}>{row.label}</span>
-                                      <span style={{ fontWeight:700, fontSize:12, color: (row.pct ?? 0) >= 50 ? T.green : T.text2 }}>
+                                      <span style={{ fontWeight:700, fontSize:12, color:(row.pct??0)>=50?T.green:T.text2 }}>
                                         {row.pct != null ? `${row.pct}%` : "—"}
                                       </span>
                                     </div>
-                                    {/* Probability bar */}
                                     <div style={{ height:4, borderRadius:4, background:T.border, overflow:"hidden", marginBottom:8 }}>
-                                      <div style={{ height:"100%", width:`${row.pct || 0}%`,
-                                        background: (row.pct ?? 0) >= 50 ? T.green : T.accent, borderRadius:4 }}/>
+                                      <div style={{ height:"100%", width:`${row.pct||0}%`, background:(row.pct??0)>=50?T.green:T.accent, borderRadius:4 }}/>
                                     </div>
-                                    {/* YES / NO buttons — always visible, disabled if no marketId */}
                                     <div style={{ display:"flex", gap:7 }}>
                                       <button onClick={() => {
-                                        if (!marketId) { window.open("https://jup.ag/prediction","_blank"); return; }
-                                        setBetMarket({ marketId, title,
-                                          yesPrice: yP?.toFixed(2), noPrice: nP?.toFixed(2),
-                                          yesOutcome, noOutcome });
+                                        setBetMarket({ marketId, title, yesPrice:yP?.toFixed(2), noPrice:nP?.toFixed(2), yesOutcome, noOutcome });
                                         setBetSide(row.betSide); setBetAmount("5"); setShowBet(true); setShowPredList(false);
                                       }} className="hov-btn"
-                                        style={{ flex:1, padding:"7px 6px", background:marketId ? T.greenBg : "rgba(255,255,255,0.04)", border:`1px solid ${marketId ? T.greenBd : T.border}`, borderRadius:7, color: marketId ? T.green : T.text3, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center", opacity: marketId ? 1 : 0.55 }}>
-                                        YES {row.yFmt || "–"}
+                                        style={{ flex:1, padding:"8px 6px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:7, color:T.green, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
+                                        YES {row.yFmt || ""}
                                       </button>
                                       <button onClick={() => {
-                                        if (!marketId) { window.open("https://jup.ag/prediction","_blank"); return; }
-                                        setBetMarket({ marketId, title,
-                                          yesPrice: yP?.toFixed(2), noPrice: nP?.toFixed(2),
-                                          yesOutcome, noOutcome });
-                                        setBetSide(row.betSide === "yes" ? "no" : "yes");
-                                        setBetAmount("5"); setShowBet(true); setShowPredList(false);
+                                        setBetMarket({ marketId, title, yesPrice:yP?.toFixed(2), noPrice:nP?.toFixed(2), yesOutcome, noOutcome });
+                                        setBetSide(row.betSide==="yes"?"no":"yes"); setBetAmount("5"); setShowBet(true); setShowPredList(false);
                                       }} className="hov-btn"
-                                        style={{ flex:1, padding:"7px 6px", background:marketId ? T.redBg : "rgba(255,255,255,0.04)", border:`1px solid ${marketId ? T.redBd : T.border}`, borderRadius:7, color: marketId ? T.red : T.text3, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center", opacity: marketId ? 1 : 0.55 }}>
-                                        NO {row.nFmt || "–"}
+                                        style={{ flex:1, padding:"8px 6px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:7, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
+                                        NO {row.nFmt || ""}
                                       </button>
                                     </div>
                                   </div>
                                 ))}
                               </div>
-                            );
-                          })()}
+                            ) : (
+                              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.surface, borderRadius:9, border:`1px solid ${T.border}` }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                  <span style={{ fontSize:14 }}>🔜</span>
+                                  <span style={{ fontSize:12, color:T.text2, fontWeight:500 }}>Not yet open for betting</span>
+                                </div>
+                                <a href="https://jup.ag/prediction" target="_blank" rel="noreferrer"
+                                  style={{ fontSize:11, color:T.accent, textDecoration:"none", fontWeight:600 }}>
+                                  View on jup.ag ↗
+                                </a>
+                              </div>
+                            )
+                          )}
 
                           {/* ══ MULTI-OUTCOME market ═══════════════════════════ */}
                           {isMulti && subRows && (
