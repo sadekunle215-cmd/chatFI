@@ -1174,9 +1174,7 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
 
       if (all.length === 0) {
         push("ai",
-          "No open Jupiter Lend positions found for your wallet.
-
-" +
+          "No open Jupiter Lend positions found for your wallet.\n\n" +
           "**Note:** Borrow/Multiply position data requires the Jupiter Lend SDK (REST API coming soon). " +
           "If you have open borrow positions, view them directly at [jup.ag/lend](https://jup.ag/lend)."
         );
@@ -1235,39 +1233,22 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
       setBorrowStatus("done");
       setShowBorrow(false);
       push("ai",
-        `Borrow successful ✓
-
-` +
-        `📥 **${colAmount} ${collateral}** deposited as collateral
-` +
-        `💸 **${borrowAmount} ${debt}** borrowed to your wallet
-
-` +
-        `Position NFT is in your wallet.
-Tx: \`${signature.slice(0,20)}…\`
-` +
-        `[View on Solscan →](https://solscan.io/tx/${signature})
-
-` +
-        `⚠️ Monitor your LTV at [jup.ag/lend](https://jup.ag/lend) to avoid liquidation.`
-      );
+        "Borrow successful ✓\n\n" +
+        "📥 **" + colAmount + " " + collateral + "** deposited as collateral\n" +
+        "💸 **" + borrowAmount + " " + debt + "** borrowed to your wallet\n\n" +
+        "Position NFT is in your wallet.\nTx: `" + signature.slice(0,20) + "…`\n" +
+        "[View on Solscan →](https://solscan.io/tx/" + signature + ")\n\n" +
+        "⚠️ Monitor your LTV at [jup.ag/lend](https://jup.ag/lend) to avoid liquidation."
+      )
       try { const updated = await fetchSolanaBalances(walletFull); setPortfolio(updated); } catch {}
     } catch (err) {
       setBorrowStatus("error");
       const msg = err?.message || "Unknown error";
-      let hint = "
-
-Manage positions at [jup.ag/lend](https://jup.ag/lend).";
-      if (msg.includes("insufficient") || msg.includes("balance")) hint = "
-
-💡 Insufficient balance — make sure you hold the collateral token.";
-      else if (msg.includes("SOL") || msg.includes("fee") || msg.includes("rent"))  hint = "
-
-💡 Not enough SOL for fees. You need at least 0.01 SOL.";
-      else if (msg.includes("LTV") || msg.includes("liquidat")) hint = "
-
-💡 Borrow amount exceeds your collateral LTV limit. Reduce the borrow amount.";
-      push("ai", `Borrow failed: ${msg}${hint}`);
+      let hint = "\n\nManage positions at [jup.ag/lend](https://jup.ag/lend).";
+      if (msg.includes("insufficient") || msg.includes("balance")) hint = "\n\n💡 Insufficient balance — make sure you hold the collateral token.";
+      else if (msg.includes("SOL") || msg.includes("fee") || msg.includes("rent"))  hint = "\n\n💡 Not enough SOL for fees. You need at least 0.01 SOL.";
+      else if (msg.includes("LTV") || msg.includes("liquidat")) hint = "\n\n💡 Borrow amount exceeds your collateral LTV limit. Reduce the borrow amount.";
+      push("ai", "Borrow failed: " + msg + hint);
     }
     setBorrowStatus(null);
   };
