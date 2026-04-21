@@ -118,6 +118,7 @@ Available actions:
 - "FETCH_PREDICTIONS"→ actionData: { "sport": "sports", "query": null } — sport categories (exact): sports, crypto, politics, esports, culture, economics, tech. For specific leagues set query instead.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — portion: "all"|"half"|"quarter"|"N%"
 - "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — leveraged looping via Jupiter Lend flashloans. Explain mechanics + show vaults.
+- "SHOW_BORROW"        → actionData: { "collateral": "SOL", "debt": "USDC", "colAmount": "10", "borrowAmount": "200", "reason": "brief why" } — deposit collateral into a Jupiter Lend vault and borrow against it. colAmount = collateral to deposit; borrowAmount = debt token to receive. Available vaults: SOL→USDC (vault 1, 80% LTV), JitoSOL→SOL (vault 2, 90%), JupSOL→SOL (vault 3, 90%), WBTC→USDC (vault 4, 80%), JLP→USDC (vault 5, 90%), JUP→USDC (vault 6, 75%), USDC→USDT (vault 7, 95%).
 - "SHOW_LEND_POSITIONS" → actionData: {} — show user's open Lend positions (borrow/multiply) with unwind buttons AND earn positions with withdraw buttons
 - "CLAIM_PAYOUTS"    → actionData: {} — triggers fetch of claimable prediction positions
 
@@ -136,6 +137,7 @@ Rules:
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
 - "withdraw from earn" / "redeem jlTokens" / "take out my earn" → SHOW_LEND_POSITIONS (earn panel has withdraw buttons)
 - "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY
+- "borrow" / "deposit collateral" / "take a loan" / "borrow USDC" / "borrow against SOL" / "lend borrow" / "use SOL as collateral" → SHOW_BORROW — extract collateral token, debt token, amounts
 - "my lend positions" / "my borrow positions" / "close position" / "unwind" / "deleverage" / "repay with collateral" → SHOW_LEND_POSITIONS
 - "flashloan" / "flash loan" → explain: zero-fee atomic loan, repay within same tx; use cases: arbitrage, liquidations, collateral swaps
 - "limit order" / "buy below $X" / "sell above $X" / "price trigger" → SHOW_TRIGGER_V2 with orderType:"single"
@@ -380,6 +382,9 @@ export default function JupChat() {
   const [showLendPos, setShowLendPos]           = useState(false);
   const [lendPosLoading, setLendPosLoading]     = useState(false);
   const [unwindStatus, setUnwindStatus]         = useState(null); // null | positionId | "done"
+  const [showBorrow, setShowBorrow]             = useState(false);
+  const [borrowCfg, setBorrowCfg]               = useState({ vaultId:1, collateral:"SOL", debt:"USDC", colDecimals:9, debtDecimals:6, colAmount:"", borrowAmount:"" });
+  const [borrowStatus, setBorrowStatus]         = useState(null); // null|"signing"|"done"|"error"
   const [showEarn, setShowEarn]           = useState(false);
   const [earnVaults, setEarnVaults]       = useState([]);
   const [earnLoading, setEarnLoading]     = useState(false);
@@ -1133,24 +1138,138 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     setMultiplyStatus(null);
   };
 
-  // ── Fetch open Lend positions via /api/lend-positions ───────────────────────
+  // ── Fetch open Lend positions ─────────────────────────────────────────────────
+  // Earn positions: direct REST call (GET /lend/v1/earn/positions) — works reliably.
+  // Borrow/Multiply positions: Jupiter Borrow REST API is "Coming Soon" (SDK-only for now).
+  // The /api/lend-positions serverless endpoint requires @jup-ag/lend-read SDK on the server.
+  // We try it safely (text → parse) so an HTML crash page never breaks the UI.
   const fetchLendPositions = async () => {
     if (!walletFull) { push("ai", "Connect your wallet first to view your Lend positions."); return; }
     setLendPosLoading(true);
     setShowLendPos(true);
     try {
-      const res  = await fetch(`/api/lend-positions?wallet=${walletFull}`);
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setLendPositions(data.positions || []);
-      if ((data.positions || []).length === 0) {
-        push("ai", "You have no open Jupiter Lend positions.");
+      // 1. Earn positions — direct REST, always works
+      let earnPositions = [];
+      try {
+        const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+        const earnArr = Array.isArray(earnRaw) ? earnRaw : (earnRaw?.data || earnRaw?.positions || []);
+        earnPositions = earnArr.map(e => ({ ...e, _type: "earn" }));
+      } catch {}
+
+      // 2. Borrow/Multiply positions — serverless SDK proxy (may fail; API Coming Soon)
+      let borrowPositions = [];
+      try {
+        const res = await fetch(`/api/lend-positions?wallet=${walletFull}`);
+        if (res.ok) {
+          const txt = await res.text();           // never call .json() directly — server may return HTML
+          try {
+            const data = JSON.parse(txt);
+            if (!data.error) borrowPositions = data.positions || [];
+          } catch {} // non-JSON response (HTML crash page) → silently ignore
+        }
+      } catch {}
+
+      const all = [...borrowPositions, ...earnPositions];
+      setLendPositions(all);
+
+      if (all.length === 0) {
+        push("ai",
+          "No open Jupiter Lend positions found for your wallet.
+
+" +
+          "**Note:** Borrow/Multiply position data requires the Jupiter Lend SDK (REST API coming soon). " +
+          "If you have open borrow positions, view them directly at [jup.ag/lend](https://jup.ag/lend)."
+        );
         setShowLendPos(false);
       }
     } catch (err) {
-      push("ai", `Failed to load positions: ${err?.message}`);
+      push("ai",
+        "Could not load Lend positions right now. " +
+        "View your open positions directly at [jup.ag/lend](https://jup.ag/lend)."
+      );
       setShowLendPos(false);
     } finally { setLendPosLoading(false); }
+  };
+
+  // ── Borrow — deposit collateral + borrow in one tx via /api/borrow ───────────
+  // Uses getOperateIx from @jup-ag/lend/borrow on the server (same pattern as /api/multiply).
+  // positionId:0 → SDK auto-creates position + deposits + borrows atomically (versioned tx v0 + ALTs).
+  const doBorrow = async () => {
+    if (!walletFull) { push("ai", "Connect your wallet first to borrow."); return; }
+    const provider = getActiveProvider();
+    if (!provider?.signTransaction) { push("ai", "Wallet does not support signing."); return; }
+    const { vaultId, collateral, debt, colDecimals, debtDecimals, colAmount, borrowAmount } = borrowCfg;
+    if (!colAmount || parseFloat(colAmount) <= 0 || !borrowAmount || parseFloat(borrowAmount) <= 0) return;
+
+    const colRaw  = Math.floor(parseFloat(colAmount)    * Math.pow(10, colDecimals  ?? 9)).toString();
+    const debtRaw = Math.floor(parseFloat(borrowAmount) * Math.pow(10, debtDecimals ?? 6)).toString();
+
+    setBorrowStatus("signing");
+    push("ai", `Depositing **${colAmount} ${collateral}** as collateral and borrowing **${borrowAmount} ${debt}**…`);
+
+    try {
+      // 1. Build unsigned versioned tx on server (uses @jup-ag/lend/borrow getOperateIx)
+      const { ok, data } = await safeApiFetch("/api/borrow", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action:"operate", vaultId, positionId:0, colAmount:colRaw, debtAmount:debtRaw, signer:walletFull }),
+      });
+      if (!ok || data.error) throw new Error(data.error || "Borrow API error");
+      if (!data.transaction)  throw new Error("No transaction returned from borrow API.");
+
+      // 2. Deserialize → wallet signs
+      const bytes = new Uint8Array(atob(data.transaction).split("").map(c => c.charCodeAt(0)));
+      const tx = VersionedTransaction.deserialize(bytes);
+      const signedTx = await provider.signTransaction(tx);
+
+      // 3. Send via RPC
+      const signedBytes = signedTx.serialize();
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[btoa(String.fromCharCode(...signedBytes)), { encoding:"base64", skipPreflight:true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      await new Promise(r => setTimeout(r, 2500));
+      setBorrowStatus("done");
+      setShowBorrow(false);
+      push("ai",
+        `Borrow successful ✓
+
+` +
+        `📥 **${colAmount} ${collateral}** deposited as collateral
+` +
+        `💸 **${borrowAmount} ${debt}** borrowed to your wallet
+
+` +
+        `Position NFT is in your wallet.
+Tx: \`${signature.slice(0,20)}…\`
+` +
+        `[View on Solscan →](https://solscan.io/tx/${signature})
+
+` +
+        `⚠️ Monitor your LTV at [jup.ag/lend](https://jup.ag/lend) to avoid liquidation.`
+      );
+      try { const updated = await fetchSolanaBalances(walletFull); setPortfolio(updated); } catch {}
+    } catch (err) {
+      setBorrowStatus("error");
+      const msg = err?.message || "Unknown error";
+      let hint = "
+
+Manage positions at [jup.ag/lend](https://jup.ag/lend).";
+      if (msg.includes("insufficient") || msg.includes("balance")) hint = "
+
+💡 Insufficient balance — make sure you hold the collateral token.";
+      else if (msg.includes("SOL") || msg.includes("fee") || msg.includes("rent"))  hint = "
+
+💡 Not enough SOL for fees. You need at least 0.01 SOL.";
+      else if (msg.includes("LTV") || msg.includes("liquidat")) hint = "
+
+💡 Borrow amount exceeds your collateral LTV limit. Reduce the borrow amount.";
+      push("ai", `Borrow failed: ${msg}${hint}`);
+    }
+    setBorrowStatus(null);
   };
 
   // ── Unwind (close) a Lend position ───────────────────────────────────────────
@@ -2334,7 +2453,7 @@ Order: \`${orderKey.slice(0,20)}…\`
     push("user", raw);
     setTyping(true);
     setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
-    setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false);
+    setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
 
@@ -2651,6 +2770,27 @@ Order: \`${orderKey.slice(0,20)}…\`
             });
           }, 800);
         }
+
+      } else if (action === "SHOW_BORROW") {
+        // Pre-fill vault from collateral token or default SOL→USDC
+        const colSym  = (actionData?.collateral || "SOL").toUpperCase();
+        const debtSym = (actionData?.debt || "USDC").toUpperCase();
+        const vault   = MULTIPLY_VAULTS.find(v =>
+          v.collateral.toUpperCase() === colSym && v.debt.toUpperCase() === debtSym
+        ) || MULTIPLY_VAULTS.find(v => v.collateral.toUpperCase() === colSym)
+          || MULTIPLY_VAULTS[0]; // SOL→USDC fallback
+        setBorrowCfg(c => ({
+          ...c,
+          vaultId:      vault.vaultId,
+          collateral:   vault.collateral,
+          debt:         vault.debt,
+          colDecimals:  vault.colDecimals,
+          debtDecimals: vault.debtDecimals,
+          colAmount:    actionData?.colAmount    || c.colAmount,
+          borrowAmount: actionData?.borrowAmount || c.borrowAmount,
+        }));
+        setShowBorrow(true);
+        push("ai", text);
 
       } else if (action === "SHOW_MULTIPLY") {
         setMultiplyFilter(actionData?.asset?.toUpperCase() || null);
@@ -3687,6 +3827,76 @@ Connect your wallet first to place a trigger order."); }
                 style={{ marginTop:4, padding:"6px 14px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
                 Close
               </button>
+            </div>
+          )}
+
+          {/* ── Borrow panel ─────────────────────────────────────────────── */}
+          {showBorrow && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🏦 Borrow from Jupiter Lend</div>
+                <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>COLLATERAL</span>
+              </div>
+              <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>Deposit collateral → borrow against it. Up to 95% LTV. Position is an NFT on-chain.</div>
+
+              {/* Vault selector */}
+              <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Select vault</div>
+              <select value={borrowCfg.vaultId}
+                onChange={e => {
+                  const v = MULTIPLY_VAULTS.find(x => x.vaultId === parseInt(e.target.value));
+                  if (v) setBorrowCfg(c => ({ ...c, vaultId:v.vaultId, collateral:v.collateral, debt:v.debt, colDecimals:v.colDecimals, debtDecimals:v.debtDecimals }));
+                }}
+                style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:10 }}>
+                {MULTIPLY_VAULTS.map(v => (
+                  <option key={v.vaultId} value={v.vaultId}>{v.collateral} → {v.debt} · LTV {v.ltv} · {v.risk} risk</option>
+                ))}
+              </select>
+
+              {/* Amounts row */}
+              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Collateral to deposit ({borrowCfg.collateral})</div>
+                  <input type="number" min="0" placeholder="e.g. 10"
+                    value={borrowCfg.colAmount}
+                    onChange={e => setBorrowCfg(c => ({ ...c, colAmount:e.target.value }))}
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  />
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount to borrow ({borrowCfg.debt})</div>
+                  <input type="number" min="0" placeholder="e.g. 200"
+                    value={borrowCfg.borrowAmount}
+                    onChange={e => setBorrowCfg(c => ({ ...c, borrowAmount:e.target.value }))}
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  />
+                </div>
+              </div>
+
+              {/* Info box */}
+              {borrowCfg.colAmount && (
+                <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
+                  📥 Deposit <strong>{borrowCfg.colAmount} {borrowCfg.collateral}</strong> · 💸 Borrow <strong>{borrowCfg.borrowAmount || "?"} {borrowCfg.debt}</strong><br/>
+                  <span style={{ fontSize:11, color:T.text3 }}>Max LTV: {(MULTIPLY_VAULTS.find(v=>v.vaultId===borrowCfg.vaultId)||MULTIPLY_VAULTS[0]).ltv} · Position NFT created automatically · positionId:0</span>
+                </div>
+              )}
+
+              {/* Warning */}
+              <div style={{ fontSize:11, color:T.text3, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
+                ⚠️ Borrowing accrues interest. Keep LTV below the liquidation threshold or your collateral may be sold.
+              </div>
+
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={doBorrow}
+                  disabled={!borrowCfg.colAmount || !borrowCfg.borrowAmount || borrowStatus === "signing"}
+                  className="hov-btn"
+                  style={{ flex:1, padding:"10px", background:borrowStatus==="signing"?T.border:T.teal, border:"none", borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:600, cursor:"pointer" }}>
+                  {borrowStatus === "signing" ? "Signing…" : "Deposit & Borrow"}
+                </button>
+                <button onClick={() => setShowBorrow(false)}
+                  style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
 
