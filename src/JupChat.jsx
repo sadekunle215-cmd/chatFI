@@ -2105,8 +2105,19 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     if (chalRes.error) throw new Error("Auth challenge failed: " + (chalRes.error?.message || chalRes.error));
     // Sign the challenge message client-side
     const encoded = new TextEncoder().encode(chalRes.challenge);
-    if (!provider.signMessage) throw new Error("Wallet does not support message signing.");
-    const sigBytes = await provider.signMessage(encoded);
+    // signMessage: Phantom returns { signature: Uint8Array }, Solflare returns Uint8Array directly
+    // Some mobile wallets don't expose signMessage at all — throw a clear error in that case
+    if (!provider.signMessage) {
+      throw new Error(
+        "Your wallet does not support message signing required for Trigger orders. " +
+        "Try Phantom or Solflare browser extension, or use a Limit order via a supported wallet."
+      );
+    }
+    const sigRaw  = await provider.signMessage(encoded);
+    // Normalise: unwrap { signature } if present
+    const sigBytes = sigRaw?.signature instanceof Uint8Array ? sigRaw.signature
+                   : sigRaw instanceof Uint8Array             ? sigRaw
+                   : new Uint8Array(Object.values(sigRaw?.signature || sigRaw || {}));
     // bs58-encode the signature — inline without dependency
     const B58_CHARS = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     const encodeB58 = (buf) => {
@@ -2237,7 +2248,14 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
       push("ai", summary);
     } catch (err) {
       setTrigV2Status("error");
-      push("ai", "Trigger order failed: " + (err?.message || "Unknown error"));
+      const msg = err?.message || "Unknown error";
+      let hint = "";
+      if (msg.includes("message signing") || msg.includes("signMessage")) {
+        hint = "\n\n💡 Trigger orders require wallet message signing for JWT auth. Use Phantom or Solflare browser extension. Alternatively, swap first then set a limit order once funds are in your wallet.";
+      } else if (msg.includes("vault") || msg.includes("deposit")) {
+        hint = "\n\n💡 Your trigger vault may need to be funded first. The system tried to deposit automatically.";
+      }
+      push("ai", "Trigger order failed: " + msg + hint);
     }
     setTrigV2Status(null);
   };
