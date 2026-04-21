@@ -137,8 +137,10 @@ Rules:
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
 - "withdraw from earn" / "redeem jlTokens" / "take out my earn" → SHOW_LEND_POSITIONS (earn panel has withdraw buttons)
 - "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY
-- "borrow" / "deposit collateral" / "take a loan" / "borrow USDC" / "borrow against SOL" / "lend borrow" / "use SOL as collateral" → SHOW_BORROW — extract collateral token, debt token, amounts
-- "my lend positions" / "my borrow positions" / "close position" / "unwind" / "deleverage" / "repay with collateral" → SHOW_LEND_POSITIONS
+- "borrow" / "I want to borrow" / "use borrow" / "deposit collateral" / "take a loan" / "borrow USDC" / "borrow against SOL" / "lend borrow" / "use SOL as collateral" / "how do I borrow" / "open borrow" → SHOW_BORROW — fire this IMMEDIATELY even if no amounts given; open the panel and let the user fill in details. Extract collateral/debt/amounts if present, otherwise leave blank.
+- CRITICAL: "borrow" alone → SHOW_BORROW. NEVER ask the user to specify details before opening the panel. NEVER return action:null for borrow intent.
+- "my open positions" / "my lend positions" / "close position" / "unwind" / "deleverage" / "repay with collateral" → SHOW_LEND_POSITIONS
+- NEVER use SHOW_LEND_POSITIONS when user asks about borrowing — that is SHOW_BORROW.
 - "flashloan" / "flash loan" → explain: zero-fee atomic loan, repay within same tx; use cases: arbitrage, liquidations, collateral swaps
 - "limit order" / "buy below $X" / "sell above $X" / "price trigger" → SHOW_TRIGGER_V2 with orderType:"single"
 - "OCO" / "take profit and stop loss" / "TP/SL" / "bracket order" → SHOW_TRIGGER_V2 with orderType:"oco"
@@ -1147,46 +1149,39 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     if (!walletFull) { push("ai", "Connect your wallet first to view your Lend positions."); return; }
     setLendPosLoading(true);
     setShowLendPos(true);
+
+    // 1. Earn positions — direct REST API (always works)
+    let earnPositions = [];
     try {
-      // 1. Earn positions — direct REST, always works
-      let earnPositions = [];
+      const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+      const earnArr = Array.isArray(earnRaw) ? earnRaw : (earnRaw?.data || earnRaw?.positions || []);
+      earnPositions = earnArr.map(e => ({ ...e, _type: "earn" }));
+    } catch {}
+
+    // 2. Borrow/Multiply positions — via /api/lend-positions (uses @jup-ag/lend-read SDK)
+    // Uses res.text() → JSON.parse so an HTML crash page never breaks the UI
+    let borrowPositions = [];
+    try {
+      const res = await fetch(`/api/lend-positions?wallet=${walletFull}`);
+      const txt = await res.text();
       try {
-        const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-        const earnArr = Array.isArray(earnRaw) ? earnRaw : (earnRaw?.data || earnRaw?.positions || []);
-        earnPositions = earnArr.map(e => ({ ...e, _type: "earn" }));
-      } catch {}
+        const data = JSON.parse(txt);
+        if (data.positions) borrowPositions = data.positions.map(p => ({ ...p, _type: "borrow" }));
+      } catch {} // non-JSON (HTML error page) — silently ignore
+    } catch {}
 
-      // 2. Borrow/Multiply positions — serverless SDK proxy (may fail; API Coming Soon)
-      let borrowPositions = [];
-      try {
-        const res = await fetch(`/api/lend-positions?wallet=${walletFull}`);
-        if (res.ok) {
-          const txt = await res.text();           // never call .json() directly — server may return HTML
-          try {
-            const data = JSON.parse(txt);
-            if (!data.error) borrowPositions = data.positions || [];
-          } catch {} // non-JSON response (HTML crash page) → silently ignore
-        }
-      } catch {}
+    const all = [...borrowPositions, ...earnPositions];
+    setLendPositions(all);
+    setLendPosLoading(false);
 
-      const all = [...borrowPositions, ...earnPositions];
-      setLendPositions(all);
-
-      if (all.length === 0) {
-        push("ai",
-          "No open Jupiter Lend positions found for your wallet.\n\n" +
-          "**Note:** Borrow/Multiply position data requires the Jupiter Lend SDK (REST API coming soon). " +
-          "If you have open borrow positions, view them directly at [jup.ag/lend](https://jup.ag/lend)."
-        );
-        setShowLendPos(false);
-      }
-    } catch (err) {
+    if (all.length === 0) {
       push("ai",
-        "Could not load Lend positions right now. " +
-        "View your open positions directly at [jup.ag/lend](https://jup.ag/lend)."
+        "No open Jupiter Lend positions found for your wallet.\n\n" +
+        "Use **Borrow** to open a collateral position or **Multiply** for leveraged looping.\n" +
+        "View all positions at [jup.ag/lend](https://jup.ag/lend)."
       );
       setShowLendPos(false);
-    } finally { setLendPosLoading(false); }
+    }
   };
 
   // ── Borrow — deposit collateral + borrow in one tx via /api/borrow ───────────
@@ -2786,9 +2781,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         else { await doClaimPayouts(text); }
 
       } else if (action === "SHOW_TRIGGER_V2") {
-        if (!walletFull) { push("ai", text + "
-
-Connect your wallet first to place a trigger order."); }
+        if (!walletFull) { push("ai", text + "\n\nConnect your wallet first to place a trigger order."); }
         else {
           const fromSym = (actionData?.from || "USDC").toUpperCase();
           const toSym   = (actionData?.to   || "SOL").toUpperCase();
