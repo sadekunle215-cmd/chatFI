@@ -1,37 +1,27 @@
 // api/jupiter.js — Vercel Serverless Proxy
-// Injects Jupiter API key + forwards user IP so prediction markets aren't geo-blocked
+// Injects Jupiter API key. Strips user IP headers so requests appear from Vercel's US server.
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { url, method = "GET", body, forwardIp } = req.body;
+  const { url, method = "GET", body } = req.body;
 
   if (!url) return res.status(400).json({ error: "Missing url" });
 
-  const API_KEY   = process.env.JUPITER_API_KEY || "";
+  const API_KEY    = process.env.JUPITER_API_KEY || "";
   const SOLANA_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 
   // Resolve special RPC placeholder
   const targetUrl = url === "SOLANA_RPC" ? SOLANA_RPC : url;
 
+  // Only send clean headers — no user IP, no country hints.
+  // This ensures Jupiter sees Vercel's US server IP, not the user's Nigerian IP.
   const headers = {
     "Content-Type": "application/json",
     ...(API_KEY ? { "x-api-key": API_KEY } : {}),
   };
-
-  // For prediction endpoints: forward user's real IP so Jupiter doesn't geo-block.
-  // Vercel sets x-forwarded-for and cf-ipcountry from the user's actual request.
-  if (forwardIp || (url && url.includes("/prediction/"))) {
-    const userIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
-                || req.headers["x-real-ip"]
-                || "";
-    const userCountry = req.headers["cf-ipcountry"] || "";
-
-    if (userIp)      headers["x-forwarded-for"] = userIp;
-    if (userCountry) headers["cf-ipcountry"]     = userCountry;
-  }
 
   try {
     const fetchOptions = {
