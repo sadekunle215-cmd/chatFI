@@ -64,26 +64,35 @@ async function buildTx(connection, signerPubkey, ixs, alts) {
   return Buffer.from(new VersionedTransaction(msg).serialize()).toString("base64");
 }
 
+// ── Known vault mint pairs — avoids getVaultConfig() RPC call on every request ─
+// Source: on-chain via getAllVaults(). Update if Jupiter adds new vaults.
+// vaultId → { supplyToken (collateral mint), borrowToken (debt mint) }
+const VAULT_MINTS = {
+  1: { supplyToken: "So11111111111111111111111111111111111111112",  borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // SOL / USDC
+  2: { supplyToken: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", borrowToken: "So11111111111111111111111111111111111111112"  }, // JitoSOL / SOL
+  3: { supplyToken: "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v",  borrowToken: "So11111111111111111111111111111111111111112"  }, // JupSOL / SOL
+  4: { supplyToken: "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh", borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // WBTC / USDC
+  5: { supplyToken: "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4",  borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // JLP / USDC
+  6: { supplyToken: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",  borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // JUP / USDC
+  7: { supplyToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", borrowToken: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"  }, // USDC / USDT
+};
+
 // ── Handler ────────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  // ── GET: health check + real vault list ──────────────────────────────────────
+  // ── GET: lightweight health check — just verify RPC is reachable ────────────
+  // getAllVaults() is too heavy (100+ RPC calls) for a health check.
+  // Vault mints are hardcoded in VAULT_MINTS below — no on-chain lookup needed.
   if (req.method === "GET") {
-    if (!RPC_URL) return res.status(500).json({ error: "SOLANA_RPC env var not set. Set it in Vercel Environment Variables." });
+    if (!RPC_URL) return res.status(500).json({ error: "SOLANA_RPC env var not set." });
     try {
       const connection = new Connection(RPC_URL, { commitment: "confirmed" });
-      const readClient = new Client(connection);
-      const allVaults  = await readClient.vault.getAllVaults();
-      const vaults = allVaults.map(v => ({
-        vaultId:     v.constantViews.vaultId,
-        supplyToken: v.constantViews.supplyToken.toBase58(),
-        borrowToken: v.constantViews.borrowToken.toBase58(),
-      }));
-      return res.status(200).json({ ok: true, vaults });
+      const slot = await connection.getSlot();
+      return res.status(200).json({ ok: true, slot, vaults: Object.entries(VAULT_MINTS).map(([id, v]) => ({ vaultId: Number(id), ...v })) });
     } catch(e) {
-      return res.status(500).json({ error: e.message, stack: e.stack?.split("\n").slice(0,4).join(" | ") });
+      return res.status(500).json({ error: e.message });
     }
   }
 
@@ -128,13 +137,13 @@ export default async function handler(req, res) {
 
       console.log(`[multiply/open] vault=${vaultId} posId=${positionId} col=${colBN} borrow=${borrowBN}`);
 
-      // Resolve vault mints once — needed for flashloan asset + swap mints
-      const readClient = new Client(connection);
-      const vaultConfig = await readClient.vault.getVaultConfig(Number(vaultId));
-      const colMint  = vaultConfig.supplyToken;
-      const debtMint = vaultConfig.borrowToken;
+      // Resolve vault mints from hardcoded map — avoids getVaultConfig() RPC call
+      const vaultMints = VAULT_MINTS[Number(vaultId)];
+      if (!vaultMints) return res.status(400).json({ error: `Unknown vaultId ${vaultId}. Valid IDs: ${Object.keys(VAULT_MINTS).join(", ")}` });
+      const colMint  = new PublicKey(vaultMints.supplyToken);
+      const debtMint = new PublicKey(vaultMints.borrowToken);
 
-      console.log(`[multiply/open] colMint=${colMint.toBase58()} debtMint=${debtMint.toBase58()}`);
+      console.log(`[multiply/open] vault=${vaultId} col=${colMint.toBase58().slice(0,8)} debt=${debtMint.toBase58().slice(0,8)}`);
 
       // Run flashloan ixs + quote in parallel to minimise RPC round trips
       const isStable = [
@@ -185,14 +194,15 @@ export default async function handler(req, res) {
 
     // ── UNWIND ────────────────────────────────────────────────────────────────
     if (action === "unwind") {
-      const readClient   = new Client(connection);
-      const vaultConfig  = await readClient.vault.getVaultConfig(Number(vaultId));
-      const colMint      = vaultConfig.supplyToken;
-      const debtMint     = vaultConfig.borrowToken;
+      const vaultMints = VAULT_MINTS[Number(vaultId)];
+      if (!vaultMints) return res.status(400).json({ error: `Unknown vaultId ${vaultId}` });
+      const colMint  = new PublicKey(vaultMints.supplyToken);
+      const debtMint = new PublicKey(vaultMints.borrowToken);
       const isFullUnwind = !withdrawAmount;
       let flashColBN;
 
       if (isFullUnwind) {
+        const readClient = new Client(connection);
         const pos   = await readClient.vault.getUserPosition({ vaultId: Number(vaultId), positionId: Number(positionId) });
         if (!pos) return res.status(400).json({ error: `Position ${positionId} not found in vault ${vaultId}` });
         const state = await readClient.vault.getCurrentPositionState({ vaultId: Number(vaultId), position: pos });
