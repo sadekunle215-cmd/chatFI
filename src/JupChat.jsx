@@ -520,6 +520,18 @@ export default function JupChat() {
   }, [swapCfg.fromMint, swapCfg.toMint, swapCfg.amount, showSwap]);
 
   // ── Proxy helper ────────────────────────────────────────────────────────────
+  // Direct browser fetch for prediction endpoints — bypasses proxy so Jupiter sees
+  // the user's real IP (same as jup.ag does), avoiding server-side geo-blocks.
+  const predFetch = async (url, options = {}) => {
+    const method = (options.method || "GET").toUpperCase();
+    const fetchOptions = { method, headers: { "Content-Type": "application/json" } };
+    if (options.body && method !== "GET") {
+      fetchOptions.body = typeof options.body === "string" ? options.body : JSON.stringify(options.body);
+    }
+    const res = await fetch(url, fetchOptions);
+    return res.json();
+  };
+
   // All Jupiter API calls go through /api/jupiter (Vercel serverless) which injects the API key
   const jupFetch = async (url, options = {}) => {
     const payload = { url, method: (options.method || "GET").toUpperCase() };
@@ -735,12 +747,12 @@ export default function JupChat() {
     try { results.defi = await jupFetch(`${JUP_PORTFOLIO}/wallet/${walletAddress}`); } catch {}
     // 2. Prediction market open positions
     try {
-      const pred = await jupFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletAddress}`);
+      const pred = await predFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletAddress}`);
       results.predPositions = Array.isArray(pred) ? pred : (pred?.data || []);
     } catch {}
     // 3. Prediction market open orders
     try {
-      const orders = await jupFetch(`${JUP_PRED_API}/orders?ownerPubkey=${walletAddress}`);
+      const orders = await predFetch(`${JUP_PRED_API}/orders?ownerPubkey=${walletAddress}`);
       results.predOrders = Array.isArray(orders) ? orders : (orders?.data || []);
     } catch {}
     // 4. Earn (lend) positions
@@ -786,13 +798,13 @@ export default function JupChat() {
     };
     if (searchQuery) {
       try {
-        const data = await jupFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=50&includeMarkets=true`);
+        const data = await predFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=50&includeMarkets=true`);
         const events = extractEvents(data);
         if (events.length > 0) return { markets: events, source: "search" };
       } catch {}
       try {
         const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: "200" });
-        const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+        const data = await predFetch(`${JUP_PRED_API}/events?${p.toString()}`);
         const all = extractEvents(data);
         const filtered = clientFilter(all, searchQuery);
         if (filtered.length > 0) return { markets: filtered, source: "client-filter" };
@@ -802,13 +814,13 @@ export default function JupChat() {
     try {
       const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: "100" });
       if (category && category !== "null") p.set("category", category.toLowerCase());
-      const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+      const data = await predFetch(`${JUP_PRED_API}/events?${p.toString()}`);
       const events = extractEvents(data);
       if (events.length > 0) return { markets: events, source: "api" };
     } catch {}
     try {
       const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: "100" });
-      const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+      const data = await predFetch(`${JUP_PRED_API}/events?${p.toString()}`);
       const events = extractEvents(data);
       if (events.length > 0) return { markets: events, source: "api-all" };
     } catch {}
@@ -1001,7 +1013,7 @@ export default function JupChat() {
 
     // Try USDC first, then JupUSD as fallback
     const tryMints = [USDC_MINT, JUPUSD_MINT];
-    const placeOrder = (mint) => jupFetch(`${JUP_PRED_API}/orders`, {
+    const placeOrder = (mint) => predFetch(`${JUP_PRED_API}/orders`, {
       method: "POST",
       body: {
         ownerPubkey:  walletFull,
@@ -1359,7 +1371,7 @@ export default function JupChat() {
 
     push("ai", (introText ? introText + "\n\n" : "") + "Checking for claimable prediction positions…");
     try {
-      const res = await jupFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletFull}`);
+      const res = await predFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletFull}`);
       const positions = Array.isArray(res) ? res : (res?.data || []);
       const claimable = positions.filter(p => p.claimable === true && p.claimed === false);
       if (claimable.length === 0) {
@@ -1372,7 +1384,7 @@ export default function JupChat() {
       let claimed = 0;
       for (const pos of claimable) {
         try {
-          const claimRes = await jupFetch(`${JUP_PRED_API}/positions/${pos.pubkey}/claim`, {
+          const claimRes = await predFetch(`${JUP_PRED_API}/positions/${pos.pubkey}/claim`, {
             method: "POST",
             body: { ownerPubkey: walletFull },
           });
