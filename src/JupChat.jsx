@@ -83,7 +83,7 @@ JUPITER LEND KNOWLEDGE:
 • Flashloans: Zero fee, atomic, no collateral. Must repay within same tx. Use cases: arbitrage, liquidations, collateral swaps.
 • Risks: Smart contract risk, liquidation if LTV breached, borrow rate > yield erodes Multiply profits.
 
-ALWAYS reply in this exact raw JSON — no markdown fences, no text outside:
+CRITICAL: ALWAYS reply with raw JSON ONLY. Never wrap in ```json or ``` code fences. Never add any text before or after the JSON. Output starts with { and ends with }:
 {
   "text": "your message to the user",
   "action": null,
@@ -2466,7 +2466,10 @@ Order: \`${orderKey.slice(0,20)}…\`
       const rawText = data?.content?.[0]?.text || '{"text":"Sorry, something went wrong.","action":null,"actionData":{}}';
 
       let parsed;
-      try { parsed = JSON.parse(rawText); }
+      try {
+        const cleanText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        parsed = JSON.parse(cleanText);
+      }
       catch { parsed = { text:rawText, action:null, actionData:{} }; }
 
       const { text, action, actionData } = parsed;
