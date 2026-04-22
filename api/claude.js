@@ -13,20 +13,17 @@ export default async function handler(req, res) {
   // ── Try Claude first ──────────────────────────────────────────────────────
   if (ANTHROPIC_KEY) {
     try {
-      // Use sonnet for sports analysis + web_search support
       const useModel = model || "claude-sonnet-4-5";
-      const supportsWebSearch = useModel.includes("sonnet") || useModel.includes("opus");
 
       const requestBody = {
         model: useModel,
         max_tokens: max_tokens || 1024,
         system,
         messages,
+        // NOTE: web_search tool intentionally removed — it causes Claude to wrap
+        // JSON responses in markdown code fences, breaking the response parser.
+        // ChatFi fetches live data itself via Jupiter APIs.
       };
-
-      if (supportsWebSearch) {
-        requestBody.tools = [{ type: "web_search_20250305", name: "web_search" }];
-      }
 
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -49,8 +46,11 @@ export default async function handler(req, res) {
           .map(b => b.text)
           .join("");
 
+        // Strip any markdown code fences Claude might still add, just in case
+        const cleanText = textContent.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+
         return res.status(200).json({
-          content: [{ type: "text", text: textContent }],
+          content: [{ type: "text", text: cleanText }],
           role: "assistant",
         });
       }
