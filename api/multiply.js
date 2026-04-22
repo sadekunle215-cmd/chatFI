@@ -110,6 +110,23 @@ export default async function handler(req, res) {
       colMint: colMint.toBase58(), debtMint: debtMint.toBase58(),
     });
 
+    // ── Resolve positionId: find user's existing position on this vault, or first free slot ──
+    // Jupiter Lend positionId = slot index (0,1,2…) per vault per user.
+    // For "open": reuse existing slot if found, otherwise use next free slot.
+    const resolvePositionId = async (targetVaultId, signerPk) => {
+      try {
+        for (let slot = 0; slot <= 9; slot++) {
+          const pos = await readClient.vault.getUserPosition({ vaultId: Number(targetVaultId), positionId: slot });
+          if (!pos) return slot; // free slot — use for new position
+          try {
+            const owner = await readClient.vault.getNftOwner(pos.positionMint);
+            if (owner && owner.toBase58() === signerPk.toBase58()) return slot; // user's existing position
+          } catch {}
+        }
+      } catch {}
+      return 0;
+    };
+
     // ── OPEN (Multiply) ───────────────────────────────────────────────────────
     // Flow per docs: FlashBorrow(debt) → Swap(debt→col) → Operate(+col,+debt) → FlashPayback
     if (action === "open") {
@@ -120,6 +137,9 @@ export default async function handler(req, res) {
       const debtBN = new BN(debtAmount.toString());
       if (colBN.isZero() || debtBN.isZero())
         return res.status(400).json({ error: "Amounts must be non-zero" });
+
+      const resolvedPositionId = await resolvePositionId(vaultId, signerPubkey);
+      console.log(`[multiply] resolved positionId=${resolvedPositionId} for vault=${vaultId} signer=${signerPubkey.toBase58()}`);
 
       const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: debtBN };
       const [flashBorrowIx, flashPayIx] = await Promise.all([
@@ -145,7 +165,7 @@ export default async function handler(req, res) {
       const supplyTotal = colBN.add(swapOutput);
 
       const { ixs: operateIxs, addressLookupTableAccounts: operateAlts } = await getOperateIx({
-        vaultId: Number(vaultId), positionId: Number(positionId),
+        vaultId: Number(vaultId), positionId: resolvedPositionId,
         colAmount: supplyTotal, debtAmount: debtBN,
         signer: signerPubkey, connection,
       });
@@ -233,8 +253,14 @@ export default async function handler(req, res) {
       if (finalCol.isZero() && finalDebt.isZero())
         return res.status(400).json({ error: `${action} requires colAmount or debtAmount` });
 
+      // For deposit/borrow (may be new position), resolve positionId from chain
+      // For repay/withdraw, use the provided positionId (must be existing position)
+      const resolvedPosId = (action === "deposit" || action === "borrow")
+        ? await resolvePositionId(vaultId, signerPubkey)
+        : Number(positionId);
+
       const { ixs, addressLookupTableAccounts } = await getOperateIx({
-        vaultId: Number(vaultId), positionId: Number(positionId),
+        vaultId: Number(vaultId), positionId: resolvedPosId,
         colAmount: finalCol, debtAmount: finalDebt,
         signer: signerPubkey, connection,
       });
