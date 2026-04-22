@@ -379,6 +379,7 @@ export default function JupChat() {
   const [multiplyFilter, setMultiplyFilter] = useState(null);
   const [multiplyPos, setMultiplyPos]       = useState({ vault:null, colAmount:"", leverage:"2" });
   const [multiplyStatus, setMultiplyStatus] = useState(null); // null | "signing" | "done" | "error"
+  const [realVaultMap, setRealVaultMap]       = useState({}); // { supplyMint+"/"+borrowMint → real vaultId }
   const [showMultiplyForm, setShowMultiplyForm] = useState(false);
   const [lendPositions, setLendPositions]       = useState([]);
   const [showLendPos, setShowLendPos]           = useState(false);
@@ -433,6 +434,24 @@ export default function JupChat() {
       window.addEventListener("beforeinstallprompt", handler);
       return () => window.removeEventListener("beforeinstallprompt", handler);
     }
+  }, []);
+
+  // ── Fetch real on-chain vault IDs from /api/multiply GET ────────────────────
+  useEffect(() => {
+    fetch("/api/multiply")
+      .then(r => r.json())
+      .then(data => {
+        if (data?.vaults) {
+          const map = {};
+          data.vaults.forEach(v => {
+            // Key by "supplyToken/borrowToken" so we can look up by mint pair
+            map[v.supplyToken + "/" + v.borrowToken] = v.vaultId;
+          });
+          setRealVaultMap(map);
+          console.log("[ChatFi] Real vault map loaded:", map);
+        }
+      })
+      .catch(e => console.warn("[ChatFi] Could not load real vault IDs:", e));
   }, []);
 
   // ── Fonts + global CSS ──────────────────────────────────────────────────────
@@ -1081,6 +1100,18 @@ export default function JupChat() {
     catch { return { ok: false, status: res.status, data: { error: `Server error (${res.status}): ${text.slice(0, 200)}` } }; }
   };
 
+  // ── Resolve real on-chain vaultId from mint addresses ───────────────────────
+  // MULTIPLY_VAULTS has hardcoded IDs that may be wrong. The server fetches real IDs
+  // via getVaultConfig, so we pass the MULTIPLY_VAULTS id but the server validates it.
+  // Additionally, at mount we fetch GET /api/multiply to get the real map so the UI
+  // shows the correct vaultId if it ever differs.
+  const getRealVaultId = (vault) => {
+    const colMint  = TOKEN_MINTS[vault.collateral.toUpperCase()] || "";
+    const debtMint = TOKEN_MINTS[vault.debt.toUpperCase()] || "";
+    const key = colMint + "/" + debtMint;
+    return realVaultMap[key] ?? vault.vaultId; // prefer real, fall back to hardcoded
+  };
+
   // ── Jupiter Multiply — calls /api/multiply serverless → signs → sends ────────
   const doMultiply = async () => {
     const { vault, colAmount, leverage } = multiplyPos;
@@ -1108,7 +1139,7 @@ export default function JupChat() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action:              "open",
-          vaultId:             vault.vaultId,
+          vaultId:             getRealVaultId(vault),
           positionId:          0,
           initialColAmount:    colRaw.toString(),
           targetLeverageBps:   targetLeverageBps,
