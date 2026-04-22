@@ -1091,10 +1091,11 @@ export default function JupChat() {
     if (!provider.signTransaction) { push("ai", "Your wallet does not support transaction signing."); return; }
 
     const colDecimals  = vault.colDecimals  ?? 9;
-    const debtDecimals = vault.debtDecimals ?? 9;
+    const debtDecimals = vault.debtDecimals ?? 6;
     const colRaw  = Math.floor(parseFloat(colAmount) * Math.pow(10, colDecimals));
-    // debtAmount = colateral * (leverage-1) in DEBT token decimals (not collateral decimals)
-    const debtRaw = Math.floor(parseFloat(colAmount) * (parseFloat(leverage) - 1) * Math.pow(10, debtDecimals));
+    // targetLeverage passed as integer multiplier × 100 (e.g. 2x → 200, 3x → 300)
+    // debtAmount is NOT pre-calculated here — the server uses targetLeverage to derive it via getOperateIx
+    const targetLeverageBps = Math.round(parseFloat(leverage) * 100); // e.g. 200 for 2x
 
     setMultiplyStatus("signing");
     setShowMultiplyForm(false);
@@ -1106,12 +1107,12 @@ export default function JupChat() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action:           "open",
-          vaultId:          vault.vaultId,
-          positionId:       0,
-          initialColAmount: colRaw.toString(),
-          debtAmount:       debtRaw.toString(),
-          signer:           walletFull,
+          action:              "open",
+          vaultId:             vault.vaultId,
+          positionId:          0,
+          initialColAmount:    colRaw.toString(),
+          targetLeverageBps:   targetLeverageBps,
+          signer:              walletFull,
         }),
       });
       if (data.error) throw new Error(data.error);
@@ -1132,15 +1133,17 @@ export default function JupChat() {
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
       // Verify tx landed on-chain before confirming success
-      await new Promise(r => setTimeout(r, 2500));
-      try {
-        const confirmRes = await jupFetch("SOLANA_RPC", {
-          method: "POST",
-          body: { jsonrpc:"2.0", id:1, method:"getSignatureStatuses", params:[[signature],{searchTransactionHistory:true}] },
-        });
-        const txStatus = confirmRes?.result?.value?.[0];
-        if (txStatus?.err) throw new Error("On-chain error: " + JSON.stringify(txStatus.err));
-      } catch(ce) { push("ai", "Warning: could not confirm tx status — " + (ce?.message||"")); }
+      await new Promise(r => setTimeout(r, 3000));
+      const confirmRes = await jupFetch("SOLANA_RPC", {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"getSignatureStatuses", params:[[signature],{searchTransactionHistory:true}] },
+      });
+      const txStatus = confirmRes?.result?.value?.[0];
+      if (txStatus?.err) {
+        // Transaction landed but failed on-chain — treat as error, NOT success
+        throw new Error("On-chain error: " + JSON.stringify(txStatus.err));
+      }
+      // Only reach here if tx actually succeeded
       setMultiplyStatus("done");
       push("ai", `Multiply position opened ✓\n\n**${leverage}x ${vault.collateral}/${vault.debt}**\nCollateral: **${colAmount} ${vault.collateral}**\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})\n\n⚠️ Monitor your position at [jup.ag/lend/multiply](https://jup.ag/lend/multiply) — your Position NFT is in your wallet.`);
       const updated = await fetchSolanaBalances(walletFull);
@@ -1150,32 +1153,37 @@ export default function JupChat() {
       const msg = err?.message || "Unknown error";
       // Decode Jupiter Lend on-chain error codes
       const LEND_ERRORS = {
-        6011: "InvalidPositionId — the position account doesn't exist yet. The vault may require an initial setup transaction first.",
-        6025: "SlippageExceeded — market moved too fast. Try again or reduce leverage.",
+        6011: "InvalidPositionId — the position account doesn't exist yet. Open your first position at jup.ag/lend/multiply first.",
+        6025: "SlippageExceeded — the flashloan swap exceeded slippage tolerance. Try a lower leverage or smaller amount.",
         6001: "InsufficientCollateral — not enough collateral for this leverage level.",
         6003: "BorrowCapExceeded — vault borrow cap reached. Try a smaller amount.",
         6010: "InvalidVaultId — vault configuration mismatch. Please refresh and try again.",
         6015: "PositionNotHealthy — position would be under-collateralised at this leverage.",
       };
-      const codeMatch = msg.match(/custom program error: (0x[0-9a-f]+)|Error Code: (\d+)|error code.*?(\d{4})/i);
+      // Match decimal code from InstructionError JSON: {"Custom":6025}
+      const customMatch = msg.match(/"Custom"\s*:\s*(\d+)/);
+      // Also match hex or plain error codes
+      const codeMatch = customMatch || msg.match(/custom program error: (0x[0-9a-f]+)|Error Code: (\d+)|error code.*?(\d{4})/i);
       let decodedErr = msg;
       if (codeMatch) {
-        const code = codeMatch[1] ? parseInt(codeMatch[1], 16) : parseInt(codeMatch[2] || codeMatch[3]);
+        const raw = codeMatch[1];
+        const code = raw?.startsWith("0x") ? parseInt(raw, 16) : parseInt(raw || codeMatch[2] || codeMatch[3]);
         if (LEND_ERRORS[code]) decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`;
       }
-      // Also check raw message for code numbers
-      const rawCodes = Object.keys(LEND_ERRORS).map(Number);
-      for (const code of rawCodes) {
-        if (msg.includes(String(code))) { decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`; break; }
+      // Fallback: scan raw message for known code numbers
+      if (decodedErr === msg) {
+        for (const code of Object.keys(LEND_ERRORS).map(Number)) {
+          if (msg.includes(String(code))) { decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`; break; }
+        }
       }
       let multiplyHint = "\n\nOpen [jup.ag/lend/multiply](https://jup.ag/lend/multiply) to check your positions.";
-      if (msg.includes("on-chain") || msg.includes("vaultId") || msg.includes("No instructions") || msg.includes("6011")) {
-        multiplyHint = "\n\n💡 Error 6011 (InvalidPositionId) usually means the vault needs initialisation before first use, or the vaultId mapping is incorrect. As a workaround, open your first position directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply) then return here to manage it.";
+      if (msg.includes("6011") || msg.includes("InvalidPositionId")) {
+        multiplyHint = "\n\n💡 This vault requires opening your first position directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply). Once the position NFT is created, you can manage it here.";
       } else if (msg.includes("6025") || msg.includes("SlippageExceeded")) {
-        multiplyHint = "\n\n💡 Slippage exceeded — try reducing the leverage or waiting for calmer market conditions.";
-      } else if (msg.includes("insufficient") || msg.includes("balance") || msg.includes("funds")) {
-        multiplyHint = "\n\n💡 Insufficient balance. Make sure you have enough of the collateral token.";
-      } else if (msg.includes("SOL") || msg.includes("rent") || msg.includes("fee")) {
+        multiplyHint = "\n\n💡 Slippage exceeded during the flashloan swap. Try reducing leverage (e.g. 2x instead of 3x), a smaller collateral amount, or wait for calmer market conditions.";
+      } else if (msg.includes("6001") || msg.includes("insufficient") || msg.includes("balance") || msg.includes("funds")) {
+        multiplyHint = "\n\n💡 Insufficient balance. Make sure you have enough of the collateral token in your wallet.";
+      } else if (msg.includes("rent") || msg.includes("fee") || msg.includes("lamport")) {
         multiplyHint = "\n\n💡 Not enough SOL for transaction fees. You need at least 0.01 SOL.";
       }
       push("ai", `Multiply failed: ${decodedErr}${multiplyHint}`);
