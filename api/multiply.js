@@ -6,9 +6,9 @@
 //
 // npm install @jup-ag/lend @jup-ag/lend-read @solana/web3.js bn.js
 
-// ── ALL imports at the top — no top-level await, no import after code ─────────
 import {
   AddressLookupTableAccount,
+  ComputeBudgetProgram,
   Connection,
   PublicKey,
   TransactionInstruction,
@@ -20,19 +20,8 @@ import { getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
 import { getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
 import { Client } from "@jup-ag/lend-read";
 
-// ── MAX sentinel fallbacks (in case SDK version doesn't export them) ──────────
-// Jupiter Lend docs: pass these to signal "repay/withdraw everything" on full unwind
 const MAX_REPAY   = MAX_REPAY_AMOUNT   ?? new BN("9007199254740991");
 const MAX_WITHDRAW = MAX_WITHDRAW_AMOUNT ?? new BN("9007199254740991");
-
-// Known stablecoin mints — used for adaptive slippage selection
-const STABLE_MINTS = new Set([
-  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
-  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  // USDT
-  "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD",  // JupUSD
-  "USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX",  // USDH
-  "A9mUU4qviSctJVPJdBJWkb28deg915LYJKrzQ19ji3FM",  // USDCet (wormhole)
-]);
 
 const RPC_URL  = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const LITE_API = "https://lite-api.jup.ag/swap/v1";
@@ -70,11 +59,14 @@ function dedupeAlts(alts) {
 
 async function buildAndReturn(res, connection, signerPubkey, ixs, alts) {
   if (!ixs?.length) return res.status(400).json({ error: "No instructions returned from SDK." });
-  const { blockhash } = await connection.getLatestBlockhash("finalized");
+  // Always prepend compute budget — multiply uses many instructions
+  const computeIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
+  const allIxs = [computeIx, ...ixs];
+  const { blockhash } = await connection.getLatestBlockhash("confirmed");
   const message = new TransactionMessage({
     payerKey: signerPubkey,
     recentBlockhash: blockhash,
-    instructions: ixs,
+    instructions: allIxs,
   }).compileToV0Message(alts || []);
   const tx = new VersionedTransaction(message);
   return res.status(200).json({ transaction: Buffer.from(tx.serialize()).toString("base64") });
@@ -82,19 +74,37 @@ async function buildAndReturn(res, connection, signerPubkey, ixs, alts) {
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
-  // Always return JSON — never let Vercel serve its default HTML error page
   res.setHeader("Content-Type", "application/json");
+
+  // ── GET: list all real vault IDs from chain ──────────────────────────────
+  // Frontend calls GET /api/multiply to get real vaultId→mints mapping
+  if (req.method === "GET") {
+    try {
+      const connection = new Connection(RPC_URL, { commitment: "confirmed" });
+      const readClient = new Client(connection);
+      const allVaults = await readClient.vault.getAllVaults();
+      const vaults = allVaults.map(v => ({
+        vaultId:   v.constantViews.vaultId,
+        supplyToken: v.constantViews.supplyToken.toBase58(),
+        borrowToken: v.constantViews.borrowToken.toBase58(),
+      }));
+      return res.status(200).json({ vaults });
+    } catch(e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const {
     action = "open",     // open | unwind | deposit | borrow | repay | withdraw
     vaultId,
     positionId = 0,
-    initialColAmount,    // open: initial collateral amount (raw units)
-    targetLeverageBps,   // open: leverage x100 e.g. 200=2x, 300=3x (preferred over debtAmount)
-    withdrawAmount,      // unwind: partial withdraw amount (undefined = full unwind)
+    initialColAmount,    // open: initial collateral (raw token units)
+    targetLeverageBps,   // open: leverage × 100, e.g. 200 = 2x (preferred)
+    withdrawAmount,      // unwind: partial withdraw amount in col token raw units
     colAmount,           // simple ops
-    debtAmount,          // simple ops (also accepted for open as legacy fallback)
+    debtAmount,          // simple ops / open legacy fallback
     signer,
   } = req.body;
 
@@ -108,37 +118,21 @@ export default async function handler(req, res) {
     const connection = new Connection(RPC_URL, { commitment: "confirmed", confirmTransactionInitialTimeout: 60000 });
     const readClient = new Client(connection);
 
-    // Resolve vault mints from on-chain config
+    // Resolve real vault mints from on-chain config
     let vaultConfig;
     try { vaultConfig = await readClient.vault.getVaultConfig(Number(vaultId)); }
-    catch (e) { return res.status(400).json({ error: `Vault ${vaultId} not found: ${e.message}` }); }
+    catch (e) { return res.status(400).json({ error: `Vault ${vaultId} not found on-chain: ${e.message}` }); }
 
     const colMint  = vaultConfig.supplyToken;
     const debtMint = vaultConfig.borrowToken;
 
-    console.log(`[multiply] action=${action} vault=${vaultId} positionId=${positionId}`, {
-      colMint: colMint.toBase58(), debtMint: debtMint.toBase58(),
+    console.log(`[multiply] action=${action} vault=${vaultId}`, {
+      colMint: colMint.toBase58(), debtMint: debtMint.toBase58(), signer: signerPubkey.toBase58(),
     });
 
-    // ── Resolve positionId: find user's existing position on this vault, or first free slot ──
-    // Jupiter Lend positionId = slot index (0,1,2…) per vault per user.
-    // For "open": reuse existing slot if found, otherwise use next free slot.
-    const resolvePositionId = async (targetVaultId, signerPk) => {
-      try {
-        for (let slot = 0; slot <= 9; slot++) {
-          const pos = await readClient.vault.getUserPosition({ vaultId: Number(targetVaultId), positionId: slot });
-          if (!pos) return slot; // free slot — use for new position
-          try {
-            const owner = await readClient.vault.getNftOwner(pos.positionMint);
-            if (owner && owner.toBase58() === signerPk.toBase58()) return slot; // user's existing position
-          } catch {}
-        }
-      } catch {}
-      return 0;
-    };
-
     // ── OPEN (Multiply) ───────────────────────────────────────────────────────
-    // Flow per docs: FlashBorrow(debt) → Swap(debt→col) → Operate(+col,+debt) → FlashPayback
+    // Official flow: FlashBorrow(debt) → Swap(debt→col) → Operate(+col,+debt) → FlashPayback
+    // Ref: https://developers.jup.ag/docs/lend/advanced/multiply
     if (action === "open") {
       if (!initialColAmount)
         return res.status(400).json({ error: "open requires initialColAmount" });
@@ -149,41 +143,44 @@ export default async function handler(req, res) {
       if (colBN.isZero())
         return res.status(400).json({ error: "initialColAmount must be non-zero" });
 
-      // Derive debtBN from targetLeverageBps (preferred) or fall back to raw debtAmount.
-      // targetLeverageBps = leverage * 100, so debt = col * (leverage - 1)
-      // debtBN = col * (targetLeverageBps - 100) / 100
-      let debtBN;
+      // Derive borrowAmount from targetLeverageBps: borrowAmount = col × (leverage-1)
+      // e.g. 2x with 5 USDC collateral → borrow 5 USDC  (targetLeverageBps=200 → 200-100=100 → ×100/100 = 1× col)
+      let borrowAmountBN;
       if (targetLeverageBps) {
-        const leverageBps = Number(targetLeverageBps);
-        if (leverageBps <= 100) return res.status(400).json({ error: "targetLeverageBps must be > 100 (leverage > 1x)" });
-        // Use BN arithmetic to avoid float precision loss
-        debtBN = colBN.muln(leverageBps - 100).divn(100);
+        const bps = Number(targetLeverageBps);
+        if (bps <= 100) return res.status(400).json({ error: "targetLeverageBps must be > 100 (leverage > 1x)" });
+        borrowAmountBN = colBN.muln(bps - 100).divn(100);
       } else {
-        debtBN = new BN(debtAmount.toString());
+        borrowAmountBN = new BN(debtAmount.toString());
       }
-      if (debtBN.isZero())
-        return res.status(400).json({ error: "Derived debtAmount is zero — check leverage/collateral values" });
+      if (borrowAmountBN.isZero())
+        return res.status(400).json({ error: "Derived borrow amount is zero — check leverage/collateral" });
 
-      const resolvedPositionId = await resolvePositionId(vaultId, signerPubkey);
-      console.log(`[multiply] resolved positionId=${resolvedPositionId} for vault=${vaultId} signer=${signerPubkey.toBase58()}`);
+      console.log(`[multiply/open] colRaw=${colBN.toString()} borrowRaw=${borrowAmountBN.toString()}`);
 
-      const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: debtBN };
+      // 1. Flashloan instructions for the debt asset
+      const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowAmountBN };
       const [flashBorrowIx, flashPayIx] = await Promise.all([
         getFlashBorrowIx(flashParams),
         getFlashPaybackIx(flashParams),
       ]);
 
-      // Adaptive slippage: stable-stable pairs use 30bps; volatile pairs use 150bps.
-      // This prevents 6025 SlippageExceeded errors where tight slippage gets breached on-chain.
-      const isStable = STABLE_MINTS.has(colMint.toBase58()) && STABLE_MINTS.has(debtMint.toBase58());
-      const slippageBps = isStable ? 30 : 150;
+      // 2. Quote: swap debt → collateral via Jupiter Lite
+      // Per official docs, slippageBps=100 is the standard. Use 150 for extra safety on volatile pairs.
+      const isStableStable =
+        colMint.toBase58()  === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" || // USDC
+        colMint.toBase58()  === "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"  || // USDT
+        debtMint.toBase58() === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" ||
+        debtMint.toBase58() === "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+      const slippageBps = isStableStable ? 50 : 150;
 
       const quoteRes = await fetch(
-        `${LITE_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${debtBN.toString()}&slippageBps=${slippageBps}`
+        `${LITE_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${borrowAmountBN.toString()}&slippageBps=${slippageBps}`
       ).then(r => r.json());
       if (quoteRes.error || !quoteRes.routePlan)
-        return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
+        return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route found"}` });
 
+      // 3. Swap instructions
       const swapApiRes = await fetch(`${LITE_API}/swap-instructions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -191,18 +188,21 @@ export default async function handler(req, res) {
       }).then(r => r.json());
       if (swapApiRes.error) return res.status(502).json({ error: `Swap instructions failed: ${swapApiRes.error}` });
 
-      const swapIx = toIx(swapApiRes.swapInstruction);
-      // Use otherAmountThreshold (guaranteed min output after slippage) not outAmount (optimistic).
-      // Passing the optimistic outAmount to getOperateIx causes 6025 when actual output is lower.
-      const swapMinOutput = new BN((quoteRes.otherAmountThreshold ?? quoteRes.outAmount).toString());
-      const supplyTotal   = colBN.add(swapMinOutput);
+      // 4. Operate: deposit (initialCol + swapped) and borrow
+      // Per official docs, use outAmount (optimistic) for supplyAmount — the operate ix validates internally
+      const swapOutput  = new BN(quoteRes.outAmount.toString());
+      const supplyTotal = colBN.add(swapOutput);
 
       const { ixs: operateIxs, addressLookupTableAccounts: operateAlts } = await getOperateIx({
-        vaultId: Number(vaultId), positionId: resolvedPositionId,
-        colAmount: supplyTotal, debtAmount: debtBN,  // supplyTotal uses min guaranteed swap output
-        signer: signerPubkey, connection,
+        vaultId:    Number(vaultId),
+        positionId: Number(positionId),
+        colAmount:  supplyTotal,
+        debtAmount: borrowAmountBN,
+        signer:     signerPubkey,
+        connection,
       });
 
+      const swapIx   = toIx(swapApiRes.swapInstruction);
       const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
       const allAlts  = dedupeAlts([...(operateAlts ?? []), ...swapAlts]);
       const allIxs   = [flashBorrowIx, swapIx, ...operateIxs, flashPayIx];
@@ -210,61 +210,56 @@ export default async function handler(req, res) {
     }
 
     // ── UNWIND (Close/Deleverage) ─────────────────────────────────────────────
-    // Flow per docs: FlashBorrow(col) → Swap(col→debt) → Operate(-col,-debt) → FlashPayback
+    // Official flow: FlashBorrow(col) → Swap(col→debt) → Operate(-col,-debt) → FlashPayback
     if (action === "unwind") {
-      if (!positionId) return res.status(400).json({ error: "unwind requires positionId" });
-      const isFullUnwind = !withdrawAmount;
+      const resolvedPosId = Number(positionId);
+      if (!resolvedPosId && resolvedPosId !== 0)
+        return res.status(400).json({ error: "unwind requires positionId" });
 
-      // For full unwind, read current position to size the flashloan
+      const isFullUnwind = !withdrawAmount;
       let flashColBN;
       if (isFullUnwind) {
         try {
-          const pos   = await readClient.vault.getUserPosition({ vaultId: Number(vaultId), positionId: Number(positionId) });
+          const pos   = await readClient.vault.getUserPosition({ vaultId: Number(vaultId), positionId: resolvedPosId });
           const state = await readClient.vault.getCurrentPositionState({ vaultId: Number(vaultId), position: pos });
-          // Add 1% buffer for price movement between quote and execution
-          flashColBN = state.colRaw.muln(101).divn(100);
+          flashColBN = state.colRaw.muln(101).divn(100); // 1% buffer
         } catch {
-          return res.status(400).json({ error: `Could not read position ${positionId}. Check vaultId and positionId are correct.` });
+          return res.status(400).json({ error: `Could not read position ${positionId} for vault ${vaultId}.` });
         }
       } else {
         flashColBN = new BN(withdrawAmount.toString());
       }
 
+      const slippageBps = 150;
       const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN };
       const [flashBorrowIx, flashPayIx] = await Promise.all([
         getFlashBorrowIx(flashParams),
         getFlashPaybackIx(flashParams),
       ]);
 
-      // Use same adaptive slippage for unwind swap
-      const isStableUnwind = STABLE_MINTS.has(colMint.toBase58()) && STABLE_MINTS.has(debtMint.toBase58());
-      const unwindSlippageBps = isStableUnwind ? 30 : 150;
-
       const quoteRes = await fetch(
-        `${LITE_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=${unwindSlippageBps}`
+        `${LITE_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=${slippageBps}`
       ).then(r => r.json());
       if (quoteRes.error || !quoteRes.routePlan)
-        return res.status(502).json({ error: `Swap quote failed for unwind: ${quoteRes.error ?? "No route"}` });
+        return res.status(502).json({ error: `Unwind swap quote failed: ${quoteRes.error ?? "No route"}` });
 
       const swapApiRes = await fetch(`${LITE_API}/swap-instructions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
       }).then(r => r.json());
-      if (swapApiRes.error) return res.status(502).json({ error: `Swap instructions failed: ${swapApiRes.error}` });
+      if (swapApiRes.error) return res.status(502).json({ error: `Unwind swap instructions failed: ${swapApiRes.error}` });
 
-      const swapIx = toIx(swapApiRes.swapInstruction);
-
-      // Full unwind: MAX sentinels tell the protocol to close everything
       const opColAmount  = isFullUnwind ? MAX_WITHDRAW : new BN(withdrawAmount.toString()).neg();
       const opDebtAmount = isFullUnwind ? MAX_REPAY    : new BN(quoteRes.otherAmountThreshold.toString()).neg();
 
       const { ixs: operateIxs, addressLookupTableAccounts: operateAlts } = await getOperateIx({
-        vaultId: Number(vaultId), positionId: Number(positionId),
+        vaultId: Number(vaultId), positionId: resolvedPosId,
         colAmount: opColAmount, debtAmount: opDebtAmount,
         signer: signerPubkey, connection,
       });
 
+      const swapIx   = toIx(swapApiRes.swapInstruction);
       const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
       const allAlts  = dedupeAlts([...(operateAlts ?? []), ...swapAlts]);
       const allIxs   = [flashBorrowIx, swapIx, ...operateIxs, flashPayIx];
@@ -272,7 +267,6 @@ export default async function handler(req, res) {
     }
 
     // ── SIMPLE OPS (deposit, borrow, repay, withdraw) ─────────────────────────
-    // Direct vault operations via getOperateIx — no flashloan needed
     const OPS = {
       deposit:  { col: +1, debt:  0 },
       borrow:   { col:  0, debt: +1 },
@@ -290,29 +284,23 @@ export default async function handler(req, res) {
       if (finalCol.isZero() && finalDebt.isZero())
         return res.status(400).json({ error: `${action} requires colAmount or debtAmount` });
 
-      // For deposit/borrow (may be new position), resolve positionId from chain
-      // For repay/withdraw, use the provided positionId (must be existing position)
-      const resolvedPosId = (action === "deposit" || action === "borrow")
-        ? await resolvePositionId(vaultId, signerPubkey)
-        : Number(positionId);
-
       const { ixs, addressLookupTableAccounts } = await getOperateIx({
-        vaultId: Number(vaultId), positionId: resolvedPosId,
+        vaultId: Number(vaultId), positionId: Number(positionId),
         colAmount: finalCol, debtAmount: finalDebt,
         signer: signerPubkey, connection,
       });
       return buildAndReturn(res, connection, signerPubkey, ixs, addressLookupTableAccounts);
     }
 
-    return res.status(400).json({ error: `Unknown action: ${action}. Valid: open, unwind, deposit, borrow, repay, withdraw` });
+    return res.status(400).json({ error: `Unknown action: ${action}` });
 
   } catch (err) {
     const msg = err?.message || "Internal server error";
-    console.error("[multiply] error:", msg);
+    console.error("[multiply] error:", msg, err?.stack);
     if (msg.includes("return data") || msg.includes("No return data"))
-      return res.status(500).json({ error: `Vault ${vaultId} simulation failed. The vault may be paused or amounts are outside its limits.` });
+      return res.status(500).json({ error: `Vault ${vaultId} simulation failed. Check amounts and vault availability.` });
     if (msg.includes("AccountNotFound") || msg.includes("could not find account"))
-      return res.status(500).json({ error: `Vault or position account not found for vaultId ${vaultId}.` });
+      return res.status(500).json({ error: `Account not found for vault ${vaultId}. The vaultId may be wrong.` });
     return res.status(500).json({ error: msg });
   }
 }
