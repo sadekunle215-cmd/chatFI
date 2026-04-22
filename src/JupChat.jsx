@@ -748,7 +748,18 @@ export default function JupChat() {
       // Jupiter Lend Earn positions: GET /lend/v1/earn/positions?wallets=<address>
       const earn = await jupFetch(`${JUP_EARN_API}/positions?wallets=${walletAddress}`);
       if (!earn || earn.error) throw new Error("earn positions empty");
-      results.earnPositions = Array.isArray(earn) ? earn : (earn?.data || []);
+      let earnArr = [];
+      if (Array.isArray(earn)) {
+        earnArr = earn;
+      } else if (earn && typeof earn === "object") {
+        earnArr = earn.data || earn.positions || earn.earnPositions
+               || earn.result || earn.items || earn.balances || [];
+        if (!Array.isArray(earnArr)) {
+          const vals = Object.values(earn).filter(v => v && typeof v === "object" && !Array.isArray(v));
+          earnArr = vals.length > 0 ? vals : [];
+        }
+      }
+      results.earnPositions = earnArr;
     } catch {}
     return results;
   };
@@ -1041,10 +1052,8 @@ export default function JupChat() {
     } catch (err) {
       setBetStatus("error");
       const msg = err?.message || "Unknown error";
-      if (msg.includes("unsupported_region") || msg.includes("Trading is not available in your region")) {
-        push("ai", `⚠️ Jupiter Prediction markets are **not available in your region** — this is a geo-restriction from Jupiter, not a wallet issue.
-
-You can try using a VPN set to a supported country (e.g. US, UK, EU) and then reconnect your wallet to place bets.`);
+      if (msg.includes("unsupported_region") || msg.includes("Trading is not available in your region") || msg.includes("geo") || msg.includes("region")) {
+        push("ai", `⚠️ Jupiter Prediction markets returned a **geo-restriction error**.\n\nThis can happen if the ChatFi server (not your device) is deployed in a restricted region. If you've successfully used prediction markets before or know your country is supported, this is a server-side issue.\n\n**Try:**\n• Reconnect your wallet and try again\n• If the issue persists, the server may need to be re-deployed to a US/EU region\n\n*Note: Jupiter supports US, UK, EU and most regions — this is rarely a user restriction.*`);
       } else {
         push("ai", `Prediction bet failed. Details: ${msg}`);
       }
@@ -1127,15 +1136,37 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     } catch (err) {
       setMultiplyStatus("error");
       const msg = err?.message || "Unknown error";
+      // Decode Jupiter Lend on-chain error codes
+      const LEND_ERRORS = {
+        6011: "InvalidPositionId — the position account doesn't exist yet. The vault may require an initial setup transaction first.",
+        6025: "SlippageExceeded — market moved too fast. Try again or reduce leverage.",
+        6001: "InsufficientCollateral — not enough collateral for this leverage level.",
+        6003: "BorrowCapExceeded — vault borrow cap reached. Try a smaller amount.",
+        6010: "InvalidVaultId — vault configuration mismatch. Please refresh and try again.",
+        6015: "PositionNotHealthy — position would be under-collateralised at this leverage.",
+      };
+      const codeMatch = msg.match(/custom program error: (0x[0-9a-f]+)|Error Code: (\d+)|error code.*?(\d{4})/i);
+      let decodedErr = msg;
+      if (codeMatch) {
+        const code = codeMatch[1] ? parseInt(codeMatch[1], 16) : parseInt(codeMatch[2] || codeMatch[3]);
+        if (LEND_ERRORS[code]) decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`;
+      }
+      // Also check raw message for code numbers
+      const rawCodes = Object.keys(LEND_ERRORS).map(Number);
+      for (const code of rawCodes) {
+        if (msg.includes(String(code))) { decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`; break; }
+      }
       let multiplyHint = "\n\nOpen [jup.ag/lend/multiply](https://jup.ag/lend/multiply) to check your positions.";
-      if (msg.includes("on-chain") || msg.includes("vaultId") || msg.includes("No instructions")) {
-        multiplyHint = "\n\n💡 The vault ID may be incorrect — the transaction was built but may have failed on-chain. Verify on Solscan and at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).";
+      if (msg.includes("on-chain") || msg.includes("vaultId") || msg.includes("No instructions") || msg.includes("6011")) {
+        multiplyHint = "\n\n💡 Error 6011 (InvalidPositionId) usually means the vault needs initialisation before first use, or the vaultId mapping is incorrect. As a workaround, open your first position directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply) then return here to manage it.";
+      } else if (msg.includes("6025") || msg.includes("SlippageExceeded")) {
+        multiplyHint = "\n\n💡 Slippage exceeded — try reducing the leverage or waiting for calmer market conditions.";
       } else if (msg.includes("insufficient") || msg.includes("balance") || msg.includes("funds")) {
         multiplyHint = "\n\n💡 Insufficient balance. Make sure you have enough of the collateral token.";
       } else if (msg.includes("SOL") || msg.includes("rent") || msg.includes("fee")) {
         multiplyHint = "\n\n💡 Not enough SOL for transaction fees. You need at least 0.01 SOL.";
       }
-      push("ai", `Multiply failed: ${msg}${multiplyHint}`);
+      push("ai", `Multiply failed: ${decodedErr}${multiplyHint}`);
     }
     setMultiplyStatus(null);
   };
@@ -1154,7 +1185,21 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     let earnPositions = [];
     try {
       const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-      const earnArr = Array.isArray(earnRaw) ? earnRaw : (earnRaw?.data || earnRaw?.positions || []);
+      // Jupiter may return positions under various keys — try all known shapes
+      let earnArr = [];
+      if (Array.isArray(earnRaw)) {
+        earnArr = earnRaw;
+      } else if (earnRaw && typeof earnRaw === "object") {
+        // Try every possible key
+        earnArr = earnRaw.data || earnRaw.positions || earnRaw.earnPositions
+                || earnRaw.result || earnRaw.items || earnRaw.balances || [];
+        // Sometimes it's an object keyed by vault address — flatten to array
+        if (!Array.isArray(earnArr)) {
+          const vals = Object.values(earnRaw).filter(v => v && typeof v === "object" && !Array.isArray(v));
+          if (vals.length > 0) earnArr = vals;
+          else earnArr = [];
+        }
+      }
       earnPositions = earnArr.map(e => ({ ...e, _type: "earn" }));
     } catch {}
 
@@ -1239,11 +1284,24 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     } catch (err) {
       setBorrowStatus("error");
       const msg = err?.message || "Unknown error";
+      const LEND_ERRORS = {
+        6011: "InvalidPositionId — position account doesn't exist. Try opening your first position at jup.ag/lend directly.",
+        6025: "SlippageExceeded — market moved. Try a smaller borrow amount.",
+        6001: "InsufficientCollateral",
+        6003: "BorrowCapExceeded — vault cap reached. Try a smaller amount.",
+        6015: "PositionNotHealthy — would be under-collateralised. Reduce borrow amount.",
+      };
+      let decodedErr = msg;
+      const rawCodes = Object.keys(LEND_ERRORS).map(Number);
+      for (const code of rawCodes) {
+        if (msg.includes(String(code))) { decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`; break; }
+      }
       let hint = "\n\nManage positions at [jup.ag/lend](https://jup.ag/lend).";
-      if (msg.includes("insufficient") || msg.includes("balance")) hint = "\n\n💡 Insufficient balance — make sure you hold the collateral token.";
+      if (msg.includes("6011")) hint = "\n\n💡 Error 6011: First borrow requires position initialisation. Open your first position at [jup.ag/lend](https://jup.ag/lend) directly, then you can manage it here.";
+      else if (msg.includes("insufficient") || msg.includes("balance")) hint = "\n\n💡 Insufficient balance — make sure you hold the collateral token.";
       else if (msg.includes("SOL") || msg.includes("fee") || msg.includes("rent"))  hint = "\n\n💡 Not enough SOL for fees. You need at least 0.01 SOL.";
       else if (msg.includes("LTV") || msg.includes("liquidat")) hint = "\n\n💡 Borrow amount exceeds your collateral LTV limit. Reduce the borrow amount.";
-      push("ai", "Borrow failed: " + msg + hint);
+      push("ai", "Borrow failed: " + decodedErr + hint);
     }
     setBorrowStatus(null);
   };
@@ -2318,6 +2376,19 @@ You can try using a VPN set to a supported country (e.g. US, UK, EU) and then re
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
 
+    // Jupiter requires minimum $50 USDC (or equivalent) per DCA order cycle
+    const MIN_ORDER_USD = 50;
+    const amtNum = parseFloat(amountPerCycle);
+    const fromSymUpper = recurringCfg.from?.toUpperCase() || "USDC";
+    const tokenPriceUSD = prices[fromSymUpper] || (fromSymUpper === "USDC" || fromSymUpper === "USDT" ? 1 : null);
+    const orderValueUSD = tokenPriceUSD ? amtNum * tokenPriceUSD : amtNum; // assume 1:1 if stablecoin unknown
+    if (orderValueUSD < MIN_ORDER_USD) {
+      setRecurringStatus("error");
+      push("ai", `Each recurring order must be worth at least **$${MIN_ORDER_USD} USDC**.\n\nYou entered **${amtNum} ${fromSymUpper}** per order (~$${orderValueUSD.toFixed(2)}). Please increase the amount per order to at least $${MIN_ORDER_USD} worth.`);
+      setRecurringStatus(null);
+      return;
+    }
+
     setRecurringStatus("signing");
     try {
       const amountRaw = Math.floor(parseFloat(amountPerCycle) * Math.pow(10, fromDecimals || 6));
@@ -2730,7 +2801,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         setPredCategory(cat || query || null);
         setShowPredList(true);
         if (result.markets?.length === 0) {
-          push("ai", "⚠️ No prediction markets found. Jupiter Prediction may not be available in your region. Try using a VPN set to US/UK/EU.");
+          push("ai", "⚠️ No prediction markets returned. This may be a server-region issue (the ChatFi proxy may be in a restricted region). The markets API itself is working — try again or check [jup.ag/prediction](https://jup.ag/prediction) directly.");
         }
 
       } else if (action === "FETCH_EARN") {
@@ -2803,6 +2874,9 @@ Order: \`${orderKey.slice(0,20)}…\`
 
       } else if (action === "SHOW_TRIGGER_V2") {
         if (!walletFull) { push("ai", text + "\n\nConnect your wallet first to place a trigger order."); }
+        else if (getActiveProvider()?.isWalletConnect) {
+          push("ai", `⚠️ **Trigger orders require wallet message signing**, which isn't supported by WalletConnect on mobile.\n\n**Alternatives:**\n• Use a **Limit order** instead (same price trigger, no message signing needed)\n• Use **Phantom or Solflare browser extension** on desktop for full trigger support\n\nWould you like to set up a Limit order instead?`);
+        }
         else {
           const fromSym = (actionData?.from || "USDC").toUpperCase();
           const toSym   = (actionData?.to   || "SOL").toUpperCase();
@@ -2837,6 +2911,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           }));
           setShowTrigV2(true);
           push("ai", text);
+        }
         }
 
       } else if (action === "FETCH_TRIGGER_ORDERS") {
