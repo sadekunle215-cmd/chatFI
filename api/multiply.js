@@ -25,6 +25,15 @@ import { Client } from "@jup-ag/lend-read";
 const MAX_REPAY   = MAX_REPAY_AMOUNT   ?? new BN("9007199254740991");
 const MAX_WITHDRAW = MAX_WITHDRAW_AMOUNT ?? new BN("9007199254740991");
 
+// Known stablecoin mints — used for adaptive slippage selection
+const STABLE_MINTS = new Set([
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  // USDT
+  "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD",  // JupUSD
+  "USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX",  // USDH
+  "A9mUU4qviSctJVPJdBJWkb28deg915LYJKrzQ19ji3FM",  // USDCet (wormhole)
+]);
+
 const RPC_URL  = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const LITE_API = "https://lite-api.jup.ag/swap/v1";
 
@@ -78,13 +87,14 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const {
-    action = "open",   // open | unwind | deposit | borrow | repay | withdraw
+    action = "open",     // open | unwind | deposit | borrow | repay | withdraw
     vaultId,
     positionId = 0,
-    initialColAmount,  // open: initial collateral amount (raw units)
-    withdrawAmount,    // unwind: partial withdraw amount (undefined = full unwind)
-    colAmount,         // simple ops
-    debtAmount,        // open + simple ops
+    initialColAmount,    // open: initial collateral amount (raw units)
+    targetLeverageBps,   // open: leverage x100 e.g. 200=2x, 300=3x (preferred over debtAmount)
+    withdrawAmount,      // unwind: partial withdraw amount (undefined = full unwind)
+    colAmount,           // simple ops
+    debtAmount,          // simple ops (also accepted for open as legacy fallback)
     signer,
   } = req.body;
 
@@ -130,13 +140,29 @@ export default async function handler(req, res) {
     // ── OPEN (Multiply) ───────────────────────────────────────────────────────
     // Flow per docs: FlashBorrow(debt) → Swap(debt→col) → Operate(+col,+debt) → FlashPayback
     if (action === "open") {
-      if (!initialColAmount || !debtAmount)
-        return res.status(400).json({ error: "open requires initialColAmount and debtAmount" });
+      if (!initialColAmount)
+        return res.status(400).json({ error: "open requires initialColAmount" });
+      if (!targetLeverageBps && !debtAmount)
+        return res.status(400).json({ error: "open requires targetLeverageBps (e.g. 200 for 2x) or debtAmount" });
 
-      const colBN  = new BN(initialColAmount.toString());
-      const debtBN = new BN(debtAmount.toString());
-      if (colBN.isZero() || debtBN.isZero())
-        return res.status(400).json({ error: "Amounts must be non-zero" });
+      const colBN = new BN(initialColAmount.toString());
+      if (colBN.isZero())
+        return res.status(400).json({ error: "initialColAmount must be non-zero" });
+
+      // Derive debtBN from targetLeverageBps (preferred) or fall back to raw debtAmount.
+      // targetLeverageBps = leverage * 100, so debt = col * (leverage - 1)
+      // debtBN = col * (targetLeverageBps - 100) / 100
+      let debtBN;
+      if (targetLeverageBps) {
+        const leverageBps = Number(targetLeverageBps);
+        if (leverageBps <= 100) return res.status(400).json({ error: "targetLeverageBps must be > 100 (leverage > 1x)" });
+        // Use BN arithmetic to avoid float precision loss
+        debtBN = colBN.muln(leverageBps - 100).divn(100);
+      } else {
+        debtBN = new BN(debtAmount.toString());
+      }
+      if (debtBN.isZero())
+        return res.status(400).json({ error: "Derived debtAmount is zero — check leverage/collateral values" });
 
       const resolvedPositionId = await resolvePositionId(vaultId, signerPubkey);
       console.log(`[multiply] resolved positionId=${resolvedPositionId} for vault=${vaultId} signer=${signerPubkey.toBase58()}`);
@@ -147,8 +173,13 @@ export default async function handler(req, res) {
         getFlashPaybackIx(flashParams),
       ]);
 
+      // Adaptive slippage: stable-stable pairs use 30bps; volatile pairs use 150bps.
+      // This prevents 6025 SlippageExceeded errors where tight slippage gets breached on-chain.
+      const isStable = STABLE_MINTS.has(colMint.toBase58()) && STABLE_MINTS.has(debtMint.toBase58());
+      const slippageBps = isStable ? 30 : 150;
+
       const quoteRes = await fetch(
-        `${LITE_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${debtBN.toString()}&slippageBps=100`
+        `${LITE_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${debtBN.toString()}&slippageBps=${slippageBps}`
       ).then(r => r.json());
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
@@ -160,13 +191,15 @@ export default async function handler(req, res) {
       }).then(r => r.json());
       if (swapApiRes.error) return res.status(502).json({ error: `Swap instructions failed: ${swapApiRes.error}` });
 
-      const swapIx      = toIx(swapApiRes.swapInstruction);
-      const swapOutput  = new BN(quoteRes.outAmount.toString());
-      const supplyTotal = colBN.add(swapOutput);
+      const swapIx = toIx(swapApiRes.swapInstruction);
+      // Use otherAmountThreshold (guaranteed min output after slippage) not outAmount (optimistic).
+      // Passing the optimistic outAmount to getOperateIx causes 6025 when actual output is lower.
+      const swapMinOutput = new BN((quoteRes.otherAmountThreshold ?? quoteRes.outAmount).toString());
+      const supplyTotal   = colBN.add(swapMinOutput);
 
       const { ixs: operateIxs, addressLookupTableAccounts: operateAlts } = await getOperateIx({
         vaultId: Number(vaultId), positionId: resolvedPositionId,
-        colAmount: supplyTotal, debtAmount: debtBN,
+        colAmount: supplyTotal, debtAmount: debtBN,  // supplyTotal uses min guaranteed swap output
         signer: signerPubkey, connection,
       });
 
@@ -203,8 +236,12 @@ export default async function handler(req, res) {
         getFlashPaybackIx(flashParams),
       ]);
 
+      // Use same adaptive slippage for unwind swap
+      const isStableUnwind = STABLE_MINTS.has(colMint.toBase58()) && STABLE_MINTS.has(debtMint.toBase58());
+      const unwindSlippageBps = isStableUnwind ? 30 : 150;
+
       const quoteRes = await fetch(
-        `${LITE_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=100`
+        `${LITE_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=${unwindSlippageBps}`
       ).then(r => r.json());
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Swap quote failed for unwind: ${quoteRes.error ?? "No route"}` });
