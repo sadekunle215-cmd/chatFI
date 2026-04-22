@@ -2912,7 +2912,6 @@ Order: \`${orderKey.slice(0,20)}…\`
           setShowTrigV2(true);
           push("ai", text);
         }
-        }
 
       } else if (action === "FETCH_TRIGGER_ORDERS") {
         const state = actionData?.state === "past" ? "past" : "active";
