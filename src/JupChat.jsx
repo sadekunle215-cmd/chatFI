@@ -298,7 +298,8 @@ export default function JupChat() {
   const [wcStatus, setWcStatus]   = useState("idle"); // "idle" | "loading" | "waiting" | "connected"
   const [wcUri, setWcUri]         = useState("");
   const [wcMode, setWcMode]       = useState("qr");   // "qr" | "uri" — which tab is shown in the WC screen
-  const [wcCopied, setWcCopied]   = useState(false);  // copy-to-clipboard feedback
+  const [wcCopied, setWcCopied]         = useState(false);  // copy-to-clipboard feedback
+  const [wcPreferredWallet, setWcPreferredWallet] = useState(null); // which wallet was picked on mobile
   const wcClientRef               = useRef(null);
   const wcSessionRef              = useRef(null);
   const wcQrRef                   = useRef(null);
@@ -1707,17 +1708,26 @@ export default function JupChat() {
       if (!uri) throw new Error("No pairing URI was generated");
       setWcUri(uri);
       setWcStatus("waiting");
+      if (preferredWallet) setWcPreferredWallet(preferredWallet);
 
-      // On mobile: open wallet app in a new tab/window so this page stays alive
-      // to receive the WalletConnect approval callback.
+      // On mobile: open wallet app WITHOUT navigating away from this page.
+      // Using location.href would destroy the JS context and kill the approval() listener.
+      // window.open(_blank) keeps this page alive so the WalletConnect relay can
+      // deliver the session approval callback.
       if (isMobile && preferredWallet) {
         const deepLink = getMobileWcDeepLink(preferredWallet, uri);
         const universalLink = getMobileWcUniversalLink(preferredWallet, uri);
-        // Try deep link first, fall back to universal link after 1.5s if app not installed
-        // Use location.href to open wallet app — avoids popup blockers on mobile.
-        // WalletConnect relay keeps session alive while user approves in wallet.
-        // After approval, wallet app returns user to this page automatically.
-        window.location.href = deepLink;
+        // Try custom scheme (opens wallet app directly if installed)
+        let launched = false;
+        try { window.open(deepLink, "_blank"); launched = true; } catch {}
+        // After 1.5 s try universal link as fallback (in case custom scheme failed/blocked)
+        setTimeout(() => {
+          if (!launched) {
+            try { window.open(universalLink, "_blank"); } catch {}
+          }
+        }, 1500);
+        // The modal stays open showing "Listening for connection" — approval() resolves
+        // once the user approves in the wallet app.
       }
 
       // Await wallet approval — the WC relay keeps the session open while user is in wallet app
@@ -1757,6 +1767,7 @@ export default function JupChat() {
       setWcUri("");
       setWcMode("qr");
       setWcCopied(false);
+      setWcPreferredWallet(null);
 
       connectedProviderRef.current = wcProvider;
       const display = `${address.slice(0,4)}…${address.slice(-4)}`;
@@ -1782,6 +1793,7 @@ export default function JupChat() {
     setWcUri("");
     setWcMode("qr");
     setWcCopied(false);
+    setWcPreferredWallet(null);
     try {
       if (wcClientRef.current && wcSessionRef.current?.topic) {
         wcClientRef.current.disconnect({ topic: wcSessionRef.current.topic, reason: { code: 0, message: "User cancelled" } }).catch(() => {});
@@ -1993,16 +2005,21 @@ export default function JupChat() {
       }
     }
 
-    // 4. On desktop with nothing detected: show extension install links
-    if (!isMobile && list.length === 0) {
+    // 4. On desktop: show extension install/download links for wallets NOT yet detected
+    // (runs even if some wallets were found — lets users install additional ones)
+    if (!isMobile) {
       const DESKTOP_INSTALLS = [
         { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  url:"https://phantom.com/download" },
         { name:"Solflare", icon: WALLET_LOGOS["Solflare"], url:"https://solflare.com/download" },
         { name:"Backpack", icon: WALLET_LOGOS["Backpack"], url:"https://backpack.app/downloads" },
         { name:"OKX",      icon: WALLET_LOGOS["OKX"],      url:"https://www.okx.com/web3/wallet" },
+        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  url:"https://jup.ag/wallet" },
       ];
+      const detectedNames = new Set(list.map(l => l.name.toLowerCase()));
       for (const w of DESKTOP_INSTALLS) {
-        list.push({ name: w.name, icon: w.icon, detected: false, deepLink: w.url, type: "download" });
+        if (!detectedNames.has(w.name.toLowerCase())) {
+          list.push({ name: w.name, icon: w.icon, detected: false, deepLink: w.url, type: "download" });
+        }
       }
     }
 
@@ -4532,9 +4549,21 @@ Order: \`${orderKey.slice(0,20)}…\`
                           <span style={{ fontSize:13, color:T.accent, fontWeight:600 }}>→</span>
                         </button>
                       ))}
-                      {/* If WC session is waiting (URI generated), show copy-URI fallback */}
+                      {/* If WC session is waiting (URI generated), show open-app button + copy-URI fallback */}
                       {wcStatus === "waiting" && wcUri && (
                         <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 12px", marginTop:4 }}>
+                          {/* Re-open wallet app button */}
+                          {wcPreferredWallet && (
+                            <button onClick={() => {
+                                const deepLink = getMobileWcDeepLink(wcPreferredWallet, wcUri);
+                                const universalLink = getMobileWcUniversalLink(wcPreferredWallet, wcUri);
+                                try { window.open(deepLink, "_blank"); } catch {}
+                                setTimeout(() => { try { window.open(universalLink, "_blank"); } catch {}; }, 1200);
+                              }}
+                              style={{ width:"100%", padding:"10px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:8, color:T.accent, fontSize:13, fontWeight:600, cursor:"pointer", marginBottom:10, display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                              <span>📱</span> Open {wcPreferredWallet} to Approve
+                            </button>
+                          )}
                           <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>
                             If the app didn't open, copy this URI and paste it in your wallet's WalletConnect screen:
                           </div>
@@ -4545,7 +4574,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                           </button>
                           <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", marginTop:8 }}>
                             <div style={{ width:6, height:6, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite" }}/>
-                            <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Listening for connection…</span>
+                            <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Waiting for approval in your wallet…</span>
                           </div>
                         </div>
                       )}
