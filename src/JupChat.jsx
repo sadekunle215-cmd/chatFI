@@ -424,6 +424,10 @@ export default function JupChat() {
   const [portfolioData, setPortfolioData]   = useState(null);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
 
+  // ── Perps panel (SHOW_PERPS — interactive trade config) ─────────────────────
+  const [showPerps, setShowPerps]           = useState(false);
+  const [perpCfg, setPerpCfg]              = useState({ market:"SOL-PERP", side:"long", collateral:"", leverage:"10" });
+
   // ── Perps Positions panel ────────────────────────────────────────────────────
   const [showPerpsPos, setShowPerpsPos]     = useState(false);
   const [perpPositions, setPerpPositions]   = useState([]);
@@ -2818,7 +2822,7 @@ Order: \`${orderKey.slice(0,20)}…\`
     setTyping(true);
     setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
     setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
-    setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false);
+    setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false); setShowPerps(false);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
 
@@ -3306,33 +3310,13 @@ Order: \`${orderKey.slice(0,20)}…\`
 
       } else if (action === "SHOW_PERPS") {
         const { market = "SOL-PERP", side = "long", collateral = "", leverage = "10" } = actionData || {};
-        const addr = walletFull;
-        if (!addr) {
-          push("ai", text + "\n\nPlease **connect your wallet** first to trade perps.");
-        } else {
-          const marketLabel = market.replace("-PERP", "");
-          const icon        = side === "long" ? "📈" : "📉";
-          const posSize     = collateral && leverage ? `$${(parseFloat(collateral) * parseFloat(leverage)).toFixed(0)}` : "—";
-          push("ai", text + `\n\n**Jupiter Perps — ${icon} ${side.toUpperCase()} ${marketLabel}**\n\n• Market: **${market}**\n• Side: **${side.toUpperCase()}**\n• Collateral: **${collateral ? `$${collateral} USDC` : "enter amount"}**\n• Leverage: **${leverage}x**\n• Est. position size: **${posSize}**\n\n⚠️ Perps carry liquidation risk. Always set a stop-loss.\n\nOpen this trade on [Jupiter Perps](https://jup.ag/perps/${marketLabel.toLowerCase()}) — connect your wallet there and enter your exact size.`);
-        }
+        push("ai", text);
+        setPerpCfg({ market, side, collateral, leverage });
+        setShowPerps(true);
 
       } else if (action === "FETCH_PERPS_POSITIONS") {
-        if (!walletFull) {
-          push("ai", text + "\n\nPlease **connect your wallet** first to view perps positions.");
-        } else {
-          push("ai", text);
-          setPerpsLoading(true);
-          setShowPerpsPos(true);
-          setPerpPositions([]);
-          try {
-            const data = await jupFetch(`${JUP_PERPS_API}/positions?wallet=${walletFull}`);
-            const positions = data?.positions || data || [];
-            setPerpPositions(Array.isArray(positions) ? positions : []);
-          } catch {
-            push("ai", "Could not fetch perps positions right now. Try again shortly.");
-          }
-          setPerpsLoading(false);
-        }
+        push("ai", text);
+        setShowPerpsPos(true);
 
       } else {
         push("ai", text);
@@ -4469,6 +4453,110 @@ Order: \`${orderKey.slice(0,20)}…\`
               </button>
             </div>
           )}
+
+          {/* ── Perps Trade panel (SHOW_PERPS) ──────────────────────────── */}
+          {showPerps && (() => {
+            const markets = ["SOL-PERP","BTC-PERP","ETH-PERP"];
+            const marketLabel = perpCfg.market.replace("-PERP","");
+            const posSize = perpCfg.collateral && perpCfg.leverage
+              ? `$${(parseFloat(perpCfg.collateral||0) * parseFloat(perpCfg.leverage||1)).toFixed(0)}`
+              : "—";
+            const jupUrl = `https://jup.ag/perps/${marketLabel.toLowerCase()}`;
+            return (
+              <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>
+                  ⚡ Jupiter Perps
+                </div>
+                <div style={{ fontSize:11, color:T.text3, marginBottom:16 }}>Up to 100x leverage · SOL, BTC, ETH</div>
+
+                {/* Market selector */}
+                <div style={{ marginBottom:12 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Market</div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    {markets.map(m => (
+                      <button key={m} onClick={() => setPerpCfg(c=>({...c,market:m}))}
+                        style={{ flex:1, padding:"8px 4px", background: perpCfg.market===m ? T.accent : T.bg, border:`1px solid ${perpCfg.market===m ? T.accent : T.border}`, borderRadius:8, color: perpCfg.market===m ? "#0d1117" : T.text2, fontSize:12, fontWeight:perpCfg.market===m?700:400, cursor:"pointer" }}>
+                        {m.replace("-PERP","")}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Side selector */}
+                <div style={{ marginBottom:12 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Side</div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={() => setPerpCfg(c=>({...c,side:"long"}))}
+                      style={{ flex:1, padding:"8px", background: perpCfg.side==="long" ? T.greenBg : T.bg, border:`1px solid ${perpCfg.side==="long" ? T.greenBd : T.border}`, borderRadius:8, color: perpCfg.side==="long" ? T.green : T.text2, fontSize:13, fontWeight:perpCfg.side==="long"?700:400, cursor:"pointer" }}>
+                      📈 Long
+                    </button>
+                    <button onClick={() => setPerpCfg(c=>({...c,side:"short"}))}
+                      style={{ flex:1, padding:"8px", background: perpCfg.side==="short" ? T.redBg : T.bg, border:`1px solid ${perpCfg.side==="short" ? T.redBd : T.border}`, borderRadius:8, color: perpCfg.side==="short" ? T.red : T.text2, fontSize:13, fontWeight:perpCfg.side==="short"?700:400, cursor:"pointer" }}>
+                      📉 Short
+                    </button>
+                  </div>
+                </div>
+
+                {/* Collateral input */}
+                <div style={{ marginBottom:12 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Collateral (USD)</div>
+                  <input type="number" min="0" placeholder="e.g. 5" value={perpCfg.collateral}
+                    onChange={e => setPerpCfg(c=>({...c,collateral:e.target.value}))}
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  />
+                </div>
+
+                {/* Leverage slider */}
+                <div style={{ marginBottom:16 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:T.text3, marginBottom:6 }}>
+                    <span>Leverage</span>
+                    <span style={{ color:T.accent, fontWeight:700 }}>{perpCfg.leverage}x</span>
+                  </div>
+                  <input type="range" min="1" max="100" step="1" value={perpCfg.leverage}
+                    onChange={e => setPerpCfg(c=>({...c,leverage:e.target.value}))}
+                    style={{ width:"100%", accentColor:T.accent }}
+                  />
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3, marginTop:2 }}>
+                    <span>1x</span><span>25x</span><span>50x</span><span>100x</span>
+                  </div>
+                </div>
+
+                {/* Summary */}
+                <div style={{ padding:"10px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:14, fontSize:12, color:T.text3 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                    <span>Market</span><strong style={{ color:T.text1 }}>{perpCfg.market}</strong>
+                  </div>
+                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                    <span>Side</span>
+                    <strong style={{ color: perpCfg.side==="long" ? T.green : T.red }}>
+                      {perpCfg.side.toUpperCase()}
+                    </strong>
+                  </div>
+                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                    <span>Collateral</span><strong style={{ color:T.text1 }}>{perpCfg.collateral ? `$${perpCfg.collateral} USDC` : "—"}</strong>
+                  </div>
+                  <div style={{ display:"flex", justifyContent:"space-between" }}>
+                    <span>Est. Position Size</span><strong style={{ color:T.accent }}>{posSize}</strong>
+                  </div>
+                </div>
+
+                <div style={{ fontSize:11, color:"#f59e0b", marginBottom:12 }}>
+                  ⚠️ Perps carry liquidation risk. At {perpCfg.leverage}x, a ~{(100/parseFloat(perpCfg.leverage||1)).toFixed(0)}% move against you triggers liquidation.
+                </div>
+
+                <div style={{ display:"flex", gap:8 }}>
+                  <a href={jupUrl} target="_blank" rel="noopener noreferrer"
+                    style={{ flex:1, padding:"10px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:700, cursor:"pointer", textDecoration:"none", textAlign:"center", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                    Open on Jupiter Perps ↗
+                  </a>
+                  <button onClick={() => setShowPerps(false)}
+                    style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Perps Positions panel ─────────────────────────────────── */}
           {showPerpsPos && (
