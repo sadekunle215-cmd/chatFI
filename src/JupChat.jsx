@@ -1192,10 +1192,10 @@ export default function JupChat() {
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
       const signedTx = await provider.signTransaction(tx);
 
-      // 3. Send via RPC
+      // 3. Send via RPC — use skipPreflight:true for multiply (simulation misreads atomic flashloan)
       const rpcRes = await jupFetch("SOLANA_RPC", {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:false }] },
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight: data.skipPreflight ?? false }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
