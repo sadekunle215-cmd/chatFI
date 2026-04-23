@@ -4444,26 +4444,9 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {/* QR tab */}
                   {wcStatus === "waiting" && wcMode === "qr" && (
                     <div style={{ textAlign:"center" }}>
-                      {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
-                        /* Mobile: big "Open & Approve" button — can't scan own screen */
-                        <div style={{ marginBottom:16 }}>
-                          <button onClick={() => {
-                            const wName = wcPreferredWallet || "Jupiter";
-                            const deepLink = getMobileWcDeepLink(wName, wcUri);
-                            const universalLink = getMobileWcUniversalLink(wName, wcUri);
-                            window.location.href = deepLink;
-                            setTimeout(() => { window.location.href = universalLink; }, 1500);
-                          }}
-                          style={{ width:"100%", padding:"14px", background:T.accent, border:"none", borderRadius:12, color:"#0d1117", fontSize:15, fontWeight:700, cursor:"pointer", marginBottom:10, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-                            📱 Open {wcPreferredWallet || "Jupiter"} &amp; Approve
-                          </button>
-                          <div style={{ fontSize:11, color:T.text3, marginBottom:12 }}>Tap above → approve in your wallet app → you're connected</div>
-                        </div>
-                      ) : (
-                        <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
-                          Open {wcPreferredWallet || "Jupiter"} Wallet → tap the scan icon → scan this QR code
-                        </div>
-                      )}
+                      <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
+                        Open Jupiter Wallet → tap the scan icon → scan this QR code
+                      </div>
                       <div style={{ display:"inline-block", padding:12, background:T.bg, border:`2px solid ${T.border}`, borderRadius:16, marginBottom:14 }}>
                         <canvas ref={wcQrRef} style={{ display:"block", borderRadius:8 }}/>
                       </div>
@@ -4534,17 +4517,26 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:8 }}>
                       {[
-                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Tap to connect — opens Phantom to approve" },
-                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Tap to connect — opens Solflare to approve" },
-                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Tap to connect — opens Backpack to approve" },
-                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Tap to connect — opens Jupiter to approve" },
+                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Opens ChatFi inside Phantom — tap Connect to approve" },
+                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Opens ChatFi inside Solflare — tap Connect to approve" },
+                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Opens ChatFi inside Backpack — tap Connect to approve" },
+                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Opens ChatFi inside Jupiter — tap Connect to approve" },
                       ].map(w => (
                         <button key={w.name} onClick={() => {
-                          // If wallet already detected (user is inside wallet browser) → direct connect
+                          // If wallet already injected (user is inside wallet browser) → connect directly
                           const found = walletList.find(l => l.name.toLowerCase() === w.name.toLowerCase() && l.detected);
                           if (found) { doConnectWith(found); return; }
-                          // Otherwise use WalletConnect — mobile will show "Open [Wallet] & Approve" button
-                          initWalletConnect(w.name);
+                          // Open ChatFi inside the wallet's in-app browser — wallet will be injected there
+                          const url = encodeURIComponent(window.location.href);
+                          const ref = encodeURIComponent(window.location.origin);
+                          const browseLinks = {
+                            "Phantom":  `https://phantom.app/ul/browse/${url}?ref=${ref}`,
+                            "Solflare": `https://solflare.com/ul/v1/browse/${url}?ref=${ref}`,
+                            "Backpack": `https://backpack.app/browse/${url}?ref=${ref}`,
+                            "Jupiter":  `https://jup.ag/ul/browse/${url}?ref=${ref}`,
+                          };
+                          window.location.href = browseLinks[w.name] || browseLinks["Phantom"];
+                          setShowWalletModal(false);
                         }} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
                           <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
