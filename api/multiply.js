@@ -11,6 +11,7 @@ import {
   ComputeBudgetProgram,
   Connection,
   PublicKey,
+  Transaction,
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
@@ -22,7 +23,7 @@ import {
 } from "@solana/spl-token";
 import BN from "bn.js";
 import { getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
-import { getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
+import { getOperateIx, getInitPositionIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
 import { Client } from "@jup-ag/lend-read";
 
 const MAX_REPAY    = MAX_REPAY_AMOUNT   ?? new BN("9007199254740991");
@@ -231,23 +232,47 @@ export default async function handler(req, res) {
       const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
       const allAlts  = dedupeAlts([...(operateResult.addressLookupTableAccounts ?? []), ...swapAlts]);
 
-      // Check if ATAs exist — if not, return a lightweight setup tx to create them first.
-      // We cannot include ATA ixs in the multiply tx itself (pushes it over 1232 byte limit).
+      // Build setup instructions: ATA creation + position init (if needed)
+      // These cannot go in the main multiply tx (size limit), so we send them first.
       const [colAtaIx, debtAtaIx] = await Promise.all([
         getAtaCreateIxIfNeeded(connection, colMint, signerPubkey),
         getAtaCreateIxIfNeeded(connection, debtMint, signerPubkey),
       ]);
       const ataIxs = [colAtaIx, debtAtaIx].filter(Boolean);
 
-      const mainIxs = [flashBorrowIx, swapIx, ...operateResult.ixs, flashPayIx];
-      console.log(`[multiply/open] ataIxs=${ataIxs.length} mainIxs=${mainIxs.length}`);
+      // Init position: get the position NFT id for this vault
+      // getInitPositionIx creates the position NFT account — required before getOperateIx
+      const { ix: initPosIx, nftId } = await getInitPositionIx({
+        vaultId: Number(vaultId),
+        connection,
+        signer: signerPubkey,
+      });
+      console.log(`[multiply/open] initPos nftId=${nftId}`);
 
-      const transaction = await buildTx(connection, signerPubkey, mainIxs, allAlts);
+      // Re-run getOperateIx with the real nftId from init
+      const operateResult2 = await getOperateIx({
+        vaultId:    Number(vaultId),
+        positionId: nftId,
+        colAmount:  colBN.add(new BN(quoteRes.outAmount.toString())),
+        debtAmount: borrowBN,
+        signer:     signerPubkey,
+        connection,
+      });
 
-      // If ATAs need creating, return a separate setup tx the frontend must send first
+      const mainIxs = [flashBorrowIx, swapIx, ...operateResult2.ixs, flashPayIx];
+      const allAlts2 = dedupeAlts([...(operateResult2.addressLookupTableAccounts ?? []), ...swapAlts]);
+      console.log(`[multiply/open] setupIxs=${ataIxs.length + 1} mainIxs=${mainIxs.length}`);
+
+      const transaction = await buildTx(connection, signerPubkey, mainIxs, allAlts2);
+
+      // Setup tx: ATAs + init position (legacy tx — init position requires legacy format)
+      const setupIxs = [...ataIxs, initPosIx];
       let setupTransaction = null;
-      if (ataIxs.length > 0) {
-        setupTransaction = await buildTx(connection, signerPubkey, ataIxs, []);
+      if (setupIxs.length > 0) {
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+        const legacyTx = new Transaction({ feePayer: signerPubkey, recentBlockhash: blockhash });
+        setupIxs.forEach(ix => legacyTx.add(ix));
+        setupTransaction = Buffer.from(legacyTx.serialize({ requireAllSignatures: false })).toString("base64");
       }
 
       return res.status(200).json({ transaction, setupTransaction });
