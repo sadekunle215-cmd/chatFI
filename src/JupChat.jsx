@@ -1165,7 +1165,22 @@ export default function JupChat() {
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned from multiply API.");
 
-      // 2. Deserialize + sign
+      // 2a. If ATAs need creating, sign + send the setup tx first
+      if (data.setupTransaction) {
+        push("ai", "Creating token accounts first…");
+        const setupTx = VersionedTransaction.deserialize(b64ToBytes(data.setupTransaction));
+        const signedSetup = await provider.signTransaction(setupTx);
+        const setupRes = await jupFetch("SOLANA_RPC", {
+          method: "POST",
+          body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedSetup.serialize()), { encoding:"base64", skipPreflight:false }] },
+        });
+        const setupSig = setupRes?.result;
+        if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction failed.");
+        // Wait for setup tx to confirm before sending main tx
+        await new Promise(r => setTimeout(r, 3000));
+      }
+
+      // 2b. Deserialize + sign main multiply tx
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
       const signedTx = await provider.signTransaction(tx);
 
