@@ -821,7 +821,7 @@ export default function JupChat() {
     if (!walletAddress) return null;
     const results = {};
     // 1. Jupiter portfolio (DeFi positions — perps, etc.)
-    try { results.defi = await jupFetch(`${JUP_PORTFOLIO}/wallet/${walletAddress}`); } catch {}
+    try { results.defi = await jupFetch(`${JUP_PORTFOLIO}/positions/${walletAddress}`); } catch {}
     // 2. Prediction market open positions
     try {
       const pred = await predFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletAddress}`);
@@ -3315,8 +3315,41 @@ Order: \`${orderKey.slice(0,20)}…\`
         setShowPerps(true);
 
       } else if (action === "FETCH_PERPS_POSITIONS") {
-        push("ai", text);
-        setShowPerpsPos(true);
+        if (!walletFull) {
+          push("ai", text + "\n\nPlease **connect your wallet** first to view perps positions.");
+        } else {
+          push("ai", text);
+          setPerpsLoading(true);
+          setShowPerpsPos(true);
+          setPerpPositions([]);
+          try {
+            // Portfolio API returns elements[] — perps show as PortfolioElementLeverage
+            // with platformId "jupiter-perps". Filter those out.
+            const data = await jupFetch(`${JUP_PORTFOLIO}/positions/${walletFull}?platforms=jupiter-perps`);
+            const elements = data?.elements || [];
+            const perpsElements = elements.filter(el =>
+              el.platformId === "jupiter-perps" || el.name?.toLowerCase().includes("perp")
+            );
+            // Flatten assets inside each leverage element into position-like objects
+            const positions = perpsElements.flatMap(el => {
+              const assets = el.data?.assets || el.data?.borrows || [];
+              return assets.map(asset => ({
+                market:   asset.data?.symbol || el.name || "PERP",
+                side:     el.data?.side || asset.data?.side || "long",
+                sizeUsd:  asset.value ?? el.value ?? null,
+                entryPrice: asset.data?.price ?? null,
+                unrealizedPnlUsd: el.data?.pnl ?? asset.data?.pnl ?? null,
+                leverage:   el.data?.leverage ?? null,
+                liquidationPrice: el.data?.liquidationPrice ?? null,
+                positionKey: el.id || asset.data?.address || Math.random().toString(),
+              }));
+            });
+            setPerpPositions(positions);
+          } catch {
+            push("ai", "Could not fetch perps positions. Try again shortly.");
+          }
+          setPerpsLoading(false);
+        }
 
       } else {
         push("ai", text);
@@ -4565,7 +4598,13 @@ Order: \`${orderKey.slice(0,20)}…\`
               {perpsLoading ? (
                 <div style={{ fontSize:12, color:T.text3 }}>Loading positions…</div>
               ) : perpPositions.length === 0 ? (
-                <div style={{ fontSize:12, color:T.text3 }}>No open perps positions found for your wallet.</div>
+                <div style={{ fontSize:12, color:T.text3 }}>
+                  No open perps positions found for your wallet.<br/>
+                  <a href="https://jup.ag/perps" target="_blank" rel="noopener noreferrer"
+                    style={{ color:T.accent, textDecoration:"none", fontWeight:600 }}>
+                    Open a position on Jupiter Perps ↗
+                  </a>
+                </div>
               ) : (
                 <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                   {perpPositions.map((p, i) => {
