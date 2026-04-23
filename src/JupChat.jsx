@@ -1334,25 +1334,37 @@ export default function JupChat() {
     push("ai", `Depositing **${colAmount} ${collateral}** as collateral and borrowing **${borrowAmount} ${debt}**…`);
 
     try {
-      // 1. Build unsigned versioned tx on server (uses @jup-ag/lend/borrow getOperateIx)
+      // 1. Build transactions on server
       const { ok, data } = await safeApiFetch("/api/borrow", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action:"operate", vaultId, positionId:0, colAmount:colRaw, debtAmount:debtRaw, signer:walletFull }),
       });
       if (!ok || data.error) throw new Error(data.error || "Borrow API error");
-      if (!data.transaction)  throw new Error("No transaction returned from borrow API.");
+      if (!data.transaction) throw new Error("No transaction returned from borrow API.");
 
-      // 2. Deserialize → wallet signs
-      const bytes = b64ToBytes(data.transaction);
-      const tx = VersionedTransaction.deserialize(bytes);
-      const signedTx = await provider.signTransaction(tx);
+      // 2. If setupTransaction exists — sign + send it first (creates position NFT)
+      if (data.setupTransaction) {
+        const setupBytes  = b64ToBytes(data.setupTransaction);
+        const setupTx     = Transaction.from(setupBytes);
+        const signedSetup = await provider.signTransaction(setupTx);
+        const setupRes    = await jupFetch(SOLANA_RPC, {
+          method: "POST",
+          body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedSetup.serialize()), { encoding:"base64", skipPreflight:false }] },
+        });
+        const setupSig = setupRes?.result;
+        if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction (create position) failed to send.");
+        // Wait for position to be confirmed before operating
+        await new Promise(r => setTimeout(r, 4000));
+      }
 
-      // 3. Send via RPC
-      const signedBytes = signedTx.serialize();
-      const rpcRes = await jupFetch(SOLANA_RPC, {
+      // 3. Sign + send operate transaction (deposit + borrow)
+      const bytes     = b64ToBytes(data.transaction);
+      const tx        = VersionedTransaction.deserialize(bytes);
+      const signedTx  = await provider.signTransaction(tx);
+      const rpcRes    = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedBytes), { encoding:"base64", skipPreflight:true }] },
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
@@ -1373,7 +1385,7 @@ export default function JupChat() {
       setBorrowStatus("error");
       const msg = err?.message || "Unknown error";
       const LEND_ERRORS = {
-        6011: "InvalidPositionId — position account doesn't exist. Try opening your first position at jup.ag/lend directly.",
+        6011: "InvalidPositionId — position not found on-chain.",
         6025: "SlippageExceeded — market moved. Try a smaller borrow amount.",
         6001: "InsufficientCollateral",
         6003: "BorrowCapExceeded — vault cap reached. Try a smaller amount.",
@@ -1385,9 +1397,8 @@ export default function JupChat() {
         if (msg.includes(String(code))) { decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`; break; }
       }
       let hint = "\n\nManage positions at [jup.ag/lend](https://jup.ag/lend).";
-      if (msg.includes("6011")) hint = "\n\n💡 Error 6011: Invalid position — position creation is handled automatically. Please try again.";
-      else if (msg.includes("insufficient") || msg.includes("balance")) hint = "\n\n💡 Insufficient balance — make sure you hold the collateral token.";
-      else if (msg.includes("SOL") || msg.includes("fee") || msg.includes("rent"))  hint = "\n\n💡 Not enough SOL for fees. You need at least 0.01 SOL.";
+      if (msg.includes("insufficient") || msg.includes("balance")) hint = "\n\n💡 Insufficient balance — make sure you hold the collateral token.";
+      else if (msg.includes("SOL") || msg.includes("fee") || msg.includes("rent")) hint = "\n\n💡 Not enough SOL for fees. You need at least 0.01 SOL.";
       else if (msg.includes("LTV") || msg.includes("liquidat")) hint = "\n\n💡 Borrow amount exceeds your collateral LTV limit. Reduce the borrow amount.";
       push("ai", "Borrow failed: " + decodedErr + hint);
     }
