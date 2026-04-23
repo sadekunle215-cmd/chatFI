@@ -4445,7 +4445,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {wcStatus === "waiting" && wcMode === "qr" && (
                     <div style={{ textAlign:"center" }}>
                       {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
-                        /* Mobile: show Open app button — can't scan own screen */
+                        /* Mobile: big "Open & Approve" button — can't scan own screen */
                         <div style={{ marginBottom:16 }}>
                           <button onClick={() => {
                             const wName = wcPreferredWallet || "Jupiter";
@@ -4457,11 +4457,11 @@ Order: \`${orderKey.slice(0,20)}…\`
                           style={{ width:"100%", padding:"14px", background:T.accent, border:"none", borderRadius:12, color:"#0d1117", fontSize:15, fontWeight:700, cursor:"pointer", marginBottom:10, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
                             📱 Open {wcPreferredWallet || "Jupiter"} &amp; Approve
                           </button>
-                          <div style={{ fontSize:11, color:T.text3 }}>Tap above to open the wallet app and approve the connection</div>
+                          <div style={{ fontSize:11, color:T.text3, marginBottom:12 }}>Tap above → approve in your wallet app → you're connected</div>
                         </div>
                       ) : (
                         <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
-                          Open Jupiter Wallet → tap the scan icon → scan this QR code
+                          Open {wcPreferredWallet || "Jupiter"} Wallet → tap the scan icon → scan this QR code
                         </div>
                       )}
                       <div style={{ display:"inline-block", padding:12, background:T.bg, border:`2px solid ${T.border}`, borderRadius:16, marginBottom:14 }}>
@@ -4534,24 +4534,17 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:8 }}>
                       {[
-                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Tap to connect directly" },
-                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Tap to connect directly" },
-                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Tap to connect directly" },
-                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Connect via WalletConnect" },
+                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Tap to connect — opens Phantom to approve" },
+                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Tap to connect — opens Solflare to approve" },
+                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Tap to connect — opens Backpack to approve" },
+                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Tap to connect — opens Jupiter to approve" },
                       ].map(w => (
                         <button key={w.name} onClick={() => {
-                          if (w.name === "Jupiter") {
-                            initWalletConnect("Jupiter");
-                          } else {
-                            const found = walletList.find(l => l.name.toLowerCase() === w.name.toLowerCase() && l.detected);
-                            if (found) {
-                              doConnectWith(found);
-                            } else {
-                              const deepLink = MOBILE_DEEP_LINKS[w.name]?.(window.location.href);
-                              if (deepLink) window.location.href = deepLink;
-                              setShowWalletModal(false);
-                            }
-                          }
+                          // If wallet already detected (user is inside wallet browser) → direct connect
+                          const found = walletList.find(l => l.name.toLowerCase() === w.name.toLowerCase() && l.detected);
+                          if (found) { doConnectWith(found); return; }
+                          // Otherwise use WalletConnect — mobile will show "Open [Wallet] & Approve" button
+                          initWalletConnect(w.name);
                         }} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
                           <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
