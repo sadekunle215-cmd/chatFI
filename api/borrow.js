@@ -3,7 +3,7 @@
 // All ops (deposit, borrow, repay, withdraw, combined) use the same function with signed BN amounts:
 //   colAmount  > 0 = deposit,  < 0 = withdraw,  0 = no collateral change
 //   debtAmount > 0 = borrow,   < 0 = repay,     0 = no debt change
-//   positionId = 0 → SDK auto-creates position + operates atomically
+//   positionId = 0 → SDK auto-creates position; two-call pattern required
 
 import { Connection, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import BN from "bn.js";
@@ -32,19 +32,63 @@ export default async function handler(req, res) {
     const connection = new Connection(RPC_URL, { commitment: "confirmed" });
     const signerPubkey = new PublicKey(signer);
 
-    // Build operate instructions via Jupiter Lend SDK.
-    // positionId:0 = create position + operate in one atomic versioned tx.
     const colBN  = new BN(colAmount  ?? "0");
     const debtBN = new BN(debtAmount ?? "0");
+    const parsedVaultId    = parseInt(vaultId);
+    const parsedPositionId = parseInt(positionId ?? 0);
 
-    const { ixs, addressLookupTableAccounts, nftId } = await getOperateIx({
-      vaultId:    parseInt(vaultId),
-      positionId: parseInt(positionId ?? 0),
-      colAmount:  colBN,
-      debtAmount: debtBN,
-      connection,
-      signer: signerPubkey,
-    });
+    let ixs;
+    let addressLookupTableAccounts;
+    let resolvedNftId = null;
+
+    if (parsedPositionId === 0) {
+      // ── TWO-CALL PATTERN ──────────────────────────────────────────────────
+      // Call 1: positionId=0 → SDK returns the new nftId (position address).
+      //         The ixs from this call are NOT used.
+      const firstCall = await getOperateIx({
+        vaultId:    parsedVaultId,
+        positionId: 0,
+        colAmount:  colBN,
+        debtAmount: debtBN,
+        connection,
+        signer: signerPubkey,
+      });
+
+      const newNftId = firstCall?.nftId;
+      if (!newNftId && newNftId !== 0) {
+        return res.status(400).json({ error: "SDK did not return a new positionId (nftId). Cannot proceed." });
+      }
+
+      resolvedNftId = newNftId;
+
+      // Call 2: use the real nftId → SDK returns the actual operate instructions.
+      const secondCall = await getOperateIx({
+        vaultId:    parsedVaultId,
+        positionId: newNftId,
+        colAmount:  colBN,
+        debtAmount: debtBN,
+        connection,
+        signer: signerPubkey,
+      });
+
+      ixs                      = secondCall?.ixs;
+      addressLookupTableAccounts = secondCall?.addressLookupTableAccounts;
+
+    } else {
+      // ── SINGLE-CALL (existing position) ───────────────────────────────────
+      const result = await getOperateIx({
+        vaultId:    parsedVaultId,
+        positionId: parsedPositionId,
+        colAmount:  colBN,
+        debtAmount: debtBN,
+        connection,
+        signer: signerPubkey,
+      });
+
+      ixs                      = result?.ixs;
+      addressLookupTableAccounts = result?.addressLookupTableAccounts;
+      resolvedNftId              = result?.nftId ?? parsedPositionId;
+    }
 
     if (!ixs?.length) {
       return res.status(400).json({ error: "No instructions returned by Jupiter Lend SDK. Check vault ID and amounts." });
@@ -65,7 +109,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       transaction: txBase64,
-      nftId:       nftId ?? null,  // new positionId when positionId was 0
+      nftId:       resolvedNftId,   // always the real positionId (new or existing)
       blockhash:   latestBlockhash.blockhash,
     });
 
