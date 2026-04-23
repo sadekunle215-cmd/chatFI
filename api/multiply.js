@@ -56,12 +56,40 @@ async function buildTx(connection, signerPubkey, ixs, alts) {
   if (!ixs?.length) throw new Error("No instructions returned from SDK.");
   const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
   const { blockhash } = await connection.getLatestBlockhash("confirmed");
-  const msg = new TransactionMessage({
-    payerKey: signerPubkey,
-    recentBlockhash: blockhash,
-    instructions: [cuIx, ...ixs],
-  }).compileToV0Message(alts || []);
-  return Buffer.from(new VersionedTransaction(msg).serialize()).toString("base64");
+
+  // Validate ALTs — filter out any nulls/malformed entries before compiling
+  const validAlts = (alts || []).filter(a => a && a.key && a.state);
+  console.log(`[buildTx] ixs=${ixs.length} alts=${validAlts.length} blockhash=${blockhash.slice(0,8)}`);
+
+  // Log instruction programs for debugging
+  ixs.forEach((ix, i) => {
+    try { console.log(`  ix[${i}] program=${ix.programId?.toString().slice(0,8)} keys=${ix.keys?.length}`); } catch {}
+  });
+
+  let msg;
+  try {
+    msg = new TransactionMessage({
+      payerKey: signerPubkey,
+      recentBlockhash: blockhash,
+      instructions: [cuIx, ...ixs],
+    }).compileToV0Message(validAlts);
+  } catch(e) {
+    throw new Error(`Transaction compile failed (${ixs.length} ixs, ${validAlts.length} ALTs): ${e.message}`);
+  }
+
+  let txBytes;
+  try {
+    txBytes = new VersionedTransaction(msg).serialize();
+  } catch(e) {
+    throw new Error(`Transaction serialize failed: ${e.message}`);
+  }
+
+  console.log(`[buildTx] tx size=${txBytes.length} bytes`);
+  if (txBytes.length > 1232) {
+    throw new Error(`Transaction too large: ${txBytes.length} bytes (max 1232). Too many instructions or accounts.`);
+  }
+
+  return Buffer.from(txBytes).toString("base64");
 }
 
 // ── Known vault mint pairs — avoids getVaultConfig() RPC call on every request ─
