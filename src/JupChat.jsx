@@ -1385,7 +1385,7 @@ export default function JupChat() {
         if (msg.includes(String(code))) { decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`; break; }
       }
       let hint = "\n\nManage positions at [jup.ag/lend](https://jup.ag/lend).";
-      if (msg.includes("6011")) hint = "\n\n💡 Error 6011: First borrow requires position initialisation. Open your first position at [jup.ag/lend](https://jup.ag/lend) directly, then you can manage it here.";
+      if (msg.includes("6011")) hint = "\n\n💡 Error 6011: Invalid position — position creation is handled automatically. Please try again.";
       else if (msg.includes("insufficient") || msg.includes("balance")) hint = "\n\n💡 Insufficient balance — make sure you hold the collateral token.";
       else if (msg.includes("SOL") || msg.includes("fee") || msg.includes("rent"))  hint = "\n\n💡 Not enough SOL for fees. You need at least 0.01 SOL.";
       else if (msg.includes("LTV") || msg.includes("liquidat")) hint = "\n\n💡 Borrow amount exceeds your collateral LTV limit. Reduce the borrow amount.";
