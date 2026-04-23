@@ -1657,17 +1657,17 @@ export default function JupChat() {
     const enc = encodeURIComponent(uri);
     switch (walletName) {
       case "Phantom":
-        // Phantom's WC-compatible deep link (v2 style)
-        return `phantom://wc?uri=${enc}`;
+        // Phantom v2 universal link deep-open (custom scheme often blocked by Chrome)
+        return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta`;
       case "Solflare":
         return `solflare://wc?uri=${enc}`;
       case "Backpack":
         return `backpack://wc?uri=${enc}`;
       case "Jupiter":
-        // Jupiter Mobile uses the same WC scheme
-        return `jupiter://wc?uri=${enc}`;
+        // Jupiter Mobile universal link — opens the app and presents WC approve screen
+        return `https://jup.ag/wc?uri=${enc}`;
       default:
-        return `phantom://wc?uri=${enc}`;
+        return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta`;
     }
   };
 
@@ -1675,11 +1675,11 @@ export default function JupChat() {
   const getMobileWcUniversalLink = (walletName, uri) => {
     const enc = encodeURIComponent(uri);
     switch (walletName) {
-      case "Phantom":  return `https://phantom.app/ul/v1/wc?uri=${enc}`;
-      case "Solflare": return `https://solflare.com/ul/v1/wc?uri=${enc}`;
+      case "Phantom":  return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta`;
+      case "Solflare": return `https://solflare.com/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta`;
       case "Backpack": return `https://backpack.app/wc?uri=${enc}`;
       case "Jupiter":  return `https://jup.ag/wc?uri=${enc}`;
-      default:         return `https://phantom.app/ul/v1/wc?uri=${enc}`;
+      default:         return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta`;
     }
   };
 
@@ -4622,15 +4622,17 @@ Order: \`${orderKey.slice(0,20)}…\`
                       {wcStatus === "waiting" && wcUri && (
                         <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 12px", marginTop:4 }}>
                           {wcPreferredWallet && (
-                            <button onClick={() => {
-                                const deepLink = getMobileWcDeepLink(wcPreferredWallet, wcUri);
-                                const universalLink = getMobileWcUniversalLink(wcPreferredWallet, wcUri);
-                                window.location.href = deepLink;
-                                setTimeout(() => { window.location.href = universalLink; }, 1500);
+                            <a href={getMobileWcDeepLink(wcPreferredWallet, wcUri)}
+                              onClick={(e) => {
+                                // Let the href fire naturally (not blocked by Chrome).
+                                // After 2s, if the app didn't open, try the universal link in a new tab.
+                                setTimeout(() => {
+                                  try { window.open(getMobileWcUniversalLink(wcPreferredWallet, wcUri), "_blank"); } catch {}
+                                }, 2000);
                               }}
-                              style={{ width:"100%", padding:"12px", background:T.accent, border:"none", borderRadius:10, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:12, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                              style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, width:"100%", padding:"12px", background:T.accent, borderRadius:10, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:12, textDecoration:"none", boxSizing:"border-box" }}>
                               <span>📱</span> Open {wcPreferredWallet} &amp; Approve Connection
-                            </button>
+                            </a>
                           )}
                           <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>
                             Or copy this URI and paste it in your wallet's WalletConnect screen:
