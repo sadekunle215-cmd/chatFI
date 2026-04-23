@@ -9,7 +9,7 @@ import { Connection, PublicKey, TransactionMessage, VersionedTransaction } from 
 import BN from "bn.js";
 import { getOperateIx } from "@jup-ag/lend/borrow";
 
-const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+const RPC_URL = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
