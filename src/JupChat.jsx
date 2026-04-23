@@ -413,10 +413,22 @@ export default function JupChat() {
   const [unwindStatus, setUnwindStatus]         = useState(null); // null | positionId | "done"
   const [showBorrow, setShowBorrow]             = useState(false);
 
-  // Perps panel
-  const [showPerps, setShowPerps]       = useState(false);
-  const [perpsCfg, setPerpsCfg]         = useState({ market:"SOL-PERP", side:"long", collateral:"", leverage:"10" });
-  const [perpsStatus, setPerpsStatus]   = useState(null); // null|"signing"|"done"|"error"
+  // ── Send panel ───────────────────────────────────────────────────────────────
+  const [showSend, setShowSend]         = useState(false);
+  const [sendCfg, setSendCfg]           = useState({ token:"SOL", amount:"", mint: TOKEN_MINTS.SOL });
+  const [sendStatus, setSendStatus]     = useState(null); // null|"signing"|"done"|"error"
+  const [sendLink, setSendLink]         = useState("");
+
+  // ── Portfolio panel ──────────────────────────────────────────────────────────
+  const [showPortfolio, setShowPortfolio]   = useState(false);
+  const [portfolioData, setPortfolioData]   = useState(null);
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
+
+  // ── Perps Positions panel ────────────────────────────────────────────────────
+  const [showPerpsPos, setShowPerpsPos]     = useState(false);
+  const [perpPositions, setPerpPositions]   = useState([]);
+  const [perpsLoading, setPerpsLoading]     = useState(false);
+  const [closingPerp, setClosingPerp]       = useState(null); // positionKey being closed
   const [borrowCfg, setBorrowCfg]               = useState({ vaultId:1, collateral:"SOL", debt:"USDC", colDecimals:9, debtDecimals:6, colAmount:"", borrowAmount:"" });
   const [borrowStatus, setBorrowStatus]         = useState(null); // null|"signing"|"done"|"error"
   const [showEarn, setShowEarn]           = useState(false);
@@ -1050,6 +1062,104 @@ export default function JupChat() {
     }
   };
 
+  // ── Send — real onchain tx via POST /send/v1/craft-send ─────────────────────
+  // Jupiter Send creates a keypair-based invite link. The recipient claims it
+  // without needing a wallet upfront. Sender signs; tokens locked until claimed or clawed back.
+  const doSend = async () => {
+    const { token, amount, mint } = sendCfg;
+    if (!amount || parseFloat(amount) <= 0) return;
+    if (!walletFull) { push("ai", "Connect your wallet first to send tokens."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+    if (!mint) { push("ai", `Could not resolve mint for **${token}**. Try searching the token first.`); return; }
+
+    // Derive decimals: SOL=9, USDC/USDT/most SPL=6, BONK=5 etc
+    const decimals = token === "SOL" ? 9 : (tokenDecimalsRef.current[token.toUpperCase()] ?? 6);
+    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
+
+    setSendStatus("signing");
+    setShowSend(false);
+    push("ai", `Crafting invite link to send **${amount} ${token}**…`);
+    try {
+      // POST /send/v1/craft-send → returns { transaction, inviteLink } (base64 unsigned tx)
+      const res = await jupFetch(`${JUP_SEND_API}/craft-send`, {
+        method: "POST",
+        body: { sender: walletFull, tokenMint: mint, amount: amountRaw },
+      });
+      if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
+      if (!res.transaction) throw new Error("No transaction returned from Jupiter Send.");
+
+      // Decode + sign
+      const binaryStr = atob(res.transaction);
+      const txBytes   = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const signedTx = await provider.signTransaction(tx);
+
+      // Submit via Solana RPC
+      const signedBytes = signedTx.serialize();
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedBytes), { encoding:"base64", skipPreflight:true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      const link = res.inviteLink || res.claimLink || res.link || `https://jup.ag/send/claim`;
+      setSendLink(link);
+      setSendStatus("done");
+      push("ai", `Send submitted ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n🔗 **Invite link:** ${link}\n\nShare this link — the recipient can claim without a wallet. You can claw it back anytime if unclaimed.\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+    } catch (err) {
+      setSendStatus("error");
+      push("ai", `Send failed: ${err?.message || "Unknown error"}. Please check your balance and try again.`);
+    }
+  };
+
+  // ── Close Perps Position — POST /perps/v1/close ──────────────────────────────
+  const doClosePerp = async (position) => {
+    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+
+    const posKey = position.positionKey || position.publicKey || position.id;
+    setClosingPerp(posKey);
+    push("ai", `Closing perps position **${(position.side||"").toUpperCase()} ${position.market || position.symbol || ""}**…`);
+    try {
+      // POST /perps/v1/close → returns base64 unsigned transaction
+      const res = await jupFetch(`${JUP_PERPS_API}/close`, {
+        method: "POST",
+        body: { wallet: walletFull, positionKey: posKey, market: position.market || position.symbol },
+      });
+      if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
+      if (!res.transaction) throw new Error("No transaction returned from Jupiter Perps.");
+
+      const binaryStr = atob(res.transaction);
+      const txBytes   = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const signedTx = await provider.signTransaction(tx);
+
+      const signedBytes = signedTx.serialize();
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedBytes), { encoding:"base64", skipPreflight:true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      setClosingPerp(null);
+      // Remove closed position from local state
+      setPerpPositions(prev => prev.filter(p => (p.positionKey||p.publicKey||p.id) !== posKey));
+      push("ai", `Position closed ✓\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+    } catch (err) {
+      setClosingPerp(null);
+      push("ai", `Close failed: ${err?.message || "Unknown error"}. Try again or close at [jup.ag/perps](https://jup.ag/perps).`);
+    }
+  };
 
   // ── Prediction on-chain bet — POST /prediction/v1/orders ────────────────────
   const doPredictionBet = async () => {
@@ -2707,7 +2817,8 @@ Order: \`${orderKey.slice(0,20)}…\`
     push("user", raw);
     setTyping(true);
     setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
-    setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false); setShowPerps(false);
+    setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
+    setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
 
@@ -2832,51 +2943,17 @@ Order: \`${orderKey.slice(0,20)}…\`
         }
 
       } else if (action === "FETCH_PORTFOLIO") {
-        const addr = actionData?.wallet==="address_or_connected" ? walletFull : actionData?.wallet;
+        const addr = actionData?.wallet === "address_or_connected" ? walletFull : actionData?.wallet;
         if (!addr) {
           push("ai", text + "\n\nConnect your wallet first so I can pull your portfolio.");
         } else {
+          push("ai", text);
+          setPortfolioLoading(true);
+          setShowPortfolio(true);
+          setPortfolioData(null);
           const pData = await fetchPortfolioData(addr);
-          const solBal = portfolio.SOL ? `SOL: **${portfolio.SOL.toFixed(4)}**${prices.SOL?" ($"+(portfolio.SOL*prices.SOL).toFixed(2)+")":""}` : "";
-          const other  = Object.entries(portfolio).filter(([k])=>k!=="SOL").map(([k,v])=>`${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("\n");
-          const defi   = pData?.defi?.positions?.length ? `\n\nDeFi Positions: ${pData.defi.positions.length} active` : "";
-          // Prediction positions
-          const predPos = pData?.predPositions || [];
-          const predOpen = predPos.filter(p => !p.claimed && !p.claimable);
-          const predClaim = predPos.filter(p => p.claimable && !p.claimed);
-          const predStr = predPos.length > 0
-            ? `\n\n**Prediction Positions (${predPos.length}):**\n` +
-              predPos.slice(0,5).map(p => {
-                const title = p.marketMetadata?.title || p.marketId || "Market";
-                const side  = p.isYes ? "YES" : "NO";
-                const cost  = p.totalCostUsd ? `$${(parseInt(p.totalCostUsd)/1_000_000).toFixed(2)}` : "";
-                const claim = p.claimable ? ` 🏆 CLAIMABLE $${(parseInt(p.payoutUsd||0)/1_000_000).toFixed(2)}` : "";
-                return `${side} on _${title.slice(0,40)}_ ${cost}${claim}`;
-              }).join("\n")
-            : "";
-          // Earn positions — Jupiter API returns shares + underlyingAssets (already in human units) + asset symbol
-          const earnPos = pData?.earnPositions || [];
-          const earnActive = earnPos.filter(e => {
-            const ua = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
-            const sh = parseFloat(e.shares || e.jlTokens || 0);
-            return ua > 0 || sh > 0;
-          });
-          const earnStr = earnActive.length > 0
-            ? `\n\n**Earn Positions (${earnActive.length}):**\n` +
-              earnActive.slice(0,5).map(e => {
-                const sym = e.asset?.symbol || e.assetSymbol || e.symbol || e.underlyingMint?.slice(0,6) || "Token";
-                const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
-                const sh  = parseFloat(e.shares || e.jlTokens || 0);
-                const decimals = e.asset?.decimals ?? e.decimals ?? 6;
-                // underlyingAssets may already be human-readable or still in raw units
-                const displayAmt = ua > 1e6 ? (ua / Math.pow(10, decimals)).toFixed(4) : ua > 0 ? ua.toFixed(4) : (sh / Math.pow(10, decimals)).toFixed(4);
-                return `${sym}: ${displayAmt} deposited`;
-              }).join("\n")
-            : "";
-          // Pending orders
-          const orders = pData?.predOrders || [];
-          const ordersStr = orders.length > 0 ? `\n\n**Pending Prediction Orders:** ${orders.length}` : "";
-          push("ai", `${text}\n\n${solBal}${other?"\n"+other:""}${defi}${predStr}${earnStr}${ordersStr}`);
+          setPortfolioData({ ...pData, wallet: addr, solBalance: portfolio, prices });
+          setPortfolioLoading(false);
         }
 
       } else if (action === "SHOW_SWAP") {
@@ -3186,12 +3263,17 @@ Order: \`${orderKey.slice(0,20)}…\`
         }
 
       } else if (action === "SHOW_SEND") {
-        const { token = "SOL", amount = "", reason = "" } = actionData || {};
-        const addr = walletFull;
-        if (!addr) {
+        const { token = "SOL", amount = "" } = actionData || {};
+        if (!walletFull) {
           push("ai", text + "\n\nPlease **connect your wallet** first to send tokens.");
         } else {
-          push("ai", text + `\n\n**Jupiter Send — Token Transfer via Invite Link**\n\nThis creates a shareable claim link. The recipient doesn't need a wallet to receive — they can create one when claiming.\n\n• Token: **${token}**\n• Amount: **${amount || "enter amount"}**\n• Sender: ${addr.slice(0,4)}…${addr.slice(-4)}\n\nTo send, use the [Jupiter Send page](https://jup.ag/send) directly — paste your amount and token, and it generates a claim link you can share anywhere.\n\n💡 *Unclaimed tokens can be clawed back anytime.*`);
+          const upperTok = token.toUpperCase();
+          const mint = tokenCacheRef.current[upperTok] || TOKEN_MINTS[upperTok] || TOKEN_MINTS.SOL;
+          setSendCfg({ token: upperTok, amount, mint });
+          setSendStatus(null);
+          setSendLink("");
+          setShowSend(true);
+          push("ai", text);
         }
 
       } else if (action === "FETCH_SEND_HISTORY") {
@@ -3224,40 +3306,32 @@ Order: \`${orderKey.slice(0,20)}…\`
 
       } else if (action === "SHOW_PERPS") {
         const { market = "SOL-PERP", side = "long", collateral = "", leverage = "10" } = actionData || {};
-        if (!walletFull) {
+        const addr = walletFull;
+        if (!addr) {
           push("ai", text + "\n\nPlease **connect your wallet** first to trade perps.");
         } else {
-          setPerpsCfg({ market, side, collateral, leverage });
-          setPerpsStatus(null);
-          setShowPerps(true);
-          push("ai", text);
+          const marketLabel = market.replace("-PERP", "");
+          const icon        = side === "long" ? "📈" : "📉";
+          const posSize     = collateral && leverage ? `$${(parseFloat(collateral) * parseFloat(leverage)).toFixed(0)}` : "—";
+          push("ai", text + `\n\n**Jupiter Perps — ${icon} ${side.toUpperCase()} ${marketLabel}**\n\n• Market: **${market}**\n• Side: **${side.toUpperCase()}**\n• Collateral: **${collateral ? `$${collateral} USDC` : "enter amount"}**\n• Leverage: **${leverage}x**\n• Est. position size: **${posSize}**\n\n⚠️ Perps carry liquidation risk. Always set a stop-loss.\n\nOpen this trade on [Jupiter Perps](https://jup.ag/perps/${marketLabel.toLowerCase()}) — connect your wallet there and enter your exact size.`);
         }
 
       } else if (action === "FETCH_PERPS_POSITIONS") {
-        const addr = walletFull;
-        if (!addr) {
+        if (!walletFull) {
           push("ai", text + "\n\nPlease **connect your wallet** first to view perps positions.");
         } else {
+          push("ai", text);
+          setPerpsLoading(true);
+          setShowPerpsPos(true);
+          setPerpPositions([]);
           try {
-            const data      = await jupFetch(`${JUP_PERPS_API}/positions?wallet=${addr}`);
+            const data = await jupFetch(`${JUP_PERPS_API}/positions?wallet=${walletFull}`);
             const positions = data?.positions || data || [];
-            if (!positions.length) {
-              push("ai", text + "\n\nNo open perps positions found for your wallet.");
-            } else {
-              const lines = positions.slice(0, 10).map((p, i) => {
-                const side  = p.side || "long";
-                const mkt   = p.market || p.symbol || "SOL-PERP";
-                const size  = p.sizeUsd  ? `$${parseFloat(p.sizeUsd).toFixed(2)}` : "?";
-                const pnl   = p.unrealizedPnlUsd != null ? `${parseFloat(p.unrealizedPnlUsd) >= 0 ? "+" : ""}$${parseFloat(p.unrealizedPnlUsd).toFixed(2)}` : "—";
-                const liq   = p.liquidationPrice ? `$${parseFloat(p.liquidationPrice).toFixed(2)}` : "—";
-                const icon  = side === "long" ? "📈" : "📉";
-                return `${i+1}. ${icon} **${side.toUpperCase()} ${mkt}** | Size: ${size} | PnL: ${pnl} | Liq: ${liq}`;
-              }).join("\n");
-              push("ai", text + `\n\n**Open Perps Positions**\n${lines}\n\nManage at [jup.ag/perps](https://jup.ag/perps).`);
-            }
+            setPerpPositions(Array.isArray(positions) ? positions : []);
           } catch {
-            push("ai", text + "\n\nCould not fetch perps positions right now. Try again shortly.");
+            push("ai", "Could not fetch perps positions right now. Try again shortly.");
           }
+          setPerpsLoading(false);
         }
 
       } else {
@@ -4241,96 +4315,208 @@ Order: \`${orderKey.slice(0,20)}…\`
             </div>
           )}
 
-          {/* ── Perps panel ───────────────────────────────────────────── */}
-          {showPerps && (
+          {/* ── Send panel ────────────────────────────────────────────── */}
+          {showSend && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              {/* Header */}
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>
-                  {perpsCfg.side === "long" ? "📈" : "📉"} Jupiter Perps
-                </div>
-                <span style={{ fontSize:10, padding:"2px 7px", background: perpsCfg.side === "long" ? T.greenBg : T.redBg, border:`1px solid ${perpsCfg.side === "long" ? T.greenBd : T.redBd}`, borderRadius:10, color: perpsCfg.side === "long" ? T.green : T.red, fontWeight:700 }}>
-                  {perpsCfg.side.toUpperCase()}
-                </span>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>📤 Jupiter Send</div>
+                <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>INVITE LINK</span>
               </div>
               <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
-                Leveraged perpetual futures on Solana. Up to 100x leverage. Your wallet signs the transaction.
+                Send tokens to anyone — recipient doesn't need a wallet. They claim via the link. You can claw back unclaimed tokens anytime.
               </div>
 
-              {/* Market + Side row */}
+              {/* Token + Amount row */}
               <div style={{ display:"flex", gap:8, marginBottom:10 }}>
                 <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Market</div>
-                  <select value={perpsCfg.market}
-                    onChange={e => setPerpsCfg(c => ({ ...c, market:e.target.value }))}
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token</div>
+                  <select value={sendCfg.token}
+                    onChange={e => {
+                      const sym = e.target.value;
+                      const mint = tokenCacheRef.current[sym] || TOKEN_MINTS[sym] || "";
+                      setSendCfg(c => ({ ...c, token:sym, mint }));
+                    }}
                     style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}>
-                    <option value="SOL-PERP">SOL-PERP</option>
-                    <option value="BTC-PERP">BTC-PERP</option>
-                    <option value="ETH-PERP">ETH-PERP</option>
+                    {Object.keys(TOKEN_MINTS).map(sym => (
+                      <option key={sym} value={sym}>{sym}</option>
+                    ))}
                   </select>
                 </div>
                 <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Direction</div>
-                  <div style={{ display:"flex", gap:6 }}>
-                    {["long","short"].map(s => (
-                      <button key={s} onClick={() => setPerpsCfg(c => ({ ...c, side:s }))}
-                        style={{ flex:1, padding:"8px 0", border:`1px solid ${perpsCfg.side===s ? (s==="long"?T.greenBd:T.redBd) : T.border}`, borderRadius:8, background: perpsCfg.side===s ? (s==="long"?T.greenBg:T.redBg) : T.bg, color: perpsCfg.side===s ? (s==="long"?T.green:T.red) : T.text2, fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                        {s === "long" ? "📈 Long" : "📉 Short"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Collateral + Leverage row */}
-              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>
-                    Collateral (USD) — {perpsCfg.side === "short" ? "USDC" : perpsCfg.market.replace("-PERP","")}
-                  </div>
-                  <input type="number" min="0" placeholder="e.g. 100"
-                    value={perpsCfg.collateral}
-                    onChange={e => setPerpsCfg(c => ({ ...c, collateral:e.target.value }))}
-                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
-                  />
-                </div>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Leverage (1–100x)</div>
-                  <input type="number" min="1" max="100" placeholder="e.g. 10"
-                    value={perpsCfg.leverage}
-                    onChange={e => setPerpsCfg(c => ({ ...c, leverage:e.target.value }))}
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount</div>
+                  <input type="number" min="0" placeholder="e.g. 1"
+                    value={sendCfg.amount}
+                    onChange={e => setSendCfg(c => ({ ...c, amount:e.target.value }))}
                     style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
                   />
                 </div>
               </div>
 
-              {/* Position size preview */}
-              {perpsCfg.collateral && perpsCfg.leverage && (
+              {/* Preview */}
+              {sendCfg.amount && (
                 <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
-                  {perpsCfg.side === "long" ? "📈" : "📉"} <strong>{perpsCfg.side.toUpperCase()} {perpsCfg.market}</strong><br/>
-                  💰 Collateral: <strong>${perpsCfg.collateral}</strong> · ⚡ Leverage: <strong>{perpsCfg.leverage}x</strong><br/>
-                  📐 Est. position size: <strong>${(parseFloat(perpsCfg.collateral||0) * parseFloat(perpsCfg.leverage||1)).toFixed(0)}</strong>
-                  <br/><span style={{ fontSize:11, color:T.text3 }}>Fees: 0.06% open + hourly borrow fee based on utilisation</span>
+                  📤 Sending <strong>{sendCfg.amount} {sendCfg.token}</strong> via invite link<br/>
+                  <span style={{ fontSize:11, color:T.text3 }}>From: {walletFull?.slice(0,4)}…{walletFull?.slice(-4)} · Unclaimed tokens auto-clawable</span>
                 </div>
               )}
 
-              {/* Risk warning */}
-              <div style={{ fontSize:11, color:T.text3, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
-                ⚠️ Perps carry liquidation risk. You will be liquidated if your position value drops below maintenance margin. Always set a stop-loss.
+              <div style={{ fontSize:11, color:T.text3, background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
+                💡 The invite link is generated on-chain. Share it via any app — the recipient creates a wallet when claiming.
               </div>
 
-              {/* Open on Jupiter button */}
-              <a href={`https://jup.ag/perps/${perpsCfg.market.replace("-PERP","").toLowerCase()}?side=${perpsCfg.side}&collateral=${perpsCfg.collateral}&leverage=${perpsCfg.leverage}`}
-                target="_blank" rel="noreferrer"
-                style={{ display:"block", textAlign:"center", padding:"11px", background:perpsCfg.side==="long"?T.green:T.red, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, textDecoration:"none", marginBottom:8 }}>
-                {perpsCfg.side === "long" ? "📈" : "📉"} Open {perpsCfg.side.toUpperCase()} on Jupiter Perps ↗
-              </a>
-              <div style={{ fontSize:11, color:T.text3, textAlign:"center", marginBottom:12 }}>
-                Jupiter Perps opens pre-filled · Sign with your connected wallet
-              </div>
+              <button onClick={doSend}
+                disabled={!sendCfg.amount || parseFloat(sendCfg.amount) <= 0 || sendStatus === "signing"}
+                style={{ width:"100%", padding:"11px", background: (!sendCfg.amount || sendStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
+                {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `📤 Send ${sendCfg.amount||""} ${sendCfg.token} via Invite Link`}
+              </button>
 
-              <button onClick={() => setShowPerps(false)}
+              <button onClick={() => setShowSend(false)}
                 style={{ width:"100%", padding:"9px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {/* ── Portfolio panel ───────────────────────────────────────── */}
+          {showPortfolio && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>💼 Portfolio</div>
+              <div style={{ fontSize:11, color:T.text3, marginBottom:12 }}>{walletFull?.slice(0,4)}…{walletFull?.slice(-4)}</div>
+
+              {portfolioLoading ? (
+                <div style={{ fontSize:12, color:T.text3 }}>Loading portfolio…</div>
+              ) : !portfolioData ? (
+                <div style={{ fontSize:12, color:T.text3 }}>No data available.</div>
+              ) : (
+                <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+
+                  {/* Token balances */}
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:700, color:T.text2, marginBottom:6 }}>💰 Token Balances</div>
+                    {Object.entries(portfolioData.solBalance || {}).length === 0 ? (
+                      <div style={{ fontSize:12, color:T.text3 }}>No balances found.</div>
+                    ) : (
+                      Object.entries(portfolioData.solBalance || {}).map(([sym, bal]) => {
+                        const usdVal = portfolioData.prices?.[sym] ? (bal * portfolioData.prices[sym]) : null;
+                        return (
+                          <div key={sym} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:`1px solid ${T.border}`, fontSize:13 }}>
+                            <span style={{ color:T.text1, fontWeight:600 }}>{sym}</span>
+                            <span style={{ color:T.text2 }}>{bal < 1 ? bal.toFixed(6) : bal.toFixed(4)}{usdVal ? <span style={{ color:T.text3, marginLeft:6, fontSize:11 }}>(${usdVal.toFixed(2)})</span> : null}</span>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {/* DeFi positions */}
+                  {portfolioData.defi?.positions?.length > 0 && (
+                    <div>
+                      <div style={{ fontSize:12, fontWeight:700, color:T.text2, marginBottom:6 }}>🏦 DeFi Positions ({portfolioData.defi.positions.length})</div>
+                      {portfolioData.defi.positions.slice(0,5).map((p, i) => (
+                        <div key={i} style={{ fontSize:12, color:T.text2, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
+                          {p.platform || p.type || "Position"}: {p.value ? `$${parseFloat(p.value).toFixed(2)}` : "—"}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Earn positions */}
+                  {(() => {
+                    const earnPos = (portfolioData.earnPositions||[]).filter(e => parseFloat(e.underlyingAssets||e.underlying_assets||0)>0 || parseFloat(e.shares||0)>0);
+                    return earnPos.length > 0 ? (
+                      <div>
+                        <div style={{ fontSize:12, fontWeight:700, color:T.text2, marginBottom:6 }}>💎 Earn Positions ({earnPos.length})</div>
+                        {earnPos.slice(0,5).map((e, i) => {
+                          const sym = e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
+                          const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
+                          const dec = e.asset?.decimals ?? e.decimals ?? 6;
+                          const amt = ua > 1e6 ? (ua/Math.pow(10,dec)).toFixed(4) : ua.toFixed(4);
+                          return (
+                            <div key={i} style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:T.text2, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
+                              <span>{sym} (Earn)</span><span style={{ color:T.green }}>{amt}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null;
+                  })()}
+
+                  {/* Prediction positions */}
+                  {(portfolioData.predPositions||[]).length > 0 && (
+                    <div>
+                      <div style={{ fontSize:12, fontWeight:700, color:T.text2, marginBottom:6 }}>🎯 Prediction Positions ({portfolioData.predPositions.length})</div>
+                      {portfolioData.predPositions.slice(0,5).map((p, i) => {
+                        const title = p.marketMetadata?.title || p.marketId || "Market";
+                        const side  = p.isYes ? "YES" : "NO";
+                        const cost  = p.totalCostUsd ? `$${(parseInt(p.totalCostUsd)/1_000_000).toFixed(2)}` : "";
+                        const claimable = p.claimable;
+                        return (
+                          <div key={i} style={{ fontSize:12, padding:"4px 0", borderBottom:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between" }}>
+                            <span style={{ color: side==="YES" ? T.green : T.red }}>{side}</span>
+                            <span style={{ color:T.text2, flex:1, margin:"0 8px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{title.slice(0,35)}</span>
+                            <span style={{ color: claimable ? T.green : T.text3 }}>{claimable ? "🏆 Claim" : cost}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <button onClick={() => setShowPortfolio(false)}
+                style={{ marginTop:14, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
+                Close
+              </button>
+            </div>
+          )}
+
+          {/* ── Perps Positions panel ─────────────────────────────────── */}
+          {showPerpsPos && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>📊 Open Perps Positions</div>
+              {perpsLoading ? (
+                <div style={{ fontSize:12, color:T.text3 }}>Loading positions…</div>
+              ) : perpPositions.length === 0 ? (
+                <div style={{ fontSize:12, color:T.text3 }}>No open perps positions found for your wallet.</div>
+              ) : (
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  {perpPositions.map((p, i) => {
+                    const side   = p.side || "long";
+                    const mkt    = p.market || p.symbol || "SOL-PERP";
+                    const size   = p.sizeUsd   ? `$${parseFloat(p.sizeUsd).toFixed(2)}`   : "—";
+                    const pnlRaw = parseFloat(p.unrealizedPnlUsd ?? p.pnlUsd ?? 0);
+                    const pnl    = p.unrealizedPnlUsd != null || p.pnlUsd != null
+                      ? `${pnlRaw >= 0 ? "+" : ""}$${pnlRaw.toFixed(2)}` : "—";
+                    const liq    = p.liquidationPrice ? `$${parseFloat(p.liquidationPrice).toFixed(2)}` : "—";
+                    const entryP = p.entryPrice ? `$${parseFloat(p.entryPrice).toFixed(2)}` : "—";
+                    const lev    = p.leverage ? `${parseFloat(p.leverage).toFixed(1)}x` : "—";
+                    const icon   = side === "long" ? "📈" : "📉";
+                    const pnlColor = pnlRaw >= 0 ? T.green : T.red;
+                    const posKey = p.positionKey || p.publicKey || p.id || i;
+                    const isClosing = closingPerp === posKey;
+                    return (
+                      <div key={i} style={{ padding:"12px 14px", border:`1px solid ${T.border}`, borderRadius:10, background:T.bg }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                          <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{icon} {side.toUpperCase()} {mkt}</div>
+                          <span style={{ fontSize:12, fontWeight:700, color:pnlColor }}>{pnl}</span>
+                        </div>
+                        <div style={{ display:"flex", flexWrap:"wrap", gap:10, fontSize:11, color:T.text3, marginBottom:10 }}>
+                          <span>Size: <strong style={{ color:T.text1 }}>{size}</strong></span>
+                          <span>Entry: <strong style={{ color:T.text1 }}>{entryP}</strong></span>
+                          <span>Lev: <strong style={{ color:T.text1 }}>{lev}</strong></span>
+                          <span>Liq: <strong style={{ color:T.red }}>{liq}</strong></span>
+                        </div>
+                        <button onClick={() => doClosePerp(p)} disabled={!!closingPerp} className="hov-btn"
+                          style={{ width:"100%", padding:"8px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:700, cursor: closingPerp ? "default" : "pointer" }}>
+                          {isClosing ? <><span className="spinner" style={{ borderTopColor:T.red, display:"inline-block", marginRight:6 }}/> Closing…</> : "⚡ Close Position"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <button onClick={() => setShowPerpsPos(false)}
+                style={{ marginTop:12, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
                 Close
               </button>
             </div>
