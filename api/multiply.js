@@ -232,50 +232,31 @@ export default async function handler(req, res) {
       const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
       const allAlts  = dedupeAlts([...(operateResult.addressLookupTableAccounts ?? []), ...swapAlts]);
 
-      // Build setup instructions: ATA creation + position init (if needed)
-      // These cannot go in the main multiply tx (size limit), so we send them first.
+      // ATA setup: create col/debt token accounts if they don't exist
       const [colAtaIx, debtAtaIx] = await Promise.all([
         getAtaCreateIxIfNeeded(connection, colMint, signerPubkey),
         getAtaCreateIxIfNeeded(connection, debtMint, signerPubkey),
       ]);
       const ataIxs = [colAtaIx, debtAtaIx].filter(Boolean);
 
-      // Init position: get the position NFT id for this vault
-      // getInitPositionIx creates the position NFT account — required before getOperateIx
-      const { ix: initPosIx, nftId } = await getInitPositionIx({
-        vaultId: Number(vaultId),
-        connection,
-        signer: signerPubkey,
-      });
-      console.log(`[multiply/open] initPos nftId=${nftId}`);
+      // Use positionId 0 — getOperateIx handles init internally per docs.
+      // We send with skipPreflight:true on the frontend to bypass simulation 6011.
+      const mainIxs = [flashBorrowIx, swapIx, ...operateResult.ixs, flashPayIx];
+      console.log(`[multiply/open] ataIxs=${ataIxs.length} mainIxs=${mainIxs.length}`);
 
-      // Re-run getOperateIx with the real nftId from init
-      const operateResult2 = await getOperateIx({
-        vaultId:    Number(vaultId),
-        positionId: nftId,
-        colAmount:  colBN.add(new BN(quoteRes.outAmount.toString())),
-        debtAmount: borrowBN,
-        signer:     signerPubkey,
-        connection,
-      });
+      const transaction = await buildTx(connection, signerPubkey, mainIxs, allAlts);
 
-      const mainIxs = [flashBorrowIx, swapIx, ...operateResult2.ixs, flashPayIx];
-      const allAlts2 = dedupeAlts([...(operateResult2.addressLookupTableAccounts ?? []), ...swapAlts]);
-      console.log(`[multiply/open] setupIxs=${ataIxs.length + 1} mainIxs=${mainIxs.length}`);
-
-      const transaction = await buildTx(connection, signerPubkey, mainIxs, allAlts2);
-
-      // Setup tx: ATAs + init position (legacy tx — init position requires legacy format)
-      const setupIxs = [...ataIxs, initPosIx];
+      // Setup tx for ATAs only (legacy format)
       let setupTransaction = null;
-      if (setupIxs.length > 0) {
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      if (ataIxs.length > 0) {
+        const { blockhash } = await connection.getLatestBlockhash("confirmed");
         const legacyTx = new Transaction({ feePayer: signerPubkey, recentBlockhash: blockhash });
-        setupIxs.forEach(ix => legacyTx.add(ix));
+        ataIxs.forEach(ix => legacyTx.add(ix));
         setupTransaction = Buffer.from(legacyTx.serialize({ requireAllSignatures: false })).toString("base64");
       }
 
-      return res.status(200).json({ transaction, setupTransaction });
+      // skipPreflight flag tells frontend to bypass simulation for the main tx
+      return res.status(200).json({ transaction, setupTransaction, skipPreflight: true });
     }
 
     // ── UNWIND ────────────────────────────────────────────────────────────────
