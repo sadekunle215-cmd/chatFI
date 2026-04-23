@@ -4177,15 +4177,9 @@ Order: \`${orderKey.slice(0,20)}…\`
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8 }}>
                       <span style={{ fontSize:11, color:T.text3 }}>Max LTV: {v.ltv}</span>
                       <div style={{ display:"flex", gap:6 }}>
-                        {walletFull && (
-                          <button onClick={() => { setMultiplyPos({ vault:v, colAmount:"", leverage:"2" }); setShowMultiplyForm(true); }} className="hov-btn"
-                            style={{ padding:"5px 12px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                            Open Position
-                          </button>
-                        )}
                         <a href={v.url} target="_blank" rel="noreferrer"
-                          style={{ padding:"5px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text3, fontSize:11, textDecoration:"none" }}>
-                          View ↗
+                          style={{ padding:"6px 14px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:700, textDecoration:"none", display:"flex", alignItems:"center", gap:4 }}>
+                          Open on Jupiter ↗
                         </a>
                       </div>
                     </div>
@@ -4199,79 +4193,84 @@ Order: \`${orderKey.slice(0,20)}…\`
             </div>
           )}
 
-          {/* ── Multiply position form ──────────────────────────────── */}
-          {showMultiplyForm && multiplyPos.vault && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>
-                ⚡ Open {multiplyPos.leverage}x {multiplyPos.vault.collateral}/{multiplyPos.vault.debt}
-              </div>
-              <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>
-                Max leverage: {multiplyPos.vault.maxLev} · Risk: {multiplyPos.vault.risk}
-              </div>
-
-              {/* Leverage slider */}
-              <div style={{ marginBottom:14 }}>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:T.text2, marginBottom:6 }}>
-                  <span>Leverage</span>
-                  <span style={{ fontWeight:700, color:T.accent }}>{multiplyPos.leverage}x</span>
+          {/* ── Multiply position form — deep link to Jupiter ──────────── */}
+          {showMultiplyForm && multiplyPos.vault && (() => {
+            const v = multiplyPos.vault;
+            const bal = portfolio[v.collateral] ?? 0;
+            const lev = parseFloat(multiplyPos.leverage);
+            const col = parseFloat(multiplyPos.colAmount) || 0;
+            const exposure = col * lev;
+            const debt = col * (lev - 1);
+            return (
+              <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:2, color:T.text1 }}>
+                  ⚡ {v.collateral}/{v.debt} Multiply
                 </div>
-                <input type="range" min="1.1" max={parseFloat(multiplyPos.vault.maxLev)} step="0.1"
-                  value={multiplyPos.leverage}
-                  onChange={e => setMultiplyPos(p => ({ ...p, leverage: parseFloat(e.target.value).toFixed(1) }))}
-                  style={{ width:"100%", accentColor:T.accent }}
+                <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>
+                  Max {v.maxLev} · {v.risk} Risk · Max LTV {v.ltv}
+                </div>
+
+                {/* Leverage slider */}
+                <div style={{ marginBottom:14 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:T.text2, marginBottom:6 }}>
+                    <span>Leverage</span>
+                    <span style={{ fontWeight:700, color:T.accent }}>{multiplyPos.leverage}x</span>
+                  </div>
+                  <input type="range" min="1.1" max={parseFloat(v.maxLev)} step="0.1"
+                    value={multiplyPos.leverage}
+                    onChange={e => setMultiplyPos(p => ({ ...p, leverage: parseFloat(e.target.value).toFixed(1) }))}
+                    style={{ width:"100%", accentColor:T.accent }}
+                  />
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3 }}>
+                    <span>1x</span><span>{v.maxLev} max</span>
+                  </div>
+                </div>
+
+                {/* Collateral input */}
+                {bal > 0 && (
+                  <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                    {[["25%",0.25],["50%",0.5],["75%",0.75],["Max",1]].map(([label,frac]) => (
+                      <button key={label} onClick={() => setMultiplyPos(p => ({ ...p, colAmount:(bal*frac).toFixed(6).replace(/\.?0+$/,"") }))}
+                        style={{ flex:1, padding:"5px 0", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:11, fontWeight:600, cursor:"pointer" }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <input type="number" placeholder={`Amount (${v.collateral}${bal>0?` · bal: ${bal.toFixed(4)}`:""})`}
+                  value={multiplyPos.colAmount}
+                  onChange={e => setMultiplyPos(p => ({ ...p, colAmount:e.target.value }))}
+                  style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:12 }}
                 />
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3 }}>
-                  <span>1x (no leverage)</span><span>{multiplyPos.vault.maxLev} (max)</span>
+
+                {/* Position preview */}
+                {col > 0 && (
+                  <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 12px", marginBottom:14, fontSize:12, color:T.text2, lineHeight:1.8 }}>
+                    <div>Collateral: <strong style={{ color:T.text1 }}>{col.toFixed(4)} {v.collateral}</strong></div>
+                    <div>Total exposure: <strong style={{ color:T.accent }}>{exposure.toFixed(4)} {v.collateral}</strong></div>
+                    <div>Debt to borrow: <strong style={{ color:T.red }}>{debt.toFixed(4)} {v.debt}</strong></div>
+                    <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>⚠ Position tracked as NFT. Monitor at jup.ag/lend.</div>
+                  </div>
+                )}
+
+                {/* Deep link CTA */}
+                <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, padding:"12px 14px", marginBottom:12 }}>
+                  <div style={{ fontSize:12, color:T.text2, marginBottom:8, lineHeight:1.5 }}>
+                    Ready to open? Jupiter handles the flashloan transaction securely. Tap below to open your position directly on Jupiter Lend.
+                  </div>
+                  <a href={v.url} target="_blank" rel="noreferrer"
+                    style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, width:"100%", padding:"11px", background:T.accent, borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:700, textDecoration:"none" }}>
+                    Open {multiplyPos.leverage}x Position on Jupiter ↗
+                  </a>
                 </div>
-              </div>
 
-              {/* Collateral amount */}
-              {(() => {
-                const bal = portfolio[multiplyPos.vault.collateral] ?? 0;
-                return (
-                  <>
-                    {bal > 0 && (
-                      <div style={{ display:"flex", gap:6, marginBottom:8 }}>
-                        {[["25%",0.25],["50%",0.5],["75%",0.75],["Max",1]].map(([label,frac]) => (
-                          <button key={label} onClick={() => setMultiplyPos(p => ({ ...p, colAmount:(bal*frac).toFixed(6).replace(/\.?0+$/,"") }))}
-                            style={{ flex:1, padding:"5px 0", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:11, fontWeight:600, cursor:"pointer" }}>
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <input type="number" placeholder={`Collateral amount (${multiplyPos.vault.collateral}${bal>0?` · bal: ${bal.toFixed(4)}`:""})`}
-                      value={multiplyPos.colAmount}
-                      onChange={e => setMultiplyPos(p => ({ ...p, colAmount:e.target.value }))}
-                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:10 }}
-                    />
-                  </>
-                );
-              })()}
-
-              {/* Preview */}
-              {multiplyPos.colAmount && parseFloat(multiplyPos.colAmount) > 0 && (
-                <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 12px", marginBottom:12, fontSize:12, color:T.text2, lineHeight:1.7 }}>
-                  <div>Collateral in: <strong>{multiplyPos.colAmount} {multiplyPos.vault.collateral}</strong></div>
-                  <div>Effective exposure: <strong style={{ color:T.accent }}>{(parseFloat(multiplyPos.colAmount)*parseFloat(multiplyPos.leverage)).toFixed(4)} {multiplyPos.vault.collateral}</strong></div>
-                  <div>Debt borrowed: <strong style={{ color:T.red }}>{(parseFloat(multiplyPos.colAmount)*(parseFloat(multiplyPos.leverage)-1)).toFixed(4)} {multiplyPos.vault.debt}</strong></div>
-                  <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>⚠ Position NFT will be minted to your wallet. Do not burn it.</div>
-                </div>
-              )}
-
-              <div style={{ display:"flex", gap:8 }}>
-                <button onClick={doMultiply}
-                  disabled={!multiplyPos.colAmount || parseFloat(multiplyPos.colAmount)<=0 || multiplyStatus==="signing"} className="hov-btn"
-                  style={{ flex:1, padding:"10px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-                  {multiplyStatus==="signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117" }}/> Signing…</> : `Open ${multiplyPos.leverage}x Position`}
-                </button>
                 <button onClick={() => setShowMultiplyForm(false)}
-                  style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
+                  style={{ width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
                   Cancel
                 </button>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ── Earn deposit panel ────────────────────────────────────────── */}
           {showEarnDeposit && earnDeposit.vault && (
