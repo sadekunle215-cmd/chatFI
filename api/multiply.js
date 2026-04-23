@@ -15,6 +15,11 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
+import {
+  createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import BN from "bn.js";
 import { getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
 import { getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
@@ -50,6 +55,16 @@ async function resolveAlts(connection, keys = []) {
 function dedupeAlts(alts) {
   const seen = new Set();
   return alts.filter(a => { const k = a.key.toString(); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// Returns an ATA creation ix if the account doesn't exist, or null if it already exists
+async function getAtaCreateIxIfNeeded(connection, mint, owner) {
+  const ata = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_PROGRAM_ID);
+  try {
+    const info = await connection.getAccountInfo(ata);
+    if (info) return null; // already exists
+  } catch {}
+  return createAssociatedTokenAccountIdempotentInstruction(owner, ata, owner, mint, TOKEN_PROGRAM_ID);
 }
 
 async function buildTx(connection, signerPubkey, ixs, alts) {
@@ -181,7 +196,7 @@ export default async function handler(req, res) {
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
       ].includes(debtMint.toBase58());
-      const slippageBps = isStable ? 50 : 150;
+      const slippageBps = isStable ? 50 : 300; // 3% for volatile pairs to avoid 6025
 
       const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN };
       const [flashBorrowIx, flashPayIx, quoteRes] = await Promise.all([
@@ -215,9 +230,27 @@ export default async function handler(req, res) {
       const swapIx   = toIx(swapApiRes.swapInstruction);
       const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
       const allAlts  = dedupeAlts([...(operateResult.addressLookupTableAccounts ?? []), ...swapAlts]);
-      const allIxs   = [flashBorrowIx, swapIx, ...operateResult.ixs, flashPayIx];
-      const transaction = await buildTx(connection, signerPubkey, allIxs, allAlts);
-      return res.status(200).json({ transaction });
+
+      // Check if ATAs exist — if not, return a lightweight setup tx to create them first.
+      // We cannot include ATA ixs in the multiply tx itself (pushes it over 1232 byte limit).
+      const [colAtaIx, debtAtaIx] = await Promise.all([
+        getAtaCreateIxIfNeeded(connection, colMint, signerPubkey),
+        getAtaCreateIxIfNeeded(connection, debtMint, signerPubkey),
+      ]);
+      const ataIxs = [colAtaIx, debtAtaIx].filter(Boolean);
+
+      const mainIxs = [flashBorrowIx, swapIx, ...operateResult.ixs, flashPayIx];
+      console.log(`[multiply/open] ataIxs=${ataIxs.length} mainIxs=${mainIxs.length}`);
+
+      const transaction = await buildTx(connection, signerPubkey, mainIxs, allAlts);
+
+      // If ATAs need creating, return a separate setup tx the frontend must send first
+      let setupTransaction = null;
+      if (ataIxs.length > 0) {
+        setupTransaction = await buildTx(connection, signerPubkey, ataIxs, []);
+      }
+
+      return res.status(200).json({ transaction, setupTransaction });
     }
 
     // ── UNWIND ────────────────────────────────────────────────────────────────
