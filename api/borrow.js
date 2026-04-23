@@ -133,8 +133,9 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error("[/api/borrow] error:", err);
     const msg = err?.message || "Internal server error";
+    const stack = (err?.stack || "").slice(0, 600);
+    const logs = err?.logs || [];
 
-    // Friendly hints for common SDK errors
     if (msg.includes("insufficient") || msg.includes("balance"))
       return res.status(400).json({ error: "Insufficient balance: " + msg });
     if (msg.includes("LTV") || msg.includes("liquidat") || msg.includes("borrow limit"))
@@ -142,6 +143,6 @@ export default async function handler(req, res) {
     if (msg.includes("vault"))
       return res.status(400).json({ error: "Invalid vault: " + msg });
 
-    return res.status(500).json({ error: msg });
+    return res.status(500).json({ error: msg, stack, logs: logs.slice(0,10) });
   }
 }
