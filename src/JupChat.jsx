@@ -4444,9 +4444,26 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {/* QR tab */}
                   {wcStatus === "waiting" && wcMode === "qr" && (
                     <div style={{ textAlign:"center" }}>
-                      <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
-                        Open Jupiter Wallet → tap the scan icon → scan this QR code
-                      </div>
+                      {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
+                        /* Mobile: show Open app button — can't scan own screen */
+                        <div style={{ marginBottom:16 }}>
+                          <button onClick={() => {
+                            const wName = wcPreferredWallet || "Jupiter";
+                            const deepLink = getMobileWcDeepLink(wName, wcUri);
+                            const universalLink = getMobileWcUniversalLink(wName, wcUri);
+                            window.location.href = deepLink;
+                            setTimeout(() => { window.location.href = universalLink; }, 1500);
+                          }}
+                          style={{ width:"100%", padding:"14px", background:T.accent, border:"none", borderRadius:12, color:"#0d1117", fontSize:15, fontWeight:700, cursor:"pointer", marginBottom:10, display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                            📱 Open {wcPreferredWallet || "Jupiter"} &amp; Approve
+                          </button>
+                          <div style={{ fontSize:11, color:T.text3 }}>Tap above to open the wallet app and approve the connection</div>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
+                          Open Jupiter Wallet → tap the scan icon → scan this QR code
+                        </div>
+                      )}
                       <div style={{ display:"inline-block", padding:12, background:T.bg, border:`2px solid ${T.border}`, borderRadius:16, marginBottom:14 }}>
                         <canvas ref={wcQrRef} style={{ display:"block", borderRadius:8 }}/>
                       </div>
@@ -4526,12 +4543,10 @@ Order: \`${orderKey.slice(0,20)}…\`
                           if (w.name === "Jupiter") {
                             initWalletConnect("Jupiter");
                           } else {
-                            // Direct connect — use detected provider or open wallet's in-app browser
                             const found = walletList.find(l => l.name.toLowerCase() === w.name.toLowerCase() && l.detected);
                             if (found) {
                               doConnectWith(found);
                             } else {
-                              // Not detected: open wallet app via deep link (opens in-app browser → user connects there)
                               const deepLink = MOBILE_DEEP_LINKS[w.name]?.(window.location.href);
                               if (deepLink) window.location.href = deepLink;
                               setShowWalletModal(false);
