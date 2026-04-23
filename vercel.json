@@ -10,7 +10,13 @@
   "functions": {
     "api/multiply.js": {
       "memory": 1024,
-      "maxDuration": 30
+      "maxDuration": 30,
+      "includeFiles": "node_modules/@jup-ag/**,node_modules/bn.js/**,node_modules/@solana/**"
+    },
+    "api/borrow.js": {
+      "memory": 1024,
+      "maxDuration": 30,
+      "includeFiles": "node_modules/@jup-ag/**,node_modules/bn.js/**,node_modules/@solana/**"
     },
     "api/jupiter.js": {
       "memory": 512,
