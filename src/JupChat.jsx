@@ -1149,16 +1149,25 @@ export default function JupChat() {
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned from multiply API.");
 
-      // 2. Deserialize, sign
-      const bytes = new Uint8Array(atob(data.transaction).split("").map(c => c.charCodeAt(0)));
+      // 2. Deserialize — use Buffer-safe base64 decode (atob+charCodeAt breaks on large txs)
+      const b64 = data.transaction;
+      const binStr = atob(b64);
+      const bytes = new Uint8Array(binStr.length);
+      for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
       const tx = VersionedTransaction.deserialize(bytes);
       const signedTx = await provider.signTransaction(tx);
 
-      // 3. Send via RPC
+      // 3. Send via RPC — use chunk-safe base64 encode (spread crashes on large arrays)
       const signedBytes = signedTx.serialize();
+      let signedB64 = "";
+      const chunkSize = 0x8000;
+      for (let i = 0; i < signedBytes.length; i += chunkSize) {
+        signedB64 += String.fromCharCode(...signedBytes.subarray(i, i + chunkSize));
+      }
+      signedB64 = btoa(signedB64);
       const rpcRes = await jupFetch("SOLANA_RPC", {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[btoa(String.fromCharCode(...signedBytes)), { encoding:"base64", skipPreflight:true }] },
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[signedB64, { encoding:"base64", skipPreflight:false }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
