@@ -3246,6 +3246,8 @@ Order: \`${orderKey.slice(0,20)}…\`
       } else {
         push("ai", text);
       }
+    } catch {
+      push("ai","Connection error. Please check your setup and try again.");
     }
     setTyping(false);
   };
