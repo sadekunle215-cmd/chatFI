@@ -4513,34 +4513,19 @@ Order: \`${orderKey.slice(0,20)}…\`
                       : "No wallet detected in this browser. Open this page inside your wallet app, or tap a wallet below to launch it."}
                   </div>
 
-                  {/* WalletConnect — mobile: per-wallet deep link buttons; desktop: QR */}
+                  {/* ── Mobile: direct deep-link buttons for every major wallet ── */}
                   {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:8 }}>
-                      {/* Jupiter — always shown, uses WalletConnect */}
-                      {[{ name:"Jupiter", icon: WALLET_LOGOS["Jupiter"], subtitle:"Connect via WalletConnect" }].map(w => (
-                        <button key={w.name} onClick={() => initWalletConnect("Jupiter")} className="hov-row"
-                          style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
-                          <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                            {typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))
-                              ? <img src={w.icon} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={w.name}/>
-                              : <span style={{ fontSize:22 }}>{w.icon}</span>}
-                          </span>
-                          <span style={{ flex:1 }}>
-                            <span style={{ fontWeight:600, display:"block", color:T.text1 }}>{w.name}</span>
-                            <span style={{ fontSize:11, color:T.text3 }}>{w.subtitle}</span>
-                          </span>
-                          <span style={{ fontSize:13, color:T.accent, fontWeight:600 }}>→</span>
-                        </button>
-                      ))}
-                      {/* Phantom/Solflare/Backpack — only show if detected in this browser */}
-                      {["Phantom","Solflare","Backpack"].map(name => {
+                      {/* Detected wallets (in-app browser) — connect directly, shown first */}
+                      {["Phantom","Solflare","Backpack","Jupiter","Trust Wallet","OKX","Coin98"].map(name => {
                         const found = walletList.find(l => l.name.toLowerCase() === name.toLowerCase() && l.detected);
                         if (!found) return null;
                         return (
                           <button key={name} onClick={() => doConnectWith(found)} className="hov-row"
-                            style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1.5px solid ${T.accent}44`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
+                            style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
                             <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                              <img src={WALLET_LOGOS[name]} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={name}/>
+                              <img src={WALLET_LOGOS[name]} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={name}
+                                onError={e => { e.target.style.display="none"; }}/>
                             </span>
                             <span style={{ flex:1 }}>
                               <span style={{ fontWeight:600, display:"block", color:T.text1 }}>{name}</span>
@@ -4550,20 +4535,52 @@ Order: \`${orderKey.slice(0,20)}…\`
                           </button>
                         );
                       })}
-                      {/* If WC session is waiting (URI generated), show open-app button + copy-URI fallback */}
+
+                      {/* Not detected — show as "Open app" deep-link buttons (always shown) */}
+                      {[
+                        { name:"Phantom",      subtitle:"Open in Phantom app",      url: `https://phantom.app/ul/browse/${encodeURIComponent(window.location.href)}?ref=${encodeURIComponent(window.location.origin)}` },
+                        { name:"Solflare",     subtitle:"Open in Solflare app",     url: `https://solflare.com/ul/v1/browse/${encodeURIComponent(window.location.href)}?ref=${encodeURIComponent(window.location.origin)}` },
+                        { name:"Backpack",     subtitle:"Open in Backpack app",     url: `https://backpack.app/browse/${encodeURIComponent(window.location.href)}?ref=${encodeURIComponent(window.location.origin)}` },
+                        { name:"OKX",          subtitle:"Open in OKX Wallet app",   url: `okx://wallet/dapp/url?dappUrl=${encodeURIComponent(window.location.href)}` },
+                        { name:"Trust Wallet", subtitle:"Open in Trust Wallet app", url: `https://link.trustwallet.com/open_url?coin_id=501&url=${encodeURIComponent(window.location.href)}` },
+                        { name:"Coin98",       subtitle:"Open in Coin98 app",       url: `coin98://browser?url=${encodeURIComponent(window.location.href)}` },
+                      ].filter(w => !walletList.find(l => l.name.toLowerCase() === w.name.toLowerCase() && l.detected))
+                       .map(w => (
+                        <button key={w.name} onClick={() => { window.location.href = w.url; }} className="hov-row"
+                          style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
+                          <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                            <img src={WALLET_LOGOS[w.name]} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={w.name}
+                              onError={e => { e.target.style.display="none"; }}/>
+                          </span>
+                          <span style={{ flex:1 }}>
+                            <span style={{ fontWeight:600, display:"block", color:T.text1 }}>{w.name}</span>
+                            <span style={{ fontSize:11, color:T.text3 }}>{w.subtitle}</span>
+                          </span>
+                          <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Open app →</span>
+                        </button>
+                      ))}
+
+                      {/* Jupiter — WalletConnect fallback at the bottom */}
+                      <button onClick={() => initWalletConnect("Jupiter")} className="hov-row"
+                        style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
+                        <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                          <img src={WALLET_LOGOS["Jupiter"]} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt="Jupiter"/>
+                        </span>
+                        <span style={{ flex:1 }}>
+                          <span style={{ fontWeight:600, display:"block", color:T.text1 }}>Jupiter</span>
+                          <span style={{ fontSize:11, color:T.text3 }}>Connect via WalletConnect</span>
+                        </span>
+                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>→</span>
+                      </button>
+
+                      {/* WC waiting state — open-app button + copy URI fallback */}
                       {wcStatus === "waiting" && wcUri && (
                         <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 12px", marginTop:4 }}>
-                          {/* Open wallet app button — this IS a direct user tap so no popup-block */}
                           {wcPreferredWallet && (
                             <button onClick={() => {
-                                // window.location.href with a custom scheme (phantom://, solflare://) is the
-                                // correct technique on iOS & Android. The OS intercepts the custom scheme
-                                // and opens the wallet app WITHOUT unloading this page, so the WC relay
-                                // approval() listener stays alive. This only works in a direct click handler.
                                 const deepLink = getMobileWcDeepLink(wcPreferredWallet, wcUri);
                                 const universalLink = getMobileWcUniversalLink(wcPreferredWallet, wcUri);
                                 window.location.href = deepLink;
-                                // Fallback to universal link after 1.5s if custom scheme had no handler
                                 setTimeout(() => { window.location.href = universalLink; }, 1500);
                               }}
                               style={{ width:"100%", padding:"12px", background:T.accent, border:"none", borderRadius:10, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:12, display:"flex", alignItems:"center", justifyContent:"center", gap:8, letterSpacing:0.2 }}>
@@ -4586,6 +4603,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                       )}
                     </div>
                   ) : (
+                    /* Desktop: WalletConnect QR button */
                     <button onClick={() => initWalletConnect(null)} className="hov-row"
                       style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%", marginBottom:8 }}>
                       <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", background:T.accent, borderRadius:8, flexShrink:0 }}>
@@ -4602,15 +4620,17 @@ Order: \`${orderKey.slice(0,20)}…\`
                     </button>
                   )}
 
-                  {/* Detected / available wallets — on mobile, hide deeplink entries already shown as WC buttons */}
+                  {/* Detected / available wallets — on mobile, all deeplink/detected are handled by custom section above */}
                   {walletList.filter(w => {
                       const mob = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                      return !(mob && w.type === "deeplink" && ["phantom","solflare","backpack","jupiter"].some(n => w.name.toLowerCase().includes(n)));
+                      if (mob && (w.type === "deeplink" || w.type === "standard" || w.type === "legacy")) return false;
+                      return true;
                     }).length > 0 && (
                     <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                       {walletList.filter(w => {
                         const mob = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-                        return !(mob && w.type === "deeplink" && ["phantom","solflare","backpack","jupiter"].some(n => w.name.toLowerCase().includes(n)));
+                        if (mob && (w.type === "deeplink" || w.type === "standard" || w.type === "legacy")) return false;
+                        return true;
                       }).map((w, i) => (
                         <button key={i} onClick={() => doConnectWith(w)} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${w.detected ? T.accent+"44" : T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
