@@ -1,0 +1,20 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "regions": ["iad1"],
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "functions": {
+    "api/multiply.js": {
+      "memory": 1024,
+      "maxDuration": 30
+    },
+    "api/jupiter.js": {
+      "memory": 512,
+      "maxDuration": 15
+    }
+  }
+}
