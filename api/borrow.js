@@ -3,7 +3,7 @@
 // All ops (deposit, borrow, repay, withdraw, combined) use the same function with signed BN amounts:
 //   colAmount  > 0 = deposit,  < 0 = withdraw,  0 = no collateral change
 //   debtAmount > 0 = borrow,   < 0 = repay,     0 = no debt change
-//   positionId = 0 → SDK auto-creates position; two-call pattern required
+//   positionId = 0 → SDK creates position; two-call pattern required (per official docs)
 
 import { Connection, PublicKey, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import BN from "bn.js";
@@ -37,15 +37,16 @@ export default async function handler(req, res) {
     const parsedVaultId    = parseInt(vaultId);
     const parsedPositionId = parseInt(positionId ?? 0);
 
-    let ixs;
-    let addressLookupTableAccounts;
-    let resolvedNftId = null;
+    let finalIxs;
+    let finalAlts;
+    let resolvedPositionId;
 
     if (parsedPositionId === 0) {
-      // ── TWO-CALL PATTERN ──────────────────────────────────────────────────
-      // Call 1: positionId=0 → SDK returns the new nftId (position address).
-      //         The ixs from this call are NOT used.
-      const firstCall = await getOperateIx({
+      // ── TWO-CALL PATTERN (official docs: Combined Operations) ─────────────
+      //
+      // Call 1: positionId=0 → SDK creates the position and returns positionId.
+      //         The ixs from this call contain the create-position instruction(s).
+      const call1 = await getOperateIx({
         vaultId:    parsedVaultId,
         positionId: 0,
         colAmount:  colBN,
@@ -54,25 +55,41 @@ export default async function handler(req, res) {
         signer: signerPubkey,
       });
 
-      const newNftId = firstCall?.nftId;
-      if (!newNftId && newNftId !== 0) {
-        return res.status(400).json({ error: "SDK did not return a new positionId (nftId). Cannot proceed." });
+      // SDK returns `positionId` (not nftId) when called with positionId: 0
+      resolvedPositionId = call1?.positionId ?? call1?.nftId;
+
+      if (resolvedPositionId === undefined || resolvedPositionId === null) {
+        return res.status(400).json({ error: "SDK did not return a positionId from first call. Cannot proceed." });
       }
 
-      resolvedNftId = newNftId;
-
-      // Call 2: use the real nftId → SDK returns the actual operate instructions.
-      const secondCall = await getOperateIx({
+      // Call 2: use the real positionId → SDK returns the actual operate instructions
+      const call2 = await getOperateIx({
         vaultId:    parsedVaultId,
-        positionId: newNftId,
+        positionId: resolvedPositionId,
         colAmount:  colBN,
         debtAmount: debtBN,
         connection,
         signer: signerPubkey,
       });
 
-      ixs                      = secondCall?.ixs;
-      addressLookupTableAccounts = secondCall?.addressLookupTableAccounts;
+      // Merge both ixs arrays (call1 has create-position ix, call2 has operate ix)
+      finalIxs = [
+        ...(call1?.ixs ?? []),
+        ...(call2?.ixs ?? []),
+      ];
+
+      // Merge and deduplicate address lookup tables by key
+      const allAlts = [
+        ...(call1?.addressLookupTableAccounts ?? []),
+        ...(call2?.addressLookupTableAccounts ?? []),
+      ];
+      const seen = new Set();
+      finalAlts = allAlts.filter((alt) => {
+        const k = alt.key.toString();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
 
     } else {
       // ── SINGLE-CALL (existing position) ───────────────────────────────────
@@ -85,12 +102,12 @@ export default async function handler(req, res) {
         signer: signerPubkey,
       });
 
-      ixs                      = result?.ixs;
-      addressLookupTableAccounts = result?.addressLookupTableAccounts;
-      resolvedNftId              = result?.nftId ?? parsedPositionId;
+      finalIxs           = result?.ixs;
+      finalAlts          = result?.addressLookupTableAccounts ?? [];
+      resolvedPositionId = parsedPositionId;
     }
 
-    if (!ixs?.length) {
+    if (!finalIxs?.length) {
       return res.status(400).json({ error: "No instructions returned by Jupiter Lend SDK. Check vault ID and amounts." });
     }
 
@@ -99,8 +116,8 @@ export default async function handler(req, res) {
     const message = new TransactionMessage({
       payerKey:        signerPubkey,
       recentBlockhash: latestBlockhash.blockhash,
-      instructions:    ixs,
-    }).compileToV0Message(addressLookupTableAccounts ?? []);
+      instructions:    finalIxs,
+    }).compileToV0Message(finalAlts);
 
     const tx = new VersionedTransaction(message);
 
@@ -109,7 +126,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       transaction: txBase64,
-      nftId:       resolvedNftId,   // always the real positionId (new or existing)
+      positionId:  resolvedPositionId,   // always the real positionId (new or existing)
       blockhash:   latestBlockhash.blockhash,
     });
 
