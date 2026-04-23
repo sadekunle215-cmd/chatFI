@@ -22,6 +22,8 @@ const JUP_PORTFOLIO    = `${JUP_BASE}/portfolio/v1`;
 const JUP_PRED_API     = "https://lite-api.jup.ag/prediction/v1";
 const JUP_EARN_API     = `${JUP_BASE}/lend/v1/earn`;   // deposit, withdraw, mint, redeem, tokens, positions, earnings
 const JUP_BORROW_API   = `${JUP_BASE}/lend/v1/borrow`;  // borrow vault data (SDK-based ops)
+const JUP_SEND_API     = `${JUP_BASE}/send/v1`;          // craft-send, craft-clawback, pending-invites, invite-history
+const JUP_PERPS_API    = `${JUP_BASE}/perps/v1`;         // positions, orders, markets, open/close
 const SOLANA_RPC       = "SOLANA_RPC";
 const SPL_PROGRAM      = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 // JupUSD mint for prediction market deposits
@@ -72,7 +74,7 @@ const CHATFI_AVATAR = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gKgSU
 // ─── AI system prompt ─────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are ChatFi — a sharp, honest AI trading assistant built on Jupiter DEX (Solana). Tone: thoughtful, direct, warm — never hyped.
 
-You pull live data: token prices (Jupiter Price API v3), safety scores, metadata. You help users swap ANY Solana token, set limit/DCA orders, track full portfolios, research tokens, analyse sports for prediction markets, and interact with Jupiter Lend (Earn, Borrow, Multiply, Flashloans).
+You pull live data: token prices (Jupiter Price API v3), safety scores, metadata. You help users swap ANY Solana token, set limit/DCA orders, track full portfolios, research tokens, analyse sports for prediction markets, interact with Jupiter Lend (Earn, Borrow, Multiply, Flashloans), send tokens via invite links, and trade perpetual futures.
 
 JUPITER LEND KNOWLEDGE:
 • Earn: Deposit assets → earn yield from borrowers. No fees, no supply limits. Withdrawals use Automated Debt Ceiling (smoothed per block). Returns jlTokens (receipt tokens). Endpoints: deposit/withdraw (by asset amount) or mint/redeem (by shares). token_exchange_price (scaled 1e12) converts shares ↔ underlying.
@@ -82,6 +84,20 @@ JUPITER LEND KNOWLEDGE:
 • Repay-with-Collateral: Use when you only hold collateral, not debt token — flash-borrow debt → repay + withdraw max collateral → swap → repay flashloan.
 • Flashloans: Zero fee, atomic, no collateral. Must repay within same tx. Use cases: arbitrage, liquidations, collateral swaps.
 • Risks: Smart contract risk, liquidation if LTV breached, borrow rate > yield erodes Multiply profits.
+
+JUPITER SEND KNOWLEDGE:
+• Send tokens to anyone via invite links — recipient doesn't need a wallet to claim.
+• Sender creates an invite link with amount + token. Recipient claims via the link.
+• Unclaimed tokens can be clawed back by the sender.
+• Use cases: gifting, payroll, airdrops, onboarding new users.
+
+JUPITER PERPS KNOWLEDGE:
+• Perpetual futures on Solana via Jupiter. Trade SOL, BTC, ETH with leverage up to 100x.
+• Long = profit when price rises. Short = profit when price falls.
+• Collateral: USDC for shorts; SOL/BTC/ETH for longs on respective pairs.
+• Fees: open/close fee 0.06%. Borrow fee accrues per hour based on utilisation.
+• Liquidation when position value < maintenance margin. Always set stop-loss.
+• Price impact increases with position size relative to pool liquidity.
 
 CRITICAL: ALWAYS reply with raw JSON ONLY. No code fences, no markdown, no text outside the JSON object. Output starts with { and ends with }:
 {
@@ -121,6 +137,10 @@ Available actions:
 - "SHOW_BORROW"        → actionData: { "collateral": "SOL", "debt": "USDC", "colAmount": "10", "borrowAmount": "200", "reason": "brief why" } — deposit collateral into a Jupiter Lend vault and borrow against it. colAmount = collateral to deposit; borrowAmount = debt token to receive. Available vaults: SOL→USDC (vault 1, 80% LTV), JitoSOL→SOL (vault 2, 90%), JupSOL→SOL (vault 3, 90%), WBTC→USDC (vault 4, 80%), JLP→USDC (vault 5, 90%), JUP→USDC (vault 6, 75%), USDC→USDT (vault 7, 95%).
 - "SHOW_LEND_POSITIONS" → actionData: {} — show user's open Lend positions (borrow/multiply) with unwind buttons AND earn positions with withdraw buttons
 - "CLAIM_PAYOUTS"    → actionData: {} — triggers fetch of claimable prediction positions
+- "SHOW_SEND"        → actionData: { "token": "SOL", "amount": "1", "reason": "brief why" } — send tokens via Jupiter invite link. Recipient claims without needing a wallet upfront.
+- "FETCH_SEND_HISTORY" → actionData: { "type": "pending"|"history" } — show pending unclaimed invites (with clawback buttons) or full invite history
+- "SHOW_PERPS"       → actionData: { "market": "SOL-PERP"|"BTC-PERP"|"ETH-PERP", "side": "long"|"short", "collateral": "100", "leverage": "10", "reason": "brief why" } — open a perpetuals position. Collateral in USD. Leverage 1–100x.
+- "FETCH_PERPS_POSITIONS" → actionData: {} — show user's open perps positions with close/increase/decrease buttons
 
 Rules:
 - "buy X" / "swap X to Y" / "exchange" → SHOW_SWAP — use EXACT symbol user mentioned even if unknown meme coin
@@ -149,6 +169,11 @@ Rules:
 - "DCA" / "recurring" / "buy every day/week/month" / "dollar cost average" / "auto-buy" / "schedule trades" / "buy X daily" / "buy X weekly" / "recur" / "reccur" → SHOW_RECURRING — ALWAYS pre-fill all fields you can infer. If user says "$10 of SOL daily for 3 days": from:"USDC", to:"SOL", amountPerCycle:"10", numberOfOrders:"3", intervalSecs:"86400". Default from:"USDC" when user gives a dollar amount. intervalSecs defaults: daily=86400, weekly=604800, monthly=2592000. numberOfOrders = the number of cycles mentioned.
 - "my recurring orders" / "show DCA orders" / "active recurring" / "DCA history" → FETCH_RECURRING_ORDERS
 - "cancel recurring" / "stop DCA" → FETCH_RECURRING_ORDERS (so user can see cancel buttons)
+- "send tokens" / "send SOL to someone" / "gift tokens" / "invite link" / "send via link" → SHOW_SEND
+- "my invites" / "pending invites" / "clawback" / "unclaimed sends" → FETCH_SEND_HISTORY with type:"pending"
+- "send history" / "past sends" → FETCH_SEND_HISTORY with type:"history"
+- "perps" / "perpetuals" / "long SOL" / "short BTC" / "leveraged trade" / "futures" / "open long" / "open short" → SHOW_PERPS — pre-fill market + side from user intent
+- "my perps" / "my futures positions" / "open perps positions" / "close perp" → FETCH_PERPS_POSITIONS
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
 - CRITICAL — SHOW_RECURRING is fully supported. When user asks for a recurring/DCA order, you MUST return action:"SHOW_RECURRING" with all fields pre-filled from the user's message. Never tell the user to do it manually.`;
@@ -156,14 +181,14 @@ Rules:
 const SUGGESTIONS = [
   "What's the SOL price?",
   "Swap SOL to BONK",
+  "Long SOL 10x perps",
   "Limit order: buy SOL below $140",
   "OCO: TP $200 SL $120 on SOL",
   "DCA $10 USDC into SOL daily",
-  "My trigger orders",
+  "Send 1 SOL via invite link",
   "Top trending tokens today",
   "Arsenal vs Man City prediction",
   "Show earn vaults",
-  "My portfolio & positions",
 ];
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -3142,11 +3167,85 @@ Order: \`${orderKey.slice(0,20)}…\`
           }
         }
 
+      } else if (action === "SHOW_SEND") {
+        const { token = "SOL", amount = "", reason = "" } = actionData || {};
+        const addr = walletFull;
+        if (!addr) {
+          push("ai", text + "\n\nPlease **connect your wallet** first to send tokens.");
+        } else {
+          push("ai", text + `\n\n**Jupiter Send — Token Transfer via Invite Link**\n\nThis creates a shareable claim link. The recipient doesn't need a wallet to receive — they can create one when claiming.\n\n• Token: **${token}**\n• Amount: **${amount || "enter amount"}**\n• Sender: ${addr.slice(0,4)}…${addr.slice(-4)}\n\nTo send, use the [Jupiter Send page](https://jup.ag/send) directly — paste your amount and token, and it generates a claim link you can share anywhere.\n\n💡 *Unclaimed tokens can be clawed back anytime.*`);
+        }
+
+      } else if (action === "FETCH_SEND_HISTORY") {
+        const { type = "pending" } = actionData || {};
+        const addr = walletFull;
+        if (!addr) {
+          push("ai", text + "\n\nPlease **connect your wallet** first to view send history.");
+        } else {
+          try {
+            const endpoint = type === "pending"
+              ? `${JUP_SEND_API}/pending-invites?wallet=${addr}`
+              : `${JUP_SEND_API}/invite-history?wallet=${addr}`;
+            const data = await jupFetch(endpoint);
+            const items = data?.invites || data?.history || data || [];
+            if (!items.length) {
+              push("ai", text + `\n\nNo ${type === "pending" ? "pending unclaimed invites" : "send history"} found for your wallet.`);
+            } else {
+              const lines = items.slice(0, 10).map((inv, i) => {
+                const amt    = inv.amount || inv.tokenAmount || "?";
+                const tok    = inv.token  || inv.mint        || "token";
+                const status = inv.status || (type === "pending" ? "Unclaimed" : inv.claimed ? "Claimed" : "Clawed back");
+                return `${i+1}. **${amt} ${tok}** — ${status}`;
+              }).join("\n");
+              push("ai", text + `\n\n**${type === "pending" ? "Pending Invites" : "Send History"}**\n${lines}\n\nTo clawback unclaimed tokens, visit [jup.ag/send](https://jup.ag/send).`);
+            }
+          } catch {
+            push("ai", text + "\n\nCould not fetch send history right now. Try again shortly.");
+          }
+        }
+
+      } else if (action === "SHOW_PERPS") {
+        const { market = "SOL-PERP", side = "long", collateral = "", leverage = "10" } = actionData || {};
+        const addr = walletFull;
+        if (!addr) {
+          push("ai", text + "\n\nPlease **connect your wallet** first to trade perps.");
+        } else {
+          const marketLabel = market.replace("-PERP", "");
+          const icon        = side === "long" ? "📈" : "📉";
+          const posSize     = collateral && leverage ? `$${(parseFloat(collateral) * parseFloat(leverage)).toFixed(0)}` : "—";
+          push("ai", text + `\n\n**Jupiter Perps — ${icon} ${side.toUpperCase()} ${marketLabel}**\n\n• Market: **${market}**\n• Side: **${side.toUpperCase()}**\n• Collateral: **${collateral ? `$${collateral} USDC` : "enter amount"}**\n• Leverage: **${leverage}x**\n• Est. position size: **${posSize}**\n\n⚠️ Perps carry liquidation risk. Always set a stop-loss.\n\nOpen this trade on [Jupiter Perps](https://jup.ag/perps/${marketLabel.toLowerCase()}) — connect your wallet there and enter your exact size.`);
+        }
+
+      } else if (action === "FETCH_PERPS_POSITIONS") {
+        const addr = walletFull;
+        if (!addr) {
+          push("ai", text + "\n\nPlease **connect your wallet** first to view perps positions.");
+        } else {
+          try {
+            const data      = await jupFetch(`${JUP_PERPS_API}/positions?wallet=${addr}`);
+            const positions = data?.positions || data || [];
+            if (!positions.length) {
+              push("ai", text + "\n\nNo open perps positions found for your wallet.");
+            } else {
+              const lines = positions.slice(0, 10).map((p, i) => {
+                const side  = p.side || "long";
+                const mkt   = p.market || p.symbol || "SOL-PERP";
+                const size  = p.sizeUsd  ? `$${parseFloat(p.sizeUsd).toFixed(2)}` : "?";
+                const pnl   = p.unrealizedPnlUsd != null ? `${parseFloat(p.unrealizedPnlUsd) >= 0 ? "+" : ""}$${parseFloat(p.unrealizedPnlUsd).toFixed(2)}` : "—";
+                const liq   = p.liquidationPrice ? `$${parseFloat(p.liquidationPrice).toFixed(2)}` : "—";
+                const icon  = side === "long" ? "📈" : "📉";
+                return `${i+1}. ${icon} **${side.toUpperCase()} ${mkt}** | Size: ${size} | PnL: ${pnl} | Liq: ${liq}`;
+              }).join("\n");
+              push("ai", text + `\n\n**Open Perps Positions**\n${lines}\n\nManage at [jup.ag/perps](https://jup.ag/perps).`);
+            }
+          } catch {
+            push("ai", text + "\n\nCould not fetch perps positions right now. Try again shortly.");
+          }
+        }
+
       } else {
         push("ai", text);
       }
-    } catch {
-      push("ai","Connection error. Please check your setup and try again.");
     }
     setTyping(false);
   };
