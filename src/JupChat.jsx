@@ -422,6 +422,9 @@ export default function JupChat() {
   const [earnWithdraw, setEarnWithdraw]       = useState({ vault:null, amount:"" });
   const [showEarnWithdraw, setShowEarnWithdraw] = useState(false);
 
+  // ── Jupiter official docs — fetched once, injected into AI system prompt ────
+  const [jupDocs, setJupDocs] = useState("");
+
   // UI
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState([{ id:"default", title:"New conversation", active:true }]);
@@ -460,6 +463,18 @@ export default function JupChat() {
       window.addEventListener("beforeinstallprompt", handler);
       return () => window.removeEventListener("beforeinstallprompt", handler);
     }
+  }, []);
+
+  // ── Fetch Jupiter official AI docs (llms-full.txt) — injected into system prompt ─
+  useEffect(() => {
+    fetch("https://developers.jup.ag/docs/llms-full.txt")
+      .then(r => r.text())
+      .then(txt => {
+        // Trim to ~6000 chars to keep context window healthy; covers all key API sections
+        setJupDocs(txt.slice(0, 6000));
+        console.log("[ChatFi] Jupiter docs loaded for AI context.");
+      })
+      .catch(e => console.warn("[ChatFi] Could not load Jupiter docs:", e));
   }, []);
 
   // ── Fetch real on-chain vault IDs from /api/multiply GET ────────────────────
@@ -2702,7 +2717,9 @@ Order: \`${orderKey.slice(0,20)}…\`
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
           max_tokens: 1024,
-          system: SYSTEM_PROMPT,
+          system: jupDocs
+            ? `## Jupiter Official API Documentation\n${jupDocs}\n\n---\n\n${SYSTEM_PROMPT}`
+            : SYSTEM_PROMPT,
           messages: histRef.current,
         }),
       });
