@@ -4004,6 +4004,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🏦 Borrow from Jupiter Lend</div>
                 <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>COLLATERAL</span>
+                <span style={{ fontSize:10, padding:"2px 7px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, color:T.accent, fontWeight:600 }}>COMING SOON</span>
               </div>
               <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>Deposit collateral → borrow against it. Up to 95% LTV. Position is an NFT on-chain.</div>
 
@@ -4053,18 +4054,23 @@ Order: \`${orderKey.slice(0,20)}…\`
                 ⚠️ Borrowing accrues interest. Keep LTV below the liquidation threshold or your collateral may be sold.
               </div>
 
-              <div style={{ display:"flex", gap:8 }}>
-                <button onClick={doBorrow}
-                  disabled={!borrowCfg.colAmount || !borrowCfg.borrowAmount || borrowStatus === "signing"}
-                  className="hov-btn"
-                  style={{ flex:1, padding:"10px", background:borrowStatus==="signing"?T.border:T.teal, border:"none", borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:600, cursor:"pointer" }}>
-                  {borrowStatus === "signing" ? "Signing…" : "Deposit & Borrow"}
-                </button>
-                <button onClick={() => setShowBorrow(false)}
-                  style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
-                  Cancel
-                </button>
+              {/* Coming Soon notice */}
+              <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, padding:"14px 16px", marginBottom:12, textAlign:"center" }}>
+                <div style={{ fontSize:13, fontWeight:700, color:T.accent, marginBottom:4 }}>🚧 In-App Borrow — Coming Soon</div>
+                <div style={{ fontSize:11, color:T.text2, marginBottom:12, lineHeight:1.6 }}>
+                  The Jupiter Lend Borrow API is not yet publicly available.<br/>
+                  Use the Jupiter app to open or manage borrow positions.
+                </div>
+                <a href={`https://jup.ag/lend`} target="_blank" rel="noreferrer"
+                  style={{ display:"inline-block", padding:"9px 22px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:700, textDecoration:"none" }}>
+                  Open Jupiter Lend ↗
+                </a>
               </div>
+
+              <button onClick={() => setShowBorrow(false)}
+                style={{ width:"100%", padding:"9px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                Close
+              </button>
             </div>
           )}
 
@@ -4159,6 +4165,19 @@ Order: \`${orderKey.slice(0,20)}…\`
                   ⚠ Risk: Liquidation if LTV breached. High borrow rate may erode yield. Start conservative at 2x–3x. Monitor at jup.ag/lend.
                 </div>
               </div>
+              {/* Coming Soon notice */}
+              <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, padding:"14px 16px", marginBottom:14, textAlign:"center" }}>
+                <div style={{ fontSize:13, fontWeight:700, color:T.accent, marginBottom:4 }}>🚧 In-App Multiply — Coming Soon</div>
+                <div style={{ fontSize:11, color:T.text2, marginBottom:12, lineHeight:1.6 }}>
+                  The Jupiter Multiply API is not yet publicly available for in-app transactions.<br/>
+                  Use the vault links below to open or manage positions directly on Jupiter.
+                </div>
+                <a href="https://jup.ag/lend/multiply" target="_blank" rel="noreferrer"
+                  style={{ display:"inline-block", padding:"9px 22px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:700, textDecoration:"none" }}>
+                  Open Jupiter Multiply ↗
+                </a>
+              </div>
+
               {/* Filter tabs */}
               <div style={{ display:"flex", gap:6, marginBottom:12, flexWrap:"wrap" }}>
                 {["All", "Low Risk", "SOL", "BTC", "Stable"].map(f => (
@@ -4214,8 +4233,9 @@ Order: \`${orderKey.slice(0,20)}…\`
             const debt = col * (lev - 1);
             return (
               <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:2, color:T.text1 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:2, color:T.text1, display:"flex", alignItems:"center", gap:10 }}>
                   ⚡ {v.collateral}/{v.debt} Multiply
+                  <span style={{ fontSize:10, padding:"2px 7px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, color:T.accent, fontWeight:600 }}>COMING SOON</span>
                 </div>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>
                   Max {v.maxLev} · {v.risk} Risk · Max LTV {v.ltv}
