@@ -1655,19 +1655,19 @@ export default function JupChat() {
   // so for Phantom/Jupiter on mobile we open their in-app browser instead.
   const getMobileWcDeepLink = (walletName, uri) => {
     const enc = encodeURIComponent(uri);
+    // These are last-resort WC URI deep links — used only if the user somehow
+    // ends up in the WC waiting state. The browse-in-app approach is preferred.
     switch (walletName) {
       case "Phantom":
-        // Phantom v2 universal link deep-open (custom scheme often blocked by Chrome)
-        return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta`;
+        return `https://phantom.app/ul/browse/${encodeURIComponent(window.location.href)}?ref=${encodeURIComponent(window.location.origin)}`;
       case "Solflare":
         return `solflare://wc?uri=${enc}`;
       case "Backpack":
         return `backpack://wc?uri=${enc}`;
       case "Jupiter":
-        // Jupiter Mobile universal link — opens the app and presents WC approve screen
-        return `https://jup.ag/wc?uri=${enc}`;
+        return `https://jup.ag/browser?url=${encodeURIComponent(window.location.href)}`;
       default:
-        return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta`;
+        return `https://phantom.app/ul/browse/${encodeURIComponent(window.location.href)}?ref=${encodeURIComponent(window.location.origin)}`;
     }
   };
 
@@ -1845,10 +1845,10 @@ export default function JupChat() {
     "Solflare":     (url) => `https://solflare.com/ul/v1/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
     "Backpack":     (url) => `https://backpack.app/browse/${encodeURIComponent(url)}?ref=${encodeURIComponent(window.location.origin)}`,
     "Trust Wallet": (url) => `https://link.trustwallet.com/open_url?coin_id=501&url=${encodeURIComponent(url)}`,
-    "OKX":          (url) => `okx://wallet/dapp/url?dappUrl=${encodeURIComponent(url)}`,
-    "Coin98":       (url) => `coin98://browser?url=${encodeURIComponent(url)}`,
-    // Jupiter deeplink is only shown when NOT inside Jupiter Mobile (in-app detection handles the rest)
-    "Jupiter": () => "https://jup.ag/mobile",
+    "OKX":          (url) => `https://www.okx.com/download?deeplink=${encodeURIComponent(`okx://wallet/dapp/url?dappUrl=${encodeURIComponent(url)}`)}`,
+    "Coin98":       (url) => `https://coin98.com/dapp/${encodeURIComponent(url)}`,
+    // Jupiter: open in Jupiter's in-app browser
+    "Jupiter": (url) => `https://jup.ag/browser?url=${encodeURIComponent(url)}`,
   };
 
   // Wallet logo map — inline SVG data URIs for any that block hotlinking; favicon for the rest
@@ -2102,29 +2102,41 @@ export default function JupChat() {
       return;
     }
 
-    // Mobile deep-links: use wallet connect URI schemes that trigger an approval popup
-    // NOT the browse/dapp-browser pattern — these open the wallet app and ask for connection
+    // Mobile deep-links: open this dapp URL inside the wallet's in-app browser.
+    // This is the ONLY reliable way from Chrome mobile — custom URI schemes like
+    // phantom:// are blocked/redirect-looped by Chrome. Instead we send the user
+    // to the wallet's universal "browse to URL" link which opens the wallet app,
+    // loads this page inside its in-app browser (injecting the provider), and the
+    // user can then tap Connect Wallet again — this time the provider is detected.
     if (walletEntry.type === "deeplink") {
-      const appUrl   = encodeURIComponent(window.location.href);
-      const origin   = encodeURIComponent(window.location.origin);
-      const appName  = encodeURIComponent("ChatFi");
-      const CONNECT_LINKS = {
-        // Phantom: phantom://v1/connect triggers the wallet connect approval popup
-        "Phantom":      `phantom://v1/connect?app_url=${appUrl}&redirect_link=${appUrl}&app_name=${appName}`,
-        // Solflare: solflare://v1/connect
-        "Solflare":     `solflare://v1/connect?app_url=${appUrl}&redirect_link=${appUrl}&app_name=${appName}`,
-        // Backpack: uses xnft scheme
-        "Backpack":     `https://backpack.app/connect?app_url=${appUrl}&redirect=${appUrl}`,
-        // OKX: okx wallet connect scheme
-        "OKX":          `okx://wallet/dapp/details?dappUrl=${appUrl}`,
-        // Trust Wallet: open-url triggers in-app connect
-        "Trust Wallet": `https://link.trustwallet.com/open_url?coin_id=501&url=${appUrl}`,
-        // Coin98: connect scheme
-        "Coin98":       `coin98://browser?url=${appUrl}`,
+      const dappUrl = encodeURIComponent(window.location.href);
+      const ref     = encodeURIComponent(window.location.origin);
+      const BROWSE_LINKS = {
+        // Phantom: opens this URL inside Phantom's in-app browser
+        "Phantom":      `https://phantom.app/ul/browse/${encodeURIComponent(window.location.href)}?ref=${ref}`,
+        // Solflare: opens this URL inside Solflare's in-app browser
+        "Solflare":     `https://solflare.com/ul/v1/browse/${encodeURIComponent(window.location.href)}?ref=${ref}`,
+        // Backpack: opens URL in Backpack browser
+        "Backpack":     `https://backpack.app/browse/${encodeURIComponent(window.location.href)}`,
+        // OKX: opens dapp URL in OKX wallet browser
+        "OKX":          `https://www.okx.com/download?deeplink=${encodeURIComponent(`okx://wallet/dapp/url?dappUrl=${dappUrl}`)}`,
+        // Trust Wallet: opens URL inside Trust browser
+        "Trust Wallet": `https://link.trustwallet.com/open_url?coin_id=501&url=${dappUrl}`,
+        // Coin98: opens URL in Coin98 browser
+        "Coin98":       `https://coin98.com/dapp/${encodeURIComponent(window.location.href)}`,
       };
-      const link = CONNECT_LINKS[walletEntry.name];
+      const link = BROWSE_LINKS[walletEntry.name];
       if (link) {
-        window.location.href = link;
+        // Use anchor click to preserve user-gesture context — Chrome blocks
+        // programmatic window.location navigations to external app URLs.
+        const a = document.createElement("a");
+        a.href = link;
+        a.target = "_blank";
+        a.rel = "noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setShowWalletModal(false);
         return;
       }
       // Fallback for unknown deeplink wallets
@@ -4566,16 +4578,29 @@ Order: \`${orderKey.slice(0,20)}…\`
                         </button>
                       ))}
 
-                      {/* 2. Jupiter — WalletConnect */}
+                      {/* 2. Jupiter — open in Jupiter's in-app browser */}
                       {!walletList.find(w => w.name === "Jupiter" && w.detected) && (
-                        <button onClick={() => initWalletConnect("Jupiter")} className="hov-row"
+                        <button onClick={() => {
+                            // Open ChatFi inside Jupiter Mobile's in-app browser.
+                            // Once inside the app browser, window.jupiter is injected
+                            // and the user can tap Connect Wallet to finish.
+                            const link = `https://jup.ag/browser?url=${encodeURIComponent(window.location.href)}`;
+                            const a = document.createElement("a");
+                            a.href = link;
+                            a.target = "_blank";
+                            a.rel = "noreferrer";
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            setShowWalletModal(false);
+                          }} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
                           <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
                             <img src={WALLET_LOGOS["Jupiter"]} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt="Jupiter"/>
                           </span>
                           <span style={{ flex:1 }}>
                             <span style={{ fontWeight:600, display:"block" }}>Jupiter</span>
-                            <span style={{ fontSize:11, color:T.text3 }}>Connect via WalletConnect</span>
+                            <span style={{ fontSize:11, color:T.text3 }}>Open in Jupiter app browser</span>
                           </span>
                           <span style={{ fontSize:13, color:T.accent, fontWeight:600 }}>→</span>
                         </button>
@@ -4599,9 +4624,9 @@ Order: \`${orderKey.slice(0,20)}…\`
                           </span>
                           <span style={{ flex:1 }}>
                             <span style={{ fontWeight:600, display:"block" }}>{w.name}</span>
-                            <span style={{ fontSize:11, color:T.text3 }}>Tap to connect</span>
+                            <span style={{ fontSize:11, color:T.text3 }}>Open in {w.name} app browser</span>
                           </span>
-                          <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Connect →</span>
+                          <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Open →</span>
                         </button>
                       ))}
 
