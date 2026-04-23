@@ -1678,7 +1678,7 @@ export default function JupChat() {
       case "Phantom":  return `https://phantom.app/ul/v1/wc?uri=${enc}`;
       case "Solflare": return `https://solflare.com/ul/v1/wc?uri=${enc}`;
       case "Backpack": return `https://backpack.app/wc?uri=${enc}`;
-      case "Jupiter":  return `https://jup.ag/mobile`;
+      case "Jupiter":  return `https://jup.ag/wc?uri=${enc}`;
       default:         return `https://phantom.app/ul/v1/wc?uri=${enc}`;
     }
   };
@@ -4516,28 +4516,9 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {/* WalletConnect — mobile: per-wallet deep link buttons; desktop: QR */}
                   {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:8 }}>
-                      {[
-                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Opens ChatFi inside Phantom — tap Connect to approve" },
-                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Opens ChatFi inside Solflare — tap Connect to approve" },
-                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Opens ChatFi inside Backpack — tap Connect to approve" },
-                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Opens ChatFi inside Jupiter — tap Connect to approve" },
-                      ].map(w => (
-                        <button key={w.name} onClick={() => {
-                          // If wallet already injected (user is inside wallet browser) → connect directly
-                          const found = walletList.find(l => l.name.toLowerCase() === w.name.toLowerCase() && l.detected);
-                          if (found) { doConnectWith(found); return; }
-                          // Open ChatFi inside the wallet's in-app browser — wallet will be injected there
-                          const url = encodeURIComponent(window.location.href);
-                          const ref = encodeURIComponent(window.location.origin);
-                          const browseLinks = {
-                            "Phantom":  `https://phantom.app/ul/browse/${url}?ref=${ref}`,
-                            "Solflare": `https://solflare.com/ul/v1/browse/${url}?ref=${ref}`,
-                            "Backpack": `https://backpack.app/browse/${url}?ref=${ref}`,
-                            "Jupiter":  `https://jup.ag/ul/browse/${url}?ref=${ref}`,
-                          };
-                          window.location.href = browseLinks[w.name] || browseLinks["Phantom"];
-                          setShowWalletModal(false);
-                        }} className="hov-row"
+                      {/* Jupiter — always shown, uses WalletConnect */}
+                      {[{ name:"Jupiter", icon: WALLET_LOGOS["Jupiter"], subtitle:"Connect via WalletConnect" }].map(w => (
+                        <button key={w.name} onClick={() => initWalletConnect("Jupiter")} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
                           <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
                             {typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))
@@ -4551,6 +4532,24 @@ Order: \`${orderKey.slice(0,20)}…\`
                           <span style={{ fontSize:13, color:T.accent, fontWeight:600 }}>→</span>
                         </button>
                       ))}
+                      {/* Phantom/Solflare/Backpack — only show if detected in this browser */}
+                      {["Phantom","Solflare","Backpack"].map(name => {
+                        const found = walletList.find(l => l.name.toLowerCase() === name.toLowerCase() && l.detected);
+                        if (!found) return null;
+                        return (
+                          <button key={name} onClick={() => doConnectWith(found)} className="hov-row"
+                            style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1.5px solid ${T.accent}44`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
+                            <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                              <img src={WALLET_LOGOS[name]} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={name}/>
+                            </span>
+                            <span style={{ flex:1 }}>
+                              <span style={{ fontWeight:600, display:"block", color:T.text1 }}>{name}</span>
+                              <span style={{ fontSize:11, color:T.green }}>Detected — tap to connect directly</span>
+                            </span>
+                            <span style={{ fontSize:11, color:T.green, fontWeight:600, background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, padding:"2px 7px" }}>Detected</span>
+                          </button>
+                        );
+                      })}
                       {/* If WC session is waiting (URI generated), show open-app button + copy-URI fallback */}
                       {wcStatus === "waiting" && wcUri && (
                         <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 12px", marginTop:4 }}>
