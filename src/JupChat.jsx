@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { VersionedTransaction } from "@solana/web3.js";
+import { Transaction, VersionedTransaction } from "@solana/web3.js";
 
 // ─── Jupiter API endpoints (verified against developers.jup.ag docs Apr 2026) ─
 const JUP_BASE         = "https://api.jup.ag";
@@ -1165,19 +1165,27 @@ export default function JupChat() {
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned from multiply API.");
 
-      // 2a. If ATAs need creating, sign + send the setup tx first
+      // 2a. Send setup tx first (ATA creation + position init — legacy format)
       if (data.setupTransaction) {
-        push("ai", "Creating token accounts first…");
-        const setupTx = VersionedTransaction.deserialize(b64ToBytes(data.setupTransaction));
+        push("ai", "Setting up position accounts…");
+        const setupBytes = b64ToBytes(data.setupTransaction);
+        // Setup tx is a legacy Transaction (not versioned) — deserialize accordingly
+        let setupTx;
+        try {
+          setupTx = Transaction.from(setupBytes);
+        } catch {
+          setupTx = VersionedTransaction.deserialize(setupBytes);
+        }
         const signedSetup = await provider.signTransaction(setupTx);
+        const setupSerialized = signedSetup.serialize ? signedSetup.serialize() : signedSetup.serialize();
         const setupRes = await jupFetch("SOLANA_RPC", {
           method: "POST",
-          body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedSetup.serialize()), { encoding:"base64", skipPreflight:false }] },
+          body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(setupSerialized), { encoding:"base64", skipPreflight:false }] },
         });
         const setupSig = setupRes?.result;
         if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction failed.");
-        // Wait for setup tx to confirm before sending main tx
-        await new Promise(r => setTimeout(r, 3000));
+        // Wait for setup tx to confirm on-chain before sending main multiply tx
+        await new Promise(r => setTimeout(r, 4000));
       }
 
       // 2b. Deserialize + sign main multiply tx
