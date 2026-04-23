@@ -4517,21 +4517,23 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:8 }}>
                       {[
-                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Direct connect if detected, or open Phantom app" },
-                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Direct connect if detected, or open Solflare app" },
-                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Direct connect if detected, or open Backpack app" },
-                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Connect via WalletConnect → approve in Jupiter app" },
+                        { name:"Phantom",  icon: WALLET_LOGOS["Phantom"],  subtitle:"Tap to connect directly" },
+                        { name:"Solflare", icon: WALLET_LOGOS["Solflare"], subtitle:"Tap to connect directly" },
+                        { name:"Backpack", icon: WALLET_LOGOS["Backpack"], subtitle:"Tap to connect directly" },
+                        { name:"Jupiter",  icon: WALLET_LOGOS["Jupiter"],  subtitle:"Connect via WalletConnect" },
                       ].map(w => (
                         <button key={w.name} onClick={() => {
                           if (w.name === "Jupiter") {
                             initWalletConnect("Jupiter");
                           } else {
-                            const found = walletList.find(l => l.name.toLowerCase() === w.name.toLowerCase());
-                            if (found && found.detected) {
+                            // Direct connect — use detected provider or open wallet's in-app browser
+                            const found = walletList.find(l => l.name.toLowerCase() === w.name.toLowerCase() && l.detected);
+                            if (found) {
                               doConnectWith(found);
                             } else {
+                              // Not detected: open wallet app via deep link (opens in-app browser → user connects there)
                               const deepLink = MOBILE_DEEP_LINKS[w.name]?.(window.location.href);
-                              if (deepLink) window.open(deepLink, "_blank");
+                              if (deepLink) window.location.href = deepLink;
                               setShowWalletModal(false);
                             }
                           }
