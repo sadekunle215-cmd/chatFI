@@ -948,7 +948,7 @@ export default function JupChat() {
       const signedBytes = signedTx.serialize();
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [btoa(String.fromCharCode(...signedBytes)), { encoding: "base64", skipPreflight: true }] },
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedBytes), { encoding: "base64", skipPreflight: true }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
@@ -995,7 +995,7 @@ export default function JupChat() {
       const signedBytes = signedTx.serialize();
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [btoa(String.fromCharCode(...signedBytes)), { encoding: "base64", skipPreflight: true }] },
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedBytes), { encoding: "base64", skipPreflight: true }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
@@ -1071,7 +1071,7 @@ export default function JupChat() {
       const signedBytes = signedTx.serialize();
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [btoa(String.fromCharCode(...signedBytes)), { encoding: "base64", skipPreflight: true }] },
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedBytes), { encoding: "base64", skipPreflight: true }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
@@ -1098,6 +1098,22 @@ export default function JupChat() {
     const text = await res.text();
     try { return { ok: res.ok, status: res.status, data: JSON.parse(text) }; }
     catch { return { ok: false, status: res.status, data: { error: `Server error (${res.status}): ${text.slice(0, 200)}` } }; }
+  };
+
+  // ── Safe base64 decode → Uint8Array (atob+charCodeAt breaks on large txs) ────
+  const b64ToBytes = (b64) => {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  };
+  // Safe Uint8Array → base64 (spread crashes on large arrays > 65k bytes)
+  const bytesToB64 = (bytes) => {
+    let s = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk)
+      s += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    return btoa(s);
   };
 
   // ── Resolve real on-chain vaultId from mint addresses ───────────────────────
@@ -1149,25 +1165,14 @@ export default function JupChat() {
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned from multiply API.");
 
-      // 2. Deserialize — use Buffer-safe base64 decode (atob+charCodeAt breaks on large txs)
-      const b64 = data.transaction;
-      const binStr = atob(b64);
-      const bytes = new Uint8Array(binStr.length);
-      for (let i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
-      const tx = VersionedTransaction.deserialize(bytes);
+      // 2. Deserialize + sign
+      const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
       const signedTx = await provider.signTransaction(tx);
 
-      // 3. Send via RPC — use chunk-safe base64 encode (spread crashes on large arrays)
-      const signedBytes = signedTx.serialize();
-      let signedB64 = "";
-      const chunkSize = 0x8000;
-      for (let i = 0; i < signedBytes.length; i += chunkSize) {
-        signedB64 += String.fromCharCode(...signedBytes.subarray(i, i + chunkSize));
-      }
-      signedB64 = btoa(signedB64);
+      // 3. Send via RPC
       const rpcRes = await jupFetch("SOLANA_RPC", {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[signedB64, { encoding:"base64", skipPreflight:false }] },
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:false }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
@@ -1316,7 +1321,7 @@ export default function JupChat() {
       if (!data.transaction)  throw new Error("No transaction returned from borrow API.");
 
       // 2. Deserialize → wallet signs
-      const bytes = new Uint8Array(atob(data.transaction).split("").map(c => c.charCodeAt(0)));
+      const bytes = b64ToBytes(data.transaction);
       const tx = VersionedTransaction.deserialize(bytes);
       const signedTx = await provider.signTransaction(tx);
 
@@ -1324,7 +1329,7 @@ export default function JupChat() {
       const signedBytes = signedTx.serialize();
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[btoa(String.fromCharCode(...signedBytes)), { encoding:"base64", skipPreflight:true }] },
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedBytes), { encoding:"base64", skipPreflight:true }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
@@ -1393,12 +1398,12 @@ export default function JupChat() {
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned.");
 
-      const bytes    = new Uint8Array(atob(data.transaction).split("").map(c => c.charCodeAt(0)));
+      const bytes    = b64ToBytes(data.transaction);
       const tx       = VersionedTransaction.deserialize(bytes);
       const signedTx = await provider.signTransaction(tx);
       const rpcRes   = await jupFetch("SOLANA_RPC", {
         method:"POST",
-        body:{ jsonrpc:"2.0", id:1, method:"sendTransaction", params:[btoa(String.fromCharCode(...signedTx.serialize())), { encoding:"base64", skipPreflight:true }] },
+        body:{ jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed.");
@@ -1438,14 +1443,14 @@ export default function JupChat() {
           });
           if (!claimRes.transaction) throw new Error("No transaction in claim response.");
 
-          const bytes = new Uint8Array(atob(claimRes.transaction).split("").map(c => c.charCodeAt(0)));
+          const bytes = b64ToBytes(claimRes.transaction);
           const tx = VersionedTransaction.deserialize(bytes);
           if (!provider.signTransaction) throw new Error("Wallet cannot sign.");
           const signed = await provider.signTransaction(tx);
           const signedBytes = signed.serialize();
           const rpcRes = await jupFetch(SOLANA_RPC, {
             method: "POST",
-            body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [btoa(String.fromCharCode(...signedBytes)), { encoding: "base64", skipPreflight: true }] },
+            body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedBytes), { encoding: "base64", skipPreflight: true }] },
           });
           const sig = rpcRes?.result;
           if (!sig) throw new Error(rpcRes?.error?.message || "Send failed.");
@@ -1694,7 +1699,7 @@ export default function JupChat() {
         connect: async () => ({ publicKey: { toString: () => address } }),
         signTransaction: async (tx) => {
           const raw = tx.serialize();
-          const base64 = btoa(String.fromCharCode(...raw));
+          const base64 = bytesToB64(raw);
           // For sign requests on mobile, open wallet app without leaving page
           if (isMobile && preferredWallet) {
             const signDeepLink = getMobileWcDeepLink(preferredWallet, uri);
@@ -1706,7 +1711,7 @@ export default function JupChat() {
             request: { method: "solana_signTransaction", params: { transaction: base64 } },
           });
           if (!result?.transaction) throw new Error("No signed transaction returned from wallet");
-          const signed = new Uint8Array(atob(result.transaction).split("").map(c => c.charCodeAt(0)));
+          const signed = b64ToBytes(result.transaction);
           return VersionedTransaction.deserialize(signed);
         },
         isWalletConnect: true,
@@ -2152,7 +2157,7 @@ export default function JupChat() {
       if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing");
       const signedTx = await provider.signTransaction(tx);
 
-      const signedBase64 = btoa(String.fromCharCode(...signedTx.serialize()));
+      const signedBase64 = bytesToB64(signedTx.serialize());
       const execResult = await jupFetch(JUP_SWAP_EXEC, { method:"POST", body:{ signedTransaction:signedBase64, requestId:orderData.requestId } });
       if (execResult.error) throw new Error(typeof execResult.error==="object"?JSON.stringify(execResult.error):execResult.error);
 
@@ -2198,7 +2203,7 @@ export default function JupChat() {
       const tx=VersionedTransaction.deserialize(txBytes);
       if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing");
       const signedTx=await provider.signTransaction(tx);
-      const signedBase64=btoa(String.fromCharCode(...signedTx.serialize()));
+      const signedBase64=bytesToB64(signedTx.serialize());
       const execRes=await jupFetch(JUP_TRIGGER_EXEC,{method:"POST",body:{signedTransaction:signedBase64,requestId:orderRes.requestId}});
       if (execRes.error) throw new Error(typeof execRes.error==="object"?JSON.stringify(execRes.error):execRes.error);
       const signature=execRes.signature||execRes.txid||orderRes.order;
@@ -2323,7 +2328,7 @@ export default function JupChat() {
       for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
       const tx = VersionedTransaction.deserialize(txBytes);
       const signedTx = await provider.signTransaction(tx);
-      const depositSignedTx = btoa(String.fromCharCode(...signedTx.serialize()));
+      const depositSignedTx = bytesToB64(signedTx.serialize());
       // Step 4: create order
       const expiresAt = Date.now() + parseInt(cfg.expiryDays || 7) * 86400000;
       const orderBody = {
@@ -2410,7 +2415,7 @@ export default function JupChat() {
       for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
       const tx = VersionedTransaction.deserialize(txBytes);
       const signedTx = await provider.signTransaction(tx);
-      const signedB64 = btoa(String.fromCharCode(...signedTx.serialize()));
+      const signedB64 = bytesToB64(signedTx.serialize());
       // Step 3: confirm cancellation
       const confirmRes = await trigV2Fetch(`${JUP_TV2}/orders/price/confirm-cancel/${orderId}`, {
         method: "POST",
@@ -2476,7 +2481,7 @@ export default function JupChat() {
       const tx = VersionedTransaction.deserialize(txBytes);
       if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
       const signedTx = await provider.signTransaction(tx);
-      const signedBase64 = btoa(String.fromCharCode(...signedTx.serialize()));
+      const signedBase64 = bytesToB64(signedTx.serialize());
 
       const execRes = await jupFetch(`${JUP_RECUR_BASE}/execute`, {
         method: "POST",
@@ -2543,7 +2548,7 @@ Transaction: \`${sig?.slice(0,20)}…\`
       for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
       const tx = VersionedTransaction.deserialize(txBytes);
       const signedTx = await provider.signTransaction(tx);
-      const signedBase64 = btoa(String.fromCharCode(...signedTx.serialize()));
+      const signedBase64 = bytesToB64(signedTx.serialize());
 
       const execRes = await jupFetch(`${JUP_RECUR_BASE}/execute`, {
         method: "POST",
