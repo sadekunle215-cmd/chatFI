@@ -412,6 +412,11 @@ export default function JupChat() {
   const [lendPosLoading, setLendPosLoading]     = useState(false);
   const [unwindStatus, setUnwindStatus]         = useState(null); // null | positionId | "done"
   const [showBorrow, setShowBorrow]             = useState(false);
+
+  // Perps panel
+  const [showPerps, setShowPerps]       = useState(false);
+  const [perpsCfg, setPerpsCfg]         = useState({ market:"SOL-PERP", side:"long", collateral:"", leverage:"10" });
+  const [perpsStatus, setPerpsStatus]   = useState(null); // null|"signing"|"done"|"error"
   const [borrowCfg, setBorrowCfg]               = useState({ vaultId:1, collateral:"SOL", debt:"USDC", colDecimals:9, debtDecimals:6, colAmount:"", borrowAmount:"" });
   const [borrowStatus, setBorrowStatus]         = useState(null); // null|"signing"|"done"|"error"
   const [showEarn, setShowEarn]           = useState(false);
@@ -465,16 +470,12 @@ export default function JupChat() {
     }
   }, []);
 
-  // ── Fetch Jupiter official AI docs (llms-full.txt) — injected into system prompt ─
+  // ── Fetch Jupiter official AI docs (llms-full.txt) ──────────────────────────
   useEffect(() => {
     fetch("https://developers.jup.ag/docs/llms-full.txt")
       .then(r => r.text())
-      .then(txt => {
-        // Trim to ~6000 chars to keep context window healthy; covers all key API sections
-        setJupDocs(txt.slice(0, 6000));
-        console.log("[ChatFi] Jupiter docs loaded for AI context.");
-      })
-      .catch(e => console.warn("[ChatFi] Could not load Jupiter docs:", e));
+      .then(txt => { setJupDocs(txt.slice(0, 6000)); })
+      .catch(() => {});
   }, []);
 
   // ── Fetch real on-chain vault IDs from /api/multiply GET ────────────────────
@@ -2706,7 +2707,7 @@ Order: \`${orderKey.slice(0,20)}…\`
     push("user", raw);
     setTyping(true);
     setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
-    setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
+    setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false); setShowPerps(false);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
 
@@ -3223,14 +3224,13 @@ Order: \`${orderKey.slice(0,20)}…\`
 
       } else if (action === "SHOW_PERPS") {
         const { market = "SOL-PERP", side = "long", collateral = "", leverage = "10" } = actionData || {};
-        const addr = walletFull;
-        if (!addr) {
+        if (!walletFull) {
           push("ai", text + "\n\nPlease **connect your wallet** first to trade perps.");
         } else {
-          const marketLabel = market.replace("-PERP", "");
-          const icon        = side === "long" ? "📈" : "📉";
-          const posSize     = collateral && leverage ? `$${(parseFloat(collateral) * parseFloat(leverage)).toFixed(0)}` : "—";
-          push("ai", text + `\n\n**Jupiter Perps — ${icon} ${side.toUpperCase()} ${marketLabel}**\n\n• Market: **${market}**\n• Side: **${side.toUpperCase()}**\n• Collateral: **${collateral ? `$${collateral} USDC` : "enter amount"}**\n• Leverage: **${leverage}x**\n• Est. position size: **${posSize}**\n\n⚠️ Perps carry liquidation risk. Always set a stop-loss.\n\nOpen this trade on [Jupiter Perps](https://jup.ag/perps/${marketLabel.toLowerCase()}) — connect your wallet there and enter your exact size.`);
+          setPerpsCfg({ market, side, collateral, leverage });
+          setPerpsStatus(null);
+          setShowPerps(true);
+          push("ai", text);
         }
 
       } else if (action === "FETCH_PERPS_POSITIONS") {
@@ -4235,6 +4235,101 @@ Order: \`${orderKey.slice(0,20)}…\`
               </div>
 
               <button onClick={() => setShowBorrow(false)}
+                style={{ width:"100%", padding:"9px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                Close
+              </button>
+            </div>
+          )}
+
+          {/* ── Perps panel ───────────────────────────────────────────── */}
+          {showPerps && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              {/* Header */}
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>
+                  {perpsCfg.side === "long" ? "📈" : "📉"} Jupiter Perps
+                </div>
+                <span style={{ fontSize:10, padding:"2px 7px", background: perpsCfg.side === "long" ? T.greenBg : T.redBg, border:`1px solid ${perpsCfg.side === "long" ? T.greenBd : T.redBd}`, borderRadius:10, color: perpsCfg.side === "long" ? T.green : T.red, fontWeight:700 }}>
+                  {perpsCfg.side.toUpperCase()}
+                </span>
+              </div>
+              <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
+                Leveraged perpetual futures on Solana. Up to 100x leverage. Your wallet signs the transaction.
+              </div>
+
+              {/* Market + Side row */}
+              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Market</div>
+                  <select value={perpsCfg.market}
+                    onChange={e => setPerpsCfg(c => ({ ...c, market:e.target.value }))}
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}>
+                    <option value="SOL-PERP">SOL-PERP</option>
+                    <option value="BTC-PERP">BTC-PERP</option>
+                    <option value="ETH-PERP">ETH-PERP</option>
+                  </select>
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Direction</div>
+                  <div style={{ display:"flex", gap:6 }}>
+                    {["long","short"].map(s => (
+                      <button key={s} onClick={() => setPerpsCfg(c => ({ ...c, side:s }))}
+                        style={{ flex:1, padding:"8px 0", border:`1px solid ${perpsCfg.side===s ? (s==="long"?T.greenBd:T.redBd) : T.border}`, borderRadius:8, background: perpsCfg.side===s ? (s==="long"?T.greenBg:T.redBg) : T.bg, color: perpsCfg.side===s ? (s==="long"?T.green:T.red) : T.text2, fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                        {s === "long" ? "📈 Long" : "📉 Short"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Collateral + Leverage row */}
+              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>
+                    Collateral (USD) — {perpsCfg.side === "short" ? "USDC" : perpsCfg.market.replace("-PERP","")}
+                  </div>
+                  <input type="number" min="0" placeholder="e.g. 100"
+                    value={perpsCfg.collateral}
+                    onChange={e => setPerpsCfg(c => ({ ...c, collateral:e.target.value }))}
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  />
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Leverage (1–100x)</div>
+                  <input type="number" min="1" max="100" placeholder="e.g. 10"
+                    value={perpsCfg.leverage}
+                    onChange={e => setPerpsCfg(c => ({ ...c, leverage:e.target.value }))}
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  />
+                </div>
+              </div>
+
+              {/* Position size preview */}
+              {perpsCfg.collateral && perpsCfg.leverage && (
+                <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
+                  {perpsCfg.side === "long" ? "📈" : "📉"} <strong>{perpsCfg.side.toUpperCase()} {perpsCfg.market}</strong><br/>
+                  💰 Collateral: <strong>${perpsCfg.collateral}</strong> · ⚡ Leverage: <strong>{perpsCfg.leverage}x</strong><br/>
+                  📐 Est. position size: <strong>${(parseFloat(perpsCfg.collateral||0) * parseFloat(perpsCfg.leverage||1)).toFixed(0)}</strong>
+                  <br/><span style={{ fontSize:11, color:T.text3 }}>Fees: 0.06% open + hourly borrow fee based on utilisation</span>
+                </div>
+              )}
+
+              {/* Risk warning */}
+              <div style={{ fontSize:11, color:T.text3, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
+                ⚠️ Perps carry liquidation risk. You will be liquidated if your position value drops below maintenance margin. Always set a stop-loss.
+              </div>
+
+              {/* Open on Jupiter button */}
+              <a href={`https://jup.ag/perps/${perpsCfg.market.replace("-PERP","").toLowerCase()}?side=${perpsCfg.side}&collateral=${perpsCfg.collateral}&leverage=${perpsCfg.leverage}`}
+                target="_blank" rel="noreferrer"
+                style={{ display:"block", textAlign:"center", padding:"11px", background:perpsCfg.side==="long"?T.green:T.red, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, textDecoration:"none", marginBottom:8 }}>
+                {perpsCfg.side === "long" ? "📈" : "📉"} Open {perpsCfg.side.toUpperCase()} on Jupiter Perps ↗
+              </a>
+              <div style={{ fontSize:11, color:T.text3, textAlign:"center", marginBottom:12 }}>
+                Jupiter Perps opens pre-filled · Sign with your connected wallet
+              </div>
+
+              <button onClick={() => setShowPerps(false)}
                 style={{ width:"100%", padding:"9px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
                 Close
               </button>
