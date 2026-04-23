@@ -1665,7 +1665,8 @@ export default function JupChat() {
       case "Backpack":
         return `backpack://wc?uri=${enc}`;
       case "Jupiter":
-        return `https://jup.ag/browser?url=${encodeURIComponent(window.location.href)}`;
+        // Jupiter has no browser deep link — fall through to WC URI for manual paste
+        return `https://jup.ag`;
       default:
         return `https://phantom.app/ul/browse/${encodeURIComponent(window.location.href)}?ref=${encodeURIComponent(window.location.origin)}`;
     }
@@ -1847,8 +1848,8 @@ export default function JupChat() {
     "Trust Wallet": (url) => `https://link.trustwallet.com/open_url?coin_id=501&url=${encodeURIComponent(url)}`,
     "OKX":          (url) => `https://www.okx.com/download?deeplink=${encodeURIComponent(`okx://wallet/dapp/url?dappUrl=${encodeURIComponent(url)}`)}`,
     "Coin98":       (url) => `https://coin98.com/dapp/${encodeURIComponent(url)}`,
-    // Jupiter: open in Jupiter's in-app browser
-    "Jupiter": (url) => `https://jup.ag/browser?url=${encodeURIComponent(url)}`,
+    // Jupiter: no browser deep link — WC QR flow handles Jupiter
+    "Jupiter": () => "https://jup.ag/mobile",
   };
 
   // Wallet logo map — inline SVG data URIs for any that block hotlinking; favicon for the rest
@@ -4488,12 +4489,27 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {/* QR tab */}
                   {wcStatus === "waiting" && wcMode === "qr" && (
                     <div style={{ textAlign:"center" }}>
-                      <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
-                        Open Jupiter Wallet → tap the scan icon → scan this QR code
+                      <div style={{ fontSize:12, color:T.text3, marginBottom:8 }}>
+                        Open <strong style={{ color:T.text1 }}>Jupiter app</strong> → tap the <strong style={{ color:T.text1 }}>scan icon</strong> → scan this QR code
+                      </div>
+                      <div style={{ fontSize:11, color:T.accent, marginBottom:14, fontWeight:500 }}>
+                        📱 On the same phone? Use "Copy URI" tab → paste in Jupiter app
                       </div>
                       <div style={{ display:"inline-block", padding:12, background:T.bg, border:`2px solid ${T.border}`, borderRadius:16, marginBottom:14 }}>
                         <canvas ref={wcQrRef} style={{ display:"block", borderRadius:8 }}/>
                       </div>
+                      {/* Quick copy shortcut */}
+                      <button onClick={() => {
+                          try { navigator.clipboard.writeText(wcUri); } catch {}
+                          setWcCopied(true);
+                          setTimeout(() => setWcCopied(false), 2500);
+                        }}
+                        style={{ width:"100%", padding:"10px", background: wcCopied ? T.greenBg : T.accentBg,
+                          border:`1.5px solid ${wcCopied ? T.greenBd : T.accent+"66"}`,
+                          borderRadius:10, color: wcCopied ? T.green : T.accent,
+                          fontSize:13, fontWeight:600, cursor:"pointer", marginBottom:10, transition:"all 0.2s" }}>
+                        {wcCopied ? "✓ Copied!" : "📋 Copy URI to clipboard"}
+                      </button>
                       <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Waiting for wallet to approve…</div>
                       <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", marginBottom:4 }}>
                         <div style={{ width:7, height:7, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite" }}/>
@@ -4529,10 +4545,11 @@ Order: \`${orderKey.slice(0,20)}…\`
 
                       {/* How-to steps */}
                       <div style={{ background:T.purpleBg, border:`1px solid ${T.purple}33`, borderRadius:10, padding:"10px 14px", fontSize:11, color:T.text2, lineHeight:1.7 }}>
-                        <div style={{ fontWeight:600, color:T.purple, marginBottom:4 }}>How to connect:</div>
-                        <div>1. Open your Solana wallet app (Jupiter, Phantom, Backpack…)</div>
-                        <div>2. Find <strong>WalletConnect</strong> or the scan / connect option</div>
-                        <div>3. Paste the URI above and approve the connection</div>
+                        <div style={{ fontWeight:600, color:T.purple, marginBottom:4 }}>How to connect with Jupiter:</div>
+                        <div>1. Copy the URI above</div>
+                        <div>2. Open <strong>Jupiter app</strong> → tap the <strong>scan icon</strong> (top right)</div>
+                        <div>3. Tap <strong>"Paste"</strong> or switch to manual input and paste the URI</div>
+                        <div>4. Tap <strong>Approve</strong> — connection completes here automatically</div>
                       </div>
 
                       <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", marginTop:12, marginBottom:4 }}>
@@ -4578,29 +4595,16 @@ Order: \`${orderKey.slice(0,20)}…\`
                         </button>
                       ))}
 
-                      {/* 2. Jupiter — open in Jupiter's in-app browser */}
+                      {/* 2. Jupiter — WalletConnect QR scan (no valid browser deep link exists) */}
                       {!walletList.find(w => w.name === "Jupiter" && w.detected) && (
-                        <button onClick={() => {
-                            // Open ChatFi inside Jupiter Mobile's in-app browser.
-                            // Once inside the app browser, window.jupiter is injected
-                            // and the user can tap Connect Wallet to finish.
-                            const link = `https://jup.ag/browser?url=${encodeURIComponent(window.location.href)}`;
-                            const a = document.createElement("a");
-                            a.href = link;
-                            a.target = "_blank";
-                            a.rel = "noreferrer";
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            setShowWalletModal(false);
-                          }} className="hov-row"
+                        <button onClick={() => initWalletConnect("Jupiter")} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
                           <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
                             <img src={WALLET_LOGOS["Jupiter"]} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt="Jupiter"/>
                           </span>
                           <span style={{ flex:1 }}>
                             <span style={{ fontWeight:600, display:"block" }}>Jupiter</span>
-                            <span style={{ fontSize:11, color:T.text3 }}>Open in Jupiter app browser</span>
+                            <span style={{ fontSize:11, color:T.text3 }}>Scan QR with Jupiter app → scan icon</span>
                           </span>
                           <span style={{ fontSize:13, color:T.accent, fontWeight:600 }}>→</span>
                         </button>
