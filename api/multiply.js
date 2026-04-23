@@ -210,21 +210,37 @@ export default async function handler(req, res) {
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
 
-      const [swapApiRes, operateResult] = await Promise.all([
-        fetch(`${LITE_API}/swap-instructions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
-        }).then(r => r.json()),
-        getOperateIx({
+      // Step 1: call getOperateIx with positionId:0 to get the real positionId
+      // Per docs: "When positionId is 0, the first call creates a new position and returns positionId"
+      const initOperateResult = await getOperateIx({
+        vaultId:    Number(vaultId),
+        positionId: 0,
+        colAmount:  colBN.add(new BN(quoteRes.outAmount.toString())),
+        debtAmount: borrowBN,
+        signer:     signerPubkey,
+        connection,
+      });
+      const realPositionId = initOperateResult.positionId ?? 0;
+      console.log(`[multiply/open] realPositionId=${realPositionId}`);
+
+      // Step 2: if positionId changed, re-call with the real ID for correct account derivation
+      let operateResult = initOperateResult;
+      if (realPositionId !== 0) {
+        operateResult = await getOperateIx({
           vaultId:    Number(vaultId),
-          positionId: Number(positionId),
+          positionId: realPositionId,
           colAmount:  colBN.add(new BN(quoteRes.outAmount.toString())),
           debtAmount: borrowBN,
           signer:     signerPubkey,
           connection,
-        }),
-      ]);
+        });
+      }
+
+      const swapApiRes = await fetch(`${LITE_API}/swap-instructions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
+      }).then(r => r.json());
 
       if (swapApiRes.error) return res.status(502).json({ error: `Swap instructions failed: ${swapApiRes.error}` });
 
@@ -255,8 +271,7 @@ export default async function handler(req, res) {
         setupTransaction = Buffer.from(legacyTx.serialize({ requireAllSignatures: false })).toString("base64");
       }
 
-      // skipPreflight flag tells frontend to bypass simulation for the main tx
-      return res.status(200).json({ transaction, setupTransaction, skipPreflight: true });
+      return res.status(200).json({ transaction, setupTransaction });
     }
 
     // ── UNWIND ────────────────────────────────────────────────────────────────
