@@ -4007,31 +4007,140 @@ Order: \`${orderKey.slice(0,20)}…\`
       )}
 
       {/* Main chat */}
-      <div style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0 }}>
+      <div style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0, position:"relative" }}>
 
-        {/* Header */}
-        <div style={{ padding:"12px 20px", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12, background:T.surface }}>
-          <button onClick={() => setSidebarOpen(o=>!o)} style={{ background:"none", border:"none", cursor:"pointer", color:T.text3, fontSize:18, padding:4 }} className="hov-btn">☰</button>
-          <div style={{ fontFamily:T.serif, fontSize:16, fontWeight:500, color:T.text1 }}>ChatFi</div>
-          {wallet && (
-            <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
-              <div style={{ fontSize:12, color:T.green, fontWeight:500 }}>● {wallet}</div>
-              <button onClick={disconnectWallet} className="hov-btn"
-                style={{ padding:"4px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:7, color:T.red, fontSize:11, fontWeight:500, cursor:"pointer" }}>
-                Disconnect
-              </button>
-            </div>
-          )}
-          {!wallet && (
-            <button onClick={() => connectWallet(null)} className="hov-btn"
-              style={{ marginLeft:"auto", padding:"6px 14px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:500, cursor:"pointer" }}>
-              Connect Wallet
-            </button>
-          )}
-        </div>
+        {/* ── Jupiter-style Transparent Nav ── */}
+        {(() => {
+          const [showHowItWorks, setShowHowItWorks] = React.useState(false);
+          const [showSocials, setShowSocials] = React.useState(false);
+          const socials = [
+            { label:"Twitter / X", icon:"𝕏", url:"https://x.com/JupiterExchange" },
+            { label:"Discord",     icon:"💬", url:"https://discord.gg/jup" },
+            { label:"Telegram",    icon:"✈️", url:"https://t.me/jupiter_exchange" },
+            { label:"GitHub",      icon:"⌥",  url:"https://github.com/jup-ag" },
+            { label:"Blog",        icon:"📝", url:"https://station.jup.ag/blog" },
+          ];
+          return (
+            <>
+              <div style={{
+                position:"absolute", top:0, left:0, right:0, zIndex:200,
+                padding:"0 16px",
+                display:"flex", alignItems:"center", justifyContent:"space-between",
+                height:58,
+                background:"linear-gradient(180deg, rgba(13,17,23,0.85) 0%, rgba(13,17,23,0) 100%)",
+                backdropFilter:"blur(2px)",
+              }}>
+                {/* Left: hamburger + logo */}
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <button onClick={() => setSidebarOpen(o=>!o)}
+                    style={{ background:"none", border:"none", cursor:"pointer", color:T.text2, fontSize:20, padding:"4px 6px", lineHeight:1, borderRadius:8 }}
+                    className="hov-btn">☰</button>
+                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <div style={{ width:22, height:22, borderRadius:"50%", background:`linear-gradient(135deg, ${T.accent}, #00c3a0)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:"#0d1117" }}>J</div>
+                    <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1, letterSpacing:"-0.2px" }}>JupChat</span>
+                  </div>
+                </div>
+
+                {/* Right: nav items */}
+                <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+                  {/* How It Works */}
+                  <button onClick={() => { setShowHowItWorks(h=>!h); setShowSocials(false); }}
+                    style={{ padding:"5px 11px", background:"none", border:`1px solid ${showHowItWorks ? T.accent+"66" : T.border+"88"}`, borderRadius:20, color: showHowItWorks ? T.accent : T.text2, fontSize:11, fontWeight:500, cursor:"pointer", whiteSpace:"nowrap", transition:"all 0.15s" }}
+                    className="hov-btn">How it works</button>
+
+                  {/* Social */}
+                  <div style={{ position:"relative" }}>
+                    <button onClick={() => { setShowSocials(s=>!s); setShowHowItWorks(false); }}
+                      style={{ padding:"5px 11px", background:"none", border:`1px solid ${showSocials ? T.accent+"66" : T.border+"88"}`, borderRadius:20, color: showSocials ? T.accent : T.text2, fontSize:11, fontWeight:500, cursor:"pointer", transition:"all 0.15s" }}
+                      className="hov-btn">Social</button>
+
+                    {/* Social popup */}
+                    {showSocials && (
+                      <div style={{
+                        position:"absolute", top:"calc(100% + 8px)", right:0, zIndex:400,
+                        background:T.surface, border:`1px solid ${T.border}`, borderRadius:14,
+                        padding:"8px 6px", minWidth:180,
+                        boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
+                        animation:"fadeUp 0.18s ease",
+                      }}>
+                        <div style={{ fontSize:10, color:T.text3, padding:"4px 10px 6px", textTransform:"uppercase", letterSpacing:"0.08em" }}>Follow Jupiter</div>
+                        {socials.map(s => (
+                          <a key={s.label} href={s.url} target="_blank" rel="noreferrer"
+                            style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderRadius:9, color:T.text1, textDecoration:"none", fontSize:13, transition:"background 0.12s" }}
+                            className="hov-row">
+                            <span style={{ fontSize:15, width:20, textAlign:"center" }}>{s.icon}</span>
+                            <span>{s.label}</span>
+                          </a>
+                        ))}
+                        <button onClick={() => setShowSocials(false)}
+                          style={{ display:"none" }}/>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Connect Wallet */}
+                  {wallet ? (
+                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                      <div style={{ fontSize:11, color:T.green, fontWeight:600, background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:20, padding:"4px 10px", maxWidth:100, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                        ● {wallet}
+                      </div>
+                      <button onClick={disconnectWallet} className="hov-btn"
+                        style={{ padding:"5px 10px", background:"none", border:`1px solid ${T.border}88`, borderRadius:20, color:T.red, fontSize:11, cursor:"pointer" }}>
+                        Out
+                      </button>
+                    </div>
+                  ) : (
+                    <button onClick={() => connectWallet(null)} className="hov-btn"
+                      style={{ padding:"6px 14px", background:T.accent, border:"none", borderRadius:20, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer", boxShadow:`0 0 12px ${T.accent}44`, whiteSpace:"nowrap" }}>
+                      Connect Wallet
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* How It Works dropdown — full width panel below nav */}
+              {showHowItWorks && (
+                <div style={{
+                  position:"absolute", top:58, left:0, right:0, zIndex:199,
+                  background:T.surface, borderBottom:`1px solid ${T.border}`,
+                  padding:"20px 24px", animation:"fadeUp 0.2s ease",
+                  boxShadow:"0 8px 32px rgba(0,0,0,0.4)",
+                }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                    <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1 }}>How JupChat Works</div>
+                    <button onClick={() => setShowHowItWorks(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:18, cursor:"pointer", lineHeight:1 }}>✕</button>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))", gap:10 }}>
+                    {[
+                      { icon:"💬", title:"Ask Anything", desc:"Prices, swaps, predictions, yields — just type naturally." },
+                      { icon:"🔗", title:"Connect Wallet", desc:"Tap Connect Wallet to swap, earn, or trade directly in-chat." },
+                      { icon:"⚡", title:"Execute On-Chain", desc:"Transactions happen via Jupiter APIs — no copy-paste needed." },
+                      { icon:"📊", title:"Track Portfolio", desc:"Ask for your balances, positions, or PnL anytime." },
+                    ].map(step => (
+                      <div key={step.title} style={{ padding:"12px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
+                        <div style={{ fontSize:20, marginBottom:6 }}>{step.icon}</div>
+                        <div style={{ fontSize:13, fontWeight:600, color:T.text1, marginBottom:4 }}>{step.title}</div>
+                        <div style={{ fontSize:11, color:T.text3, lineHeight:1.5 }}>{step.desc}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ marginTop:12, fontSize:11, color:T.text3, textAlign:"center" }}>
+                    Powered by <a href="https://jup.ag" target="_blank" rel="noreferrer" style={{ color:T.accent, textDecoration:"none", fontWeight:600 }}>Jupiter Exchange</a> — the #1 Solana DEX aggregator
+                  </div>
+                </div>
+              )}
+
+              {/* Overlay to close popups on outside click */}
+              {(showSocials || showHowItWorks) && (
+                <div onClick={() => { setShowSocials(false); setShowHowItWorks(false); }}
+                  style={{ position:"fixed", inset:0, zIndex:198 }}/>
+              )}
+            </>
+          );
+        })()}
 
         {/* Messages */}
-        <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"24px 20px" }}>
+        <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"80px 20px 24px" }}>
           {msgs.map(m => (
             <div key={m.id} className="msg-enter" style={{ marginBottom:20, display:"flex", gap:12, justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
               {m.role==="ai" && (
@@ -5948,25 +6057,57 @@ Order: \`${orderKey.slice(0,20)}…\`
           </div>
         )}
 
-        {/* Input bar */}
-        <div style={{ padding:"12px 20px 16px", borderTop:`1px solid ${T.border}`, background:T.surface }}>
-          <div style={{ display:"flex", gap:10, alignItems:"flex-end", background:T.bg, border:`1px solid ${T.border}`, borderRadius:14, padding:"10px 14px" }}>
+        {/* ── Circular Input Bar ── */}
+        <div style={{ padding:"10px 16px 18px", background:"transparent" }}>
+          <div style={{
+            display:"flex", alignItems:"center", gap:0,
+            background:T.surface,
+            border:`1.5px solid ${T.border}`,
+            borderRadius:999,
+            padding:"6px 6px 6px 18px",
+            boxShadow:"0 -2px 24px rgba(0,0,0,0.3)",
+            transition:"border-color 0.2s",
+          }}>
             <textarea
               ref={textareaRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} }}
-              placeholder="Ask about prices, swaps, tokens, predictions, or earn vaults…"
+              placeholder="Ask about prices, swaps, tokens…"
               rows={1}
-              style={{ flex:1, border:"none", outline:"none", background:"transparent", fontFamily:T.body, fontSize:14, color:T.text1, lineHeight:1.5, maxHeight:160, overflowY:"auto" }}
+              style={{
+                flex:1, border:"none", outline:"none", background:"transparent",
+                fontFamily:T.body, fontSize:14, color:T.text1, lineHeight:1.5,
+                maxHeight:120, overflowY:"auto", resize:"none",
+                paddingTop:6, paddingBottom:6,
+              }}
             />
-            <button onClick={() => send()} disabled={!input.trim()||typing} className="send-btn"
-              style={{ padding:"8px 16px", background:(!input.trim()||typing)?T.border:T.accent, border:"none", borderRadius:10, color:(!input.trim()||typing)?T.text3:"#0d1117", fontSize:13, fontWeight:500, cursor:(!input.trim()||typing)?"default":"pointer", flexShrink:0, transition:"background 0.15s", display:"flex", alignItems:"center", gap:6 }}>
-              {typing ? <><span className="spinner"/></> : "Send"}
+            {/* Circular send button */}
+            <button
+              onClick={() => send()}
+              disabled={!input.trim() || typing}
+              className="send-btn"
+              style={{
+                width:40, height:40, borderRadius:"50%", flexShrink:0,
+                background: (!input.trim()||typing) ? T.border : T.accent,
+                border:"none",
+                display:"flex", alignItems:"center", justifyContent:"center",
+                cursor: (!input.trim()||typing) ? "default" : "pointer",
+                transition:"background 0.15s, transform 0.1s",
+                boxShadow: (!input.trim()||typing) ? "none" : `0 0 12px ${T.accent}55`,
+                transform: (!input.trim()||typing) ? "scale(0.95)" : "scale(1)",
+              }}>
+              {typing
+                ? <span className="spinner" style={{ width:14, height:14, borderWidth:2 }}/>
+                : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0d1117" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="22" y1="2" x2="11" y2="13"/>
+                    <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                  </svg>
+              }
             </button>
           </div>
-          <div style={{ textAlign:"center", fontSize:11, color:T.text3, marginTop:8 }}>
-            Made with ♥ · Not financial advice
+          <div style={{ textAlign:"center", fontSize:10, color:T.text3, marginTop:6, letterSpacing:"0.02em" }}>
+            Not financial advice · Powered by Jupiter
           </div>
         </div>
       </div>
