@@ -1162,9 +1162,11 @@ export default function JupChat() {
         },
       });
       if (res.error) throw new Error(res.error?.message || res.error);
-      if (!res.transaction) throw new Error("No transaction returned from Lock API.");
+      // DEBUG: show full response until we confirm the correct field name
+      const txB64 = res.transaction || res.tx || res.serializedTransaction || res.data?.transaction;
+      if (!txB64) throw new Error(`Lock API raw response: ${JSON.stringify(res).slice(0, 300)}`);
 
-      const bytes = b64ToBytes(res.transaction);
+      const bytes = b64ToBytes(txB64);
       const tx    = VersionedTransaction.deserialize(bytes);
       const signed = await provider.signTransaction(tx);
       const rpcRes = await jupFetch(SOLANA_RPC, {
