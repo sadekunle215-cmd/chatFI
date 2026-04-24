@@ -955,7 +955,7 @@ export default function JupChat() {
     try {
       const data = await jupFetch(`${JUP_STUDIO_API}/dbc/fee`, {
         method: "POST",
-        body: { creator: walletFull },
+        body: JSON.stringify({ creator: walletFull }),
       });
       setStudioFees(data);
       setShowStudioFees(true);
@@ -986,7 +986,7 @@ export default function JupChat() {
         ...(website    && { website }),
         ...(twitter    && { twitter }),
       };
-      const res = await jupFetch(`${JUP_STUDIO_API}/dbc/create`, { method: "POST", body });
+      const res = await jupFetch(`${JUP_STUDIO_API}/dbc/create`, { method: "POST", body: JSON.stringify(body) });
       if (res.error) throw new Error(res.error?.message || res.error);
       if (!res.transaction) throw new Error("No transaction returned from Studio API.");
 
