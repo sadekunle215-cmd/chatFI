@@ -8,6 +8,7 @@
     "@solana/spl-token": "^0.4.9",
     "@jup-ag/lend": "latest",
     "@jup-ag/lend-read": "latest",
-    "bn.js": "^5.2.1"
+    "bn.js": "^5.2.1",
+    "tweetnacl": "^1.0.3"
   }
 }

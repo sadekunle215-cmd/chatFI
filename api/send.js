@@ -1,8 +1,9 @@
 // api/send.js — Vercel serverless function (ESM)
-// Uses Keypair.sign() from @solana/web3.js instead of Web Crypto Ed25519
-// (Web Crypto Ed25519 "sign" usage is not supported in all Node.js runtimes)
+// Signs with invite keypair using tweetnacl directly — avoids both
+// Web Crypto Ed25519 (unsupported usage) and tx.sign() (resets all sigs)
 
 import { Keypair, VersionedTransaction } from "@solana/web3.js";
+import nacl from "tweetnacl";
 
 const JUP_SEND_API = "https://api.jup.ag/send/v1";
 
@@ -27,15 +28,19 @@ async function inviteCodeToKeypair(code) {
 }
 
 function partialSignWithInviteKeypair(tx, inviteKeypair) {
-  // Find the invite keypair's slot in the signatures array
   const inviteIdx = tx.message.staticAccountKeys.findIndex(
     key => key.equals(inviteKeypair.publicKey)
   );
   if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
 
-  // Use nacl-based signing built into @solana/web3.js via tx.sign()
-  // partialSign signs only the slots belonging to the provided signers
-  tx.sign([inviteKeypair]);
+  // Serialize just the message bytes to sign
+  const msgBytes = tx.message.serialize();
+
+  // Sign using tweetnacl directly — secretKey is 64 bytes (seed + pubkey)
+  const sig = nacl.sign.detached(msgBytes, inviteKeypair.secretKey);
+
+  // Write signature into the correct slot without touching other slots
+  tx.signatures[inviteIdx] = sig;
 }
 
 export default async function handler(req, res) {
