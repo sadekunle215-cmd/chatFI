@@ -711,14 +711,17 @@ export default function JupChat() {
     if (options.body !== undefined) {
       payload.body = typeof options.body === "string" ? JSON.parse(options.body) : options.body;
     }
-    // Pass x-api-key for Jupiter Lend endpoints (beta API requires it even if empty)
-    if (url.includes("/lend/v1/")) payload.apiKey = options.apiKey || "";
+    // Pass x-api-key for Lend and Studio endpoints
+    if (url.includes("/lend/v1/") || url.includes("/studio/v1/")) payload.apiKey = options.apiKey || "";
     const res = await fetch("/api/jupiter", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    return res.json();
+    // Safe parse: proxy may return HTML on error (404/500), never throw JSON parse crash
+    const text = await res.text();
+    try { return JSON.parse(text); }
+    catch { throw new Error(`Proxy error (${res.status}): ${text.slice(0, 200)}`); }
   };
 
   // ── Resolve any token symbol → { mint, decimals } ───────────────────────────
@@ -999,17 +1002,29 @@ export default function JupChat() {
       const presetCfg = presets[preset] || presets.meme;
       const imageType = studioImage.type || "image/jpeg";
 
-      // ── Step 1: Get transaction + presigned URLs (via proxy to avoid CORS) ──
-      const createData = await jupFetch(`${JUP_STUDIO_API}/dbc-pool/create-tx`, {
-        method: "POST",
-        body: {
-          ...presetCfg,
-          tokenName: name.trim(),
-          tokenSymbol: symbol.trim().toUpperCase(),
-          tokenImageContentType: imageType,
-          creator: walletFull,
-        },
-      });
+      // ── Step 1: Get transaction + presigned URLs ──
+      // Try proxy first; if proxy returns an error fall back to direct fetch (needs CORS support from Jupiter)
+      const createPayload = {
+        ...presetCfg,
+        tokenName: name.trim(),
+        tokenSymbol: symbol.trim().toUpperCase(),
+        tokenImageContentType: imageType,
+        creator: walletFull,
+      };
+      let createData;
+      try {
+        createData = await jupFetch(`${JUP_STUDIO_API}/dbc-pool/create-tx`, { method: "POST", body: createPayload });
+        if (typeof createData !== "object" || createData === null) throw new Error("Bad proxy response");
+      } catch (proxyErr) {
+        // Proxy failed — try direct (works if Jupiter adds CORS headers in future)
+        console.warn("Studio proxy failed, trying direct:", proxyErr.message);
+        const directRes = await fetch(`${JUP_STUDIO_API}/dbc-pool/create-tx`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(createPayload),
+        });
+        createData = await directRes.json();
+      }
       if (createData.error) throw new Error(createData.error?.message || JSON.stringify(createData.error));
       if (!createData.transaction) throw new Error("No transaction returned from Studio API.");
 
