@@ -1049,7 +1049,7 @@ export default function JupChat() {
       formData.append("content", description || "");
       formData.append("headerImage", new File([studioImage.file], "header", { type: imageType }));
 
-      const submitRes = await fetch(`${JUP_STUDIO_API}/dbc-pool/submit`, {
+      const submitRes = await fetch("/api/studio-submit", {
         method: "POST",
         body: formData,
         // NOTE: Do NOT set Content-Type header — browser sets it with boundary automatically
