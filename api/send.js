@@ -1,7 +1,6 @@
-// api/send.js — Vercel serverless function (ESM — matches "type":"module" in package.json)
-// Actions:
-//   action: "send"     (default) — craft + partially sign a new invite send tx
-//   action: "clawback"           — craft + partially sign a clawback tx for existing invite
+// api/send.js — Vercel serverless function (ESM)
+// Uses Keypair.sign() from @solana/web3.js instead of Web Crypto Ed25519
+// (Web Crypto Ed25519 "sign" usage is not supported in all Node.js runtimes)
 
 import { Keypair, VersionedTransaction } from "@solana/web3.js";
 
@@ -27,22 +26,16 @@ async function inviteCodeToKeypair(code) {
   return Keypair.fromSeed(new Uint8Array(hashBuffer));
 }
 
-async function partialSignWithInviteKeypair(tx, inviteKeypair) {
-  const msgBytes = tx.message.serialize();
+function partialSignWithInviteKeypair(tx, inviteKeypair) {
+  // Find the invite keypair's slot in the signatures array
   const inviteIdx = tx.message.staticAccountKeys.findIndex(
     key => key.equals(inviteKeypair.publicKey)
   );
   if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
-  const cryptoPrivKey = await crypto.subtle.importKey(
-    "raw",
-    inviteKeypair.secretKey.slice(0, 32),
-    { name: "Ed25519" },
-    false,
-    ["sign"]
-  );
-  tx.signatures[inviteIdx] = new Uint8Array(
-    await crypto.subtle.sign("Ed25519", cryptoPrivKey, msgBytes)
-  );
+
+  // Use nacl-based signing built into @solana/web3.js via tx.sign()
+  // partialSign signs only the slots belonging to the provided signers
+  tx.sign([inviteKeypair]);
 }
 
 export default async function handler(req, res) {
@@ -51,7 +44,6 @@ export default async function handler(req, res) {
   }
 
   let body = req.body;
-  // Vercel ESM functions sometimes don't auto-parse body — handle both cases
   if (typeof body === "string") {
     try { body = JSON.parse(body); } catch { body = {}; }
   }
@@ -83,7 +75,7 @@ export default async function handler(req, res) {
       if (!craftData.tx) return res.status(502).json({ error: "No transaction returned from Jupiter clawback." });
 
       const tx = VersionedTransaction.deserialize(b64ToBytes(craftData.tx));
-      await partialSignWithInviteKeypair(tx, inviteKeypair);
+      partialSignWithInviteKeypair(tx, inviteKeypair);
       return res.status(200).json({ partiallySignedTx: bytesToB64(tx.serialize()) });
     }
 
@@ -107,7 +99,7 @@ export default async function handler(req, res) {
     if (!craftData.tx) return res.status(502).json({ error: "No transaction returned from Jupiter Send." });
 
     const tx = VersionedTransaction.deserialize(b64ToBytes(craftData.tx));
-    await partialSignWithInviteKeypair(tx, inviteKeypair);
+    partialSignWithInviteKeypair(tx, inviteKeypair);
     return res.status(200).json({
       partiallySignedTx: bytesToB64(tx.serialize()),
       inviteCode: newInviteCode,
