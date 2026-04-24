@@ -706,8 +706,13 @@ export default function JupChat() {
 
   // All Jupiter API calls go through /api/jupiter (Vercel serverless) which injects the API key
   const jupFetch = async (url, options = {}) => {
-    // Solana RPC calls must go directly — not through the /api/jupiter proxy
-    if (url === SOLANA_RPC || url.startsWith("https://api.mainnet-beta.solana.com") || url.startsWith("https://rpc.")) {
+    // Solana RPC calls go directly — detect by matching SOLANA_RPC or known RPC hostnames
+    const isRpc = url === SOLANA_RPC ||
+      url.includes("helius-rpc.com") ||
+      url.includes("mainnet-beta.solana.com") ||
+      url.includes("quiknode.pro") ||
+      url.includes("triton.one");
+    if (isRpc) {
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
