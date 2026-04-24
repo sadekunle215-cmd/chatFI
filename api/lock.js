@@ -45,7 +45,6 @@ export default async function handler(req, res) {
       const resolvedMint = mint === "SOL" ? WSOL_MINT : mint;
 
       // Detect Token-2022 vs legacy SPL token program
-      // Try fetching mint account info to check the owner program
       let tokenProgram = TOKEN_PROGRAM_ID;
       try {
         const mintInfo = await connection.getAccountInfo(new PublicKey(resolvedMint));
@@ -68,10 +67,6 @@ export default async function handler(req, res) {
 
       const base = Keypair.generate();
 
-      // ── FIX: pass `tokenProgram` instead of `escrowToken` ──────────────────
-      // The SDK derives escrowToken internally when tokenProgram is supplied.
-      // Passing escrowToken directly is NOT a valid param and caused the
-      // "Reached maximum depth for account resolution: escrowToken" error.
       const tx = await client.createVestingEscrowV2({
         base:                base.publicKey,
         sender:              new PublicKey(funder),
@@ -87,8 +82,16 @@ export default async function handler(req, res) {
         recipient:           new PublicKey(recipient || funder),
         updateRecipientMode: 0,
         cancelMode:          0,
-        tokenProgram,          // ← required: lets SDK resolve escrowToken internally
+        tokenProgram,
       });
+
+      // ── FIX: set recentBlockhash + feePayer before signing ──────────────────
+      // The SDK builds the transaction but does NOT populate recentBlockhash.
+      // Solana requires this before the tx can be signed or serialized.
+      const { blockhash } = await connection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = new PublicKey(funder);
+      // ────────────────────────────────────────────────────────────────────────
 
       tx.partialSign(base);
 
@@ -109,6 +112,12 @@ export default async function handler(req, res) {
         recipient: new PublicKey(recipient),
         payer:     new PublicKey(recipient),
       });
+
+      // ── FIX: set recentBlockhash + feePayer before serializing ──────────────
+      const { blockhash } = await connection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = new PublicKey(recipient);
+      // ────────────────────────────────────────────────────────────────────────
 
       const serialized = Buffer.from(
         tx.serialize({ requireAllSignatures: false })
