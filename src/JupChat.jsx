@@ -1405,45 +1405,24 @@ export default function JupChat() {
     setShowSend(false);
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
-      // Step 1 & 2: generate invite code + derive keypair
-      const inviteCode    = generateInviteCode();
-      const inviteKeypair = await inviteCodeToKeypair(inviteCode);
-      const inviteSigner  = inviteKeypair.publicKey.toBase58();
-
-      // Step 3: craft the send transaction
-      const res = await jupFetch(`${JUP_SEND_API}/craft-send`, {
-        method: "POST",
-        body: {
-          inviteSigner,
-          sender: walletFull,
-          amount: amountRaw,
-          mint,
-        },
+      // Step 1–3 handled server-side: /api/send generates the invite keypair,
+      // calls Jupiter /send/v1/craft-send, and partially signs with the invite keypair.
+      // This avoids the Reown adapter crash when it receives a VersionedTransaction
+      // that already has a partial signature slot filled.
+      const serverRes = await fetch("/api/send", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint }),
       });
-      if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
-      if (!res.tx)   throw new Error("No transaction returned from Jupiter Send.");
+      const serverData = await serverRes.json();
+      if (serverData.error) throw new Error(serverData.error);
+      const { partiallySignedTx, inviteCode } = serverData;
 
-      // Deserialize transaction
-      const tx = VersionedTransaction.deserialize(b64ToBytes(res.tx));
-
-      // Step 4: wallet signs first (avoids partial-sign issues with some adapters)
+      // Step 4: wallet adds its own signature to the already-partially-signed tx.
+      // Reown's adapter only sees its own signature slot being filled — no crash.
       if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const tx       = VersionedTransaction.deserialize(b64ToBytes(partiallySignedTx));
       const signedTx = await provider.signTransaction(tx);
-
-      // Step 5: add invite keypair signature via Web Crypto Ed25519
-      // inviteKeypair.secretKey is 64 bytes — first 32 is the seed
-      const msgBytes = signedTx.message.serialize();
-      const inviteIdx = signedTx.message.staticAccountKeys.findIndex(
-        key => key.equals(inviteKeypair.publicKey)
-      );
-      if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
-      const cryptoPrivKey = await crypto.subtle.importKey(
-        "raw", inviteKeypair.secretKey.slice(0, 32),
-        { name: "Ed25519" }, false, ["sign"]
-      );
-      signedTx.signatures[inviteIdx] = new Uint8Array(
-        await crypto.subtle.sign("Ed25519", cryptoPrivKey, msgBytes)
-      );
 
       // Step 5: broadcast
       const rpcRes = await jupFetch(SOLANA_RPC, {
@@ -1468,6 +1447,49 @@ export default function JupChat() {
     } catch (err) {
       setSendStatus("error");
       push("ai", `Send failed: ${err?.message || "Unknown error"}. Please check your balance and try again.`);
+    }
+  };
+
+  // ── Clawback — reclaim unclaimed Jupiter Send invite tokens ──────────────────
+  // Calls /api/send?action=clawback which hits Jupiter /send/v1/craft-clawback,
+  // partially signs with the invite keypair (derived from invite code), then
+  // returns the partially-signed tx for the wallet to co-sign and broadcast.
+  const doClawback = async (inviteCode) => {
+    if (!inviteCode) { push("ai", "No invite code provided for clawback."); return; }
+    if (!walletFull) { push("ai", "Connect your wallet first to claw back tokens."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+
+    push("ai", `⏳ Crafting clawback transaction…`);
+    try {
+      const serverRes = await fetch("/api/send", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ action: "clawback", inviteCode, sender: walletFull }),
+      });
+      const serverData = await serverRes.json();
+      if (serverData.error) throw new Error(serverData.error);
+
+      const { partiallySignedTx } = serverData;
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const tx       = VersionedTransaction.deserialize(b64ToBytes(partiallySignedTx));
+      const signedTx = await provider.signTransaction(tx);
+
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Clawback transaction failed.");
+
+      push("ai",
+        `Clawback submitted ✓\n\nUnclaimed tokens are being returned to your wallet.\n\n` +
+        `Transaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`
+      );
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+    } catch (err) {
+      push("ai", `Clawback failed: ${err?.message || "Unknown error"}. Please try again.`);
     }
   };
 
@@ -3600,7 +3622,17 @@ Order: \`${orderKey.slice(0,20)}…\`
                 const status = inv.status || (type === "pending" ? "Unclaimed" : inv.claimed ? "Claimed" : "Clawed back");
                 return `${i+1}. **${amt} ${tok}** — ${status}`;
               }).join("\n");
-              push("ai", text + `\n\n**${type === "pending" ? "Pending Invites" : "Send History"}**\n${lines}\n\nTo clawback unclaimed tokens, visit [jup.ag/send](https://jup.ag/send).`);
+              // For pending invites, also attach clawback buttons as structured data
+              const clawbackItems = type === "pending"
+                ? items.slice(0, 10).map(inv => ({
+                    code:   inv.inviteCode || inv.code || null,
+                    amount: inv.amount || inv.tokenAmount || "?",
+                    token:  inv.token  || inv.mint        || "token",
+                  })).filter(i => i.code)
+                : [];
+              push("ai", text + `\n\n**${type === "pending" ? "Pending Invites" : "Send History"}**\n${lines}`, {
+                clawbackItems,
+              });
             }
           } catch {
             push("ai", text + "\n\nCould not fetch send history right now. Try again shortly.");
@@ -3805,6 +3837,19 @@ Order: \`${orderKey.slice(0,20)}…\`
                     style={{ marginTop:12, display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"9px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
                     🔗 Connect Wallet
                   </button>
+                )}
+                {m.clawbackItems?.length > 0 && (
+                  <div style={{ marginTop:12, display:"flex", flexDirection:"column", gap:6 }}>
+                    {m.clawbackItems.map((inv, idx) => (
+                      <div key={idx} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"7px 10px" }}>
+                        <span style={{ fontSize:12, color:T.text2 }}>↩ {inv.amount} {inv.token}</span>
+                        <button onClick={() => doClawback(inv.code)}
+                          style={{ padding:"5px 12px", background:"none", border:`1px solid ${T.border}`, borderRadius:7, color:T.text2, fontSize:11, cursor:"pointer", whiteSpace:"nowrap" }}>
+                          Claw Back
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -4732,6 +4777,28 @@ Order: \`${orderKey.slice(0,20)}…\`
                 style={{ width:"100%", padding:"11px", background: (!sendCfg.amount || sendStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
                 {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `📤 Send ${sendCfg.amount||""} ${sendCfg.token} via Invite Link`}
               </button>
+
+              {sendStatus === "done" && sendLink && (
+                <div style={{ marginTop:4, marginBottom:8, background:T.tealBg, border:`1px solid ${T.teal}44`, borderRadius:10, padding:"12px 14px" }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:T.teal, marginBottom:6 }}>✅ Invite link ready — share to recipient</div>
+                  <div style={{ fontSize:11, color:T.text2, wordBreak:"break-all", background:T.bg, borderRadius:6, padding:"6px 10px", marginBottom:8, fontFamily:"monospace" }}>
+                    {sendLink}
+                  </div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={() => navigator.clipboard.writeText(sendLink)}
+                      style={{ flex:1, padding:"8px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                      📋 Copy Link
+                    </button>
+                    <button onClick={() => {
+                      const code = sendLink.split("code=")[1];
+                      if (code) doClawback(code);
+                    }}
+                      style={{ flex:1, padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
+                      ↩ Claw Back
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <button onClick={() => setShowSend(false)}
                 style={{ width:"100%", padding:"9px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
