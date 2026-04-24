@@ -22,13 +22,18 @@ function generateInviteCode() {
 }
 
 async function inviteCodeToKeypair(code) {
-  const data = new TextEncoder().encode(code);
+  // Jupiter derives the invite keypair from SHA-256("invite:" + code)
+  const data = new TextEncoder().encode("invite:" + code);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   return Keypair.fromSeed(new Uint8Array(hashBuffer));
 }
 
 function partialSignWithInviteKeypair(tx, inviteKeypair) {
-  const inviteIdx = tx.message.staticAccountKeys.findIndex(
+  // staticAccountKeys exists on MessageV0; for legacy Message use accountKeys
+  const keys = tx.message.staticAccountKeys ?? tx.message.accountKeys;
+  if (!keys) throw new Error("Transaction message has no account keys.");
+
+  const inviteIdx = keys.findIndex(
     key => key.equals(inviteKeypair.publicKey)
   );
   if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
