@@ -34,7 +34,15 @@ export default async function handler(req, res) {
     }
 
     const response = await fetch(targetUrl, fetchOptions);
-    const data = await response.json();
+    // Safe parse: some endpoints (e.g. Lock API) return empty body or HTML on error.
+    // response.json() would throw "Unexpected end of JSON input" in those cases.
+    const text = await response.text();
+    let data;
+    try {
+      data = text.trim() ? JSON.parse(text) : {};
+    } catch {
+      data = { error: `Non-JSON response (${response.status}): ${text.slice(0, 200)}` };
+    }
     return res.status(response.status).json(data);
 
   } catch (err) {
