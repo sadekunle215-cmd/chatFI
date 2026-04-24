@@ -1153,7 +1153,7 @@ export default function JupChat() {
       if (res.error) throw new Error(res.error);
       if (!res.transaction) throw new Error("No transaction returned from lock builder.");
 
-      // SDK returns a legacy Transaction (not VersionedTransaction)
+      // Build and sign the real transaction returned by the lock API
       const bytes  = b64ToBytes(res.transaction);
       const tx     = Transaction.from(bytes);
       const signed = await provider.signTransaction(tx);
@@ -1163,6 +1163,18 @@ export default function JupChat() {
       });
       const sig = rpcRes?.result;
       if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      // Wait for real on-chain confirmation before showing success
+      push("ai", `Confirming lock on-chain… ⏳`);
+      const rpcConn = new (await import("@solana/web3.js")).Connection(
+        process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com", "confirmed"
+      );
+      const confirmation = await rpcConn.confirmTransaction({
+        signature:           sig,
+        blockhash:           res.blockhash,
+        lastValidBlockHeight: res.lastValidBlockHeight,
+      }, "confirmed");
+      if (confirmation.value?.err) throw new Error(`On-chain error: ${JSON.stringify(confirmation.value.err)}`);
 
       setLockStatus("done");
       setLockResult({ lockId: res.baseKey, txSig: sig });
@@ -1191,7 +1203,6 @@ export default function JupChat() {
       if (res.error) throw new Error(res.error);
       if (!res.transaction) throw new Error("No transaction returned from claim builder.");
 
-      // SDK returns a legacy Transaction
       const bytes  = b64ToBytes(res.transaction);
       const tx     = Transaction.from(bytes);
       const signed = await provider.signTransaction(tx);
@@ -1201,6 +1212,19 @@ export default function JupChat() {
       });
       const sig = rpcRes?.result;
       if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      // Confirm on-chain before declaring success
+      push("ai", `Confirming claim on-chain… ⏳`);
+      const rpcConn2 = new (await import("@solana/web3.js")).Connection(
+        process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com", "confirmed"
+      );
+      const conf2 = await rpcConn2.confirmTransaction({
+        signature:           sig,
+        blockhash:           res.blockhash,
+        lastValidBlockHeight: res.lastValidBlockHeight,
+      }, "confirmed");
+      if (conf2.value?.err) throw new Error(`On-chain error: ${JSON.stringify(conf2.value.err)}`);
+
       push("ai", `Vested tokens claimed ✓\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
       await fetchLocks();
     } catch (err) {
