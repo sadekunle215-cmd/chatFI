@@ -1150,24 +1150,17 @@ export default function JupChat() {
       const dec = tokenDecimalsRef.current[lockCfg.token?.toUpperCase()] || 6;
       const amtRaw = Math.floor(parseFloat(amount) * Math.pow(10, dec)).toString();
 
-      // Call Jupiter Lock API directly — proxy fails to handle Lock API's response (empty body / non-JSON)
-      const lockRaw = await fetch(`${JUP_LOCK_API}/create`, {
+      const res = await jupFetch(`${JUP_LOCK_API}/create`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           funder:      walletFull,
           recipient:   recipientAddr,
           mint,
           amount:      amtRaw,
           cliffTime:   cliffSecs,
           vestingTime: vestingSecs,
-        }),
+        },
       });
-      const lockText = await lockRaw.text();
-      if (!lockText.trim()) throw new Error(`Lock API returned empty response (${lockRaw.status}). Check token/amount.`);
-      let res;
-      try { res = JSON.parse(lockText); }
-      catch { throw new Error(`Lock API error (${lockRaw.status}): ${lockText.slice(0, 150)}`); }
       if (res.error) throw new Error(res.error?.message || res.error);
       if (!res.transaction) throw new Error("No transaction returned from Lock API.");
 
@@ -1198,17 +1191,10 @@ export default function JupChat() {
     if (!provider || !walletFull) { push("ai", "Wallet not connected."); return; }
     setClaimingLock(lockId || lockPubkey);
     try {
-      // Call Jupiter Lock claim API directly — same proxy JSON parse issue as create
-      const claimRaw = await fetch(`${JUP_LOCK_API}/claim`, {
+      const res = await jupFetch(`${JUP_LOCK_API}/claim`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lockId: lockId || lockPubkey, recipient: walletFull }),
+        body: { lockId: lockId || lockPubkey, recipient: walletFull },
       });
-      const claimText = await claimRaw.text();
-      if (!claimText.trim()) throw new Error(`Claim API returned empty response (${claimRaw.status}).`);
-      let res;
-      try { res = JSON.parse(claimText); }
-      catch { throw new Error(`Claim API error (${claimRaw.status}): ${claimText.slice(0, 150)}`); }
       if (res.error) throw new Error(res.error?.message || res.error);
       if (!res.transaction) throw new Error("No transaction returned from Claim API.");
 
