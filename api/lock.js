@@ -1,5 +1,5 @@
 // pages/api/lock.js
-// Requires: npm install @meteora-ag/met-lock-sdk @solana/web3.js bn.js
+// Requires: npm install @meteora-ag/met-lock-sdk @solana/web3.js @solana/spl-token bn.js
 export default async function handler(req, res) {
   // Always return JSON — never let Next.js return an HTML error page
   res.setHeader("Content-Type", "application/json");
@@ -8,15 +8,16 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  let LockClient, Connection, PublicKey, Keypair, Transaction, BN;
+  let LockClient, Connection, PublicKey, Keypair, Transaction, BN, getAssociatedTokenAddressSync;
 
   try {
     ({ LockClient }           = await import("@meteora-ag/met-lock-sdk"));
     ({ Connection, PublicKey, Keypair, Transaction } = await import("@solana/web3.js"));
     ({ default: BN }          = await import("bn.js"));
+    ({ getAssociatedTokenAddressSync } = await import("@solana/spl-token"));
   } catch (importErr) {
     return res.status(500).json({
-      error: `SDK not installed. Run: npm install @meteora-ag/met-lock-sdk @solana/web3.js bn.js — ${importErr.message}`,
+      error: `SDK not installed. Run: npm install @meteora-ag/met-lock-sdk @solana/web3.js @solana/spl-token bn.js — ${importErr.message}`,
     });
   }
 
@@ -50,12 +51,26 @@ export default async function handler(req, res) {
 
       const base = Keypair.generate();
 
+      // Derive escrow PDA and its token account explicitly to avoid
+      // "Reached maximum depth for account resolution: escrowToken" error
+      const LOCK_PROGRAM_ID = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
+      const [escrowPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from("escrow"), base.publicKey.toBuffer()],
+        LOCK_PROGRAM_ID
+      );
+      const escrowToken = getAssociatedTokenAddressSync(
+        new PublicKey(resolvedMint),
+        escrowPDA,
+        true // allowOwnerOffCurve — required since escrowPDA is a PDA
+      );
+
       const tx = await client.createVestingEscrowV2({
         base:                base.publicKey,
         sender:              new PublicKey(funder),
         isSenderMultiSig:    false,
         payer:               new PublicKey(funder),
         tokenMint:           new PublicKey(resolvedMint),
+        escrowToken,
         vestingStartTime:    new BN(now),
         cliffTime:           new BN(now + cliffSecsInt),
         frequency,
