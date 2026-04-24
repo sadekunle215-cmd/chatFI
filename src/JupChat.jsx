@@ -1069,7 +1069,10 @@ export default function JupChat() {
         body: formData,
         // NOTE: Do NOT set Content-Type header — browser sets it with boundary automatically
       });
-      const submitData = await submitRes.json();
+      const submitText = await submitRes.text();
+      let submitData;
+      try { submitData = JSON.parse(submitText); }
+      catch { throw new Error(`Submit proxy error (${submitRes.status}): ${submitText.slice(0, 300)}`); }
       if (submitData.error) throw new Error(submitData.error?.message || JSON.stringify(submitData.error));
 
       setStudioStatus("done");
