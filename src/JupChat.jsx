@@ -1390,7 +1390,7 @@ export default function JupChat() {
       // POST /send/v1/craft-send → returns { transaction, inviteLink } (base64 unsigned tx)
       const res = await jupFetch(`${JUP_SEND_API}/craft-send`, {
         method: "POST",
-        body: { inviteSigner: walletFull, tokenMint: mint, amount: amountRaw },
+        body: { sender: walletFull, tokenMint: mint, amount: amountRaw },
       });
       if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
       if (!res.transaction) throw new Error("No transaction returned from Jupiter Send.");
@@ -4648,17 +4648,15 @@ Order: \`${orderKey.slice(0,20)}…\`
               <div style={{ display:"flex", gap:8, marginBottom:10 }}>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token</div>
-                  <select value={sendCfg.token}
-                    onChange={e => {
-                      const sym = e.target.value;
-                      const mint = tokenCacheRef.current[sym] || TOKEN_MINTS[sym] || "";
-                      setSendCfg(c => ({ ...c, token:sym, mint }));
+                  <TokenPicker
+                    value={sendCfg.token}
+                    jupFetch={jupFetch}
+                    onSelect={(sym, mint, decimals) => {
+                      tokenCacheRef.current[sym] = mint;
+                      tokenDecimalsRef.current[sym] = decimals;
+                      setSendCfg(c => ({ ...c, token: sym, mint }));
                     }}
-                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}>
-                    {Object.keys(TOKEN_MINTS).map(sym => (
-                      <option key={sym} value={sym}>{sym}</option>
-                    ))}
-                  </select>
+                  />
                 </div>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount</div>
