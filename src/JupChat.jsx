@@ -580,8 +580,13 @@ export default function JupChat() {
   useEffect(() => {
     fetch("https://developers.jup.ag/docs/llms-full.txt")
       .then(r => r.text())
-      .then(txt => { setJupDocs(txt.slice(0, 6000)); })
-      .catch(() => {});
+      .then(txt => { setJupDocs(txt.slice(0, 40000)); })
+      .catch(() =>
+        fetch("https://developers.jup.ag/docs/llms.txt")
+          .then(r => r.text())
+          .then(txt => setJupDocs(txt.slice(0, 20000)))
+          .catch(() => {})
+      );
   }, []);
 
   // ── Fetch real on-chain vault IDs from /api/multiply GET ────────────────────
@@ -3078,10 +3083,10 @@ Order: \`${orderKey.slice(0,20)}…\`
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5",
+          model: "claude-sonnet-4-20250514",
           max_tokens: 1024,
           system: jupDocs
-            ? `## Jupiter Official API Documentation\n${jupDocs}\n\n---\n\n${SYSTEM_PROMPT}`
+            ? `## Jupiter Official API Documentation (llms-full.txt)\n\n${jupDocs}\n\n---\n\n${SYSTEM_PROMPT}`
             : SYSTEM_PROMPT,
           messages: histRef.current,
         }),
