@@ -1385,7 +1385,8 @@ export default function JupChat() {
     return Array.from(arr).map(b => chars[b % chars.length]).join("");
   };
   const inviteCodeToKeypair = async (code) => {
-    const data       = new TextEncoder().encode(code);
+    // Jupiter derives the invite keypair from SHA-256("invite:" + code)
+    const data       = new TextEncoder().encode("invite:" + code);
     const hashBuffer = await crypto.subtle.digest("SHA-256", data);
     return Keypair.fromSeed(new Uint8Array(hashBuffer));
   };
