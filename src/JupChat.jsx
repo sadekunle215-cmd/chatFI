@@ -1423,11 +1423,27 @@ export default function JupChat() {
       if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
       if (!res.tx)   throw new Error("No transaction returned from Jupiter Send.");
 
-      // Step 4: deserialize, partial-sign with invite keypair, then wallet signs
+      // Deserialize transaction
       const tx = VersionedTransaction.deserialize(b64ToBytes(res.tx));
-      tx.sign([inviteKeypair]);                           // partial sign (invite keypair)
+
+      // Step 4: wallet signs first (avoids partial-sign issues with some adapters)
       if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
-      const signedTx = await provider.signTransaction(tx); // wallet adds second signature
+      const signedTx = await provider.signTransaction(tx);
+
+      // Step 5: add invite keypair signature via Web Crypto Ed25519
+      // inviteKeypair.secretKey is 64 bytes — first 32 is the seed
+      const msgBytes = signedTx.message.serialize();
+      const inviteIdx = signedTx.message.staticAccountKeys.findIndex(
+        key => key.equals(inviteKeypair.publicKey)
+      );
+      if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
+      const cryptoPrivKey = await crypto.subtle.importKey(
+        "raw", inviteKeypair.secretKey.slice(0, 32),
+        { name: "Ed25519" }, false, ["sign"]
+      );
+      signedTx.signatures[inviteIdx] = new Uint8Array(
+        await crypto.subtle.sign("Ed25519", cryptoPrivKey, msgBytes)
+      );
 
       // Step 5: broadcast
       const rpcRes = await jupFetch(SOLANA_RPC, {
