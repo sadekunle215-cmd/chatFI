@@ -1057,22 +1057,37 @@ export default function JupChat() {
       const signed = await provider.signTransaction(tx);
       const signedB64 = bytesToB64(signed.serialize());
 
-      // ── Step 5: Submit via multipart/form-data to /dbc-pool/submit ──
+      // ── Step 5: Submit signed tx via multipart/form-data ──
+      // headerImage is optional (Studio page banner only, not on-chain).
+      // We build the FormData and POST directly — Jupiter's submit endpoint
+      // does support CORS for the submit call (unlike create-tx).
       const formData = new FormData();
       formData.append("transaction", signedB64);
       formData.append("owner", walletFull);
       formData.append("content", description || "");
-      formData.append("headerImage", new File([studioImage.file], "header", { type: imageType }));
+      // headerImage optional — skip to keep request simple and avoid proxy issues
 
-      const submitRes = await fetch("/api/studio-submit", {
-        method: "POST",
-        body: formData,
-        // NOTE: Do NOT set Content-Type header — browser sets it with boundary automatically
-      });
-      const submitText = await submitRes.text();
+      // Try direct first (submit supports CORS), fall back to proxy route
       let submitData;
-      try { submitData = JSON.parse(submitText); }
-      catch { throw new Error(`Submit proxy error (${submitRes.status}): ${submitText.slice(0, 300)}`); }
+      try {
+        const submitRes = await fetch("https://api.jup.ag/studio/v1/dbc-pool/submit", {
+          method: "POST",
+          body: formData,
+        });
+        const submitText = await submitRes.text();
+        try { submitData = JSON.parse(submitText); }
+        catch { throw new Error(`Jupiter submit error (${submitRes.status}): ${submitText.slice(0, 300)}`); }
+      } catch (directErr) {
+        // Fallback: try via proxy route if direct fails
+        console.warn("Direct submit failed, trying proxy:", directErr.message);
+        const submitRes2 = await fetch("/api/studio-submit", {
+          method: "POST",
+          body: formData,
+        });
+        const submitText2 = await submitRes2.text();
+        try { submitData = JSON.parse(submitText2); }
+        catch { throw new Error(`Submit proxy error (${submitRes2.status}): ${submitText2.slice(0, 300)}`); }
+      }
       if (submitData.error) throw new Error(submitData.error?.message || JSON.stringify(submitData.error));
 
       setStudioStatus("done");
