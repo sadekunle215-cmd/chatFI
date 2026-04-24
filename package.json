@@ -15,7 +15,9 @@
     "@solana/spl-token": "^0.4.9",
     "@jup-ag/lend": "latest",
     "@jup-ag/lend-read": "latest",
-    "bn.js": "^5.2.1"
+    "bn.js": "^5.2.1",
+    "@reown/appkit": "^1.7.3",
+    "@reown/appkit-adapter-solana": "^1.7.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
