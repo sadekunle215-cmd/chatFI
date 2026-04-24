@@ -1841,26 +1841,38 @@ export default function JupChat() {
 
   // Build the direct WC deep link for a wallet given a WC URI.
   // These links open the wallet app straight to its WalletConnect approve screen.
+  // Build the WC deep link that opens a wallet app straight to its approve/confirm screen.
+  // Each wallet has a different scheme — custom URI schemes (phantom://, solflare://) are the
+  // most reliable because Chrome passes them directly to the installed app without opening a
+  // browser page first. Universal links (https://) are used as fallback where custom schemes
+  // are unavailable.
   const getWcDirectLink = (walletName, wcUriStr) => {
-    const enc = encodeURIComponent(wcUriStr);
+    const enc     = encodeURIComponent(wcUriStr);
+    const pageUrl = encodeURIComponent(window.location.href);
+    const appUrl  = encodeURIComponent(window.location.origin);
     switch (walletName) {
       case "Phantom":
-        // Phantom universal link: opens WC pairing screen directly
-        return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta&wc_uri=${enc}`;
+        // phantom:// custom scheme — Chrome hands this off directly to Phantom app,
+        // which opens straight to the WalletConnect approve screen.
+        return `phantom://wc?uri=${enc}`;
       case "Solflare":
-        return `https://solflare.com/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta&wc_uri=${enc}`;
+        // solflare:// custom scheme — opens the WC approve dialog in Solflare.
+        return `solflare://wc?uri=${enc}`;
       case "Jupiter":
-        return `https://jup.ag/wc?uri=${enc}`;
+        // Jupiter Mobile has no wc:// endpoint. Open the current page inside Jupiter's
+        // in-app browser — the WC relay session is still waiting so it auto-connects.
+        return `https://jup.ag/ul/browse/${pageUrl}?ref=${appUrl}`;
       case "Backpack":
-        return `https://backpack.app/wc?uri=${enc}`;
+        return `backpack://wc?uri=${enc}`;
       case "OKX":
-        return `okx://wallet/wc?uri=${enc}`;
+        // OKX universal link wrapping their custom scheme.
+        return `https://www.okx.com/download?deeplink=${encodeURIComponent("okx://wallet/dapp/url?dappUrl=" + pageUrl)}`;
       case "Trust Wallet":
         return `https://link.trustwallet.com/wc?uri=${enc}`;
       case "Coin98":
         return `coin98://wc?uri=${enc}`;
       default:
-        return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta&wc_uri=${enc}`;
+        return `phantom://wc?uri=${enc}`;
     }
   };
 
@@ -1897,13 +1909,23 @@ export default function JupChat() {
       // doesn't block the navigation to an external app URL.
       if (preferredWallet && isMobile) {
         const directLink = getWcDirectLink(preferredWallet, uri);
-        const a = document.createElement("a");
-        a.href = directLink;
-        a.target = "_blank";
-        a.rel = "noreferrer";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        // Custom URI schemes (phantom://, solflare://, backpack://) MUST use location.href —
+        // Chrome blocks window.open() for custom schemes but allows location.href.
+        // Universal https:// links (Jupiter, OKX, Trust) use a hidden <a> click instead
+        // so they open in a new tab and don't navigate away from this page.
+        if (directLink.startsWith("https://")) {
+          const a = document.createElement("a");
+          a.href = directLink;
+          a.target = "_blank";
+          a.rel = "noreferrer";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } else {
+          // Custom scheme: location.href passes control to the OS which opens the wallet app.
+          // The WC relay continues running — when the user approves, approval() resolves here.
+          window.location.href = directLink;
+        }
       }
 
       // Await wallet approval — relay stays open while user approves in their wallet
@@ -5057,7 +5079,9 @@ Order: \`${orderKey.slice(0,20)}…\`
                           </span>
                           <span style={{ flex:1 }}>
                             <span style={{ fontWeight:600, display:"block" }}>{w.name}</span>
-                            <span style={{ fontSize:11, color:T.text3 }}>Tap to open &amp; approve connection</span>
+                            <span style={{ fontSize:11, color:T.text3 }}>
+                              {w.name === "Jupiter" ? "Opens Jupiter app → auto-connects" : "Tap to open → approve connection"}
+                            </span>
                           </span>
                           <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>→</span>
                         </button>
@@ -5083,10 +5107,14 @@ Order: \`${orderKey.slice(0,20)}…\`
                           </div>
                           <button onClick={() => {
                               if (wcUri && wcPreferredWallet) {
-                                const a = document.createElement("a");
-                                a.href = getWcDirectLink(wcPreferredWallet, wcUri);
-                                a.target = "_blank"; a.rel = "noreferrer";
-                                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                                const link = getWcDirectLink(wcPreferredWallet, wcUri);
+                                if (link.startsWith("https://")) {
+                                  const a = document.createElement("a");
+                                  a.href = link; a.target = "_blank"; a.rel = "noreferrer";
+                                  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                                } else {
+                                  window.location.href = link;
+                                }
                               }
                             }}
                             style={{ width:"100%", padding:"10px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
