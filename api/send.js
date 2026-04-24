@@ -5,7 +5,6 @@
 import { Keypair, VersionedTransaction } from "@solana/web3.js";
 import nacl from "tweetnacl";
 
-const SOLANA_RPC = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
 const JUP_SEND_API = "https://api.jup.ag/send/v1";
 
 function b64ToBytes(b64) {
@@ -23,18 +22,13 @@ function generateInviteCode() {
 }
 
 async function inviteCodeToKeypair(code) {
-  // Jupiter derives the invite keypair from SHA-256("invite:" + code)
-  const data = new TextEncoder().encode("invite:" + code);
+  const data = new TextEncoder().encode(code);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   return Keypair.fromSeed(new Uint8Array(hashBuffer));
 }
 
 function partialSignWithInviteKeypair(tx, inviteKeypair) {
-  // staticAccountKeys exists on MessageV0; for legacy Message use accountKeys
-  const keys = tx.message.staticAccountKeys ?? tx.message.accountKeys;
-  if (!keys) throw new Error("Transaction message has no account keys.");
-
-  const inviteIdx = keys.findIndex(
+  const inviteIdx = tx.message.staticAccountKeys.findIndex(
     key => key.equals(inviteKeypair.publicKey)
   );
   if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
@@ -79,21 +73,10 @@ export default async function handler(req, res) {
         method: "POST", headers: jupHeaders,
         body: JSON.stringify({ inviteSigner, sender }),
       });
-      const craftText = await craftRes.text();
-      console.log("[api/send] craft-clawback status:", craftRes.status, "body:", craftText.slice(0, 500));
-
-      let craftData;
-      try { craftData = JSON.parse(craftText); } catch {
-        return res.status(502).json({ error: `Jupiter returned non-JSON: ${craftText.slice(0, 200)}` });
-      }
-
-      const jupError = craftData.error || craftData.message || craftData.errors?.[0]?.message;
-      if (jupError || !craftRes.ok) {
-        const msg = jupError
-          ? (typeof jupError === "object" ? JSON.stringify(jupError) : String(jupError))
-          : `Jupiter craft-clawback failed (HTTP ${craftRes.status})`;
-        return res.status(502).json({ error: msg });
-      }
+      const craftData = await craftRes.json();
+      if (craftData.error) return res.status(502).json({
+        error: typeof craftData.error === "object" ? JSON.stringify(craftData.error) : craftData.error,
+      });
       if (!craftData.tx) return res.status(502).json({ error: "No transaction returned from Jupiter clawback." });
 
       const tx = VersionedTransaction.deserialize(b64ToBytes(craftData.tx));
@@ -114,25 +97,11 @@ export default async function handler(req, res) {
       method: "POST", headers: jupHeaders,
       body: JSON.stringify({ inviteSigner, sender, amount, mint }),
     });
-
-    // Log raw response for debugging
-    const craftText = await craftRes.text();
-    console.log("[api/send] craft-send status:", craftRes.status, "body:", craftText.slice(0, 500));
-
-    let craftData;
-    try { craftData = JSON.parse(craftText); } catch {
-      return res.status(502).json({ error: `Jupiter returned non-JSON: ${craftText.slice(0, 200)}` });
-    }
-
-    // Jupiter may return errors as { error }, { message }, { errors: [...] }, or non-2xx with a body
-    const jupError = craftData.error || craftData.message || craftData.errors?.[0]?.message;
-    if (jupError || !craftRes.ok) {
-      const msg = jupError
-        ? (typeof jupError === "object" ? JSON.stringify(jupError) : String(jupError))
-        : `Jupiter craft-send failed (HTTP ${craftRes.status})`;
-      return res.status(502).json({ error: msg });
-    }
-    if (!craftData.tx) return res.status(502).json({ error: `No transaction returned from Jupiter Send. Response: ${craftText.slice(0,200)}` });
+    const craftData = await craftRes.json();
+    if (craftData.error) return res.status(502).json({
+      error: typeof craftData.error === "object" ? JSON.stringify(craftData.error) : craftData.error,
+    });
+    if (!craftData.tx) return res.status(502).json({ error: "No transaction returned from Jupiter Send." });
 
     const tx = VersionedTransaction.deserialize(b64ToBytes(craftData.tx));
     partialSignWithInviteKeypair(tx, inviteKeypair);
