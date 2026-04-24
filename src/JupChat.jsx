@@ -1,6 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Transaction, VersionedTransaction } from "@solana/web3.js";
 
+// ── Reown AppKit (wallet connection) ────────────────────────────────────────
+import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect } from "@reown/appkit/react";
+import { SolanaAdapter } from "@reown/appkit-adapter-solana";
+import { solana as solanaMainnet } from "@reown/appkit/networks";
+
 // ─── Jupiter API endpoints (verified against developers.jup.ag docs Apr 2026) ─
 const JUP_BASE         = "https://api.jup.ag";
 const JUP_LITE         = "https://lite-api.jup.ag";
@@ -217,6 +222,23 @@ const T = {
   mono:     "'JetBrains Mono',monospace",
 };
 
+// ── Reown AppKit Init ────────────────────────────────────────────────────────
+// Get a free projectId at https://cloud.reown.com
+const REOWN_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f"; // replace with your own
+const _solanaAdapter = new SolanaAdapter();
+createAppKit({
+  adapters: [_solanaAdapter],
+  networks: [solanaMainnet],
+  projectId: REOWN_PROJECT_ID,
+  metadata: {
+    name: "ChatFi",
+    description: "ChatFi — Your personal AI tools on Solana",
+    url: typeof window !== "undefined" ? window.location.origin : "https://chatfi.app",
+    icons: ["https://jup.ag/favicon.ico"],
+  },
+  features: { analytics: false },
+});
+
 const fmt = (text = "") =>
   text
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
@@ -334,6 +356,13 @@ export default function JupChat() {
   const [walletFull, setWalletFull] = useState(null);
   const [prices, setPrices]       = useState({});
   const [portfolio, setPortfolio] = useState({});
+
+  // ── Reown AppKit hooks ─────────────────────────────────────────────────────
+  const { open: reownOpen }                                     = useAppKit();
+  const { address: reownAddress, isConnected: reownConnected }  = useAppKitAccount();
+  const { walletProvider: reownProvider }                       = useAppKitProvider("solana");
+  const { disconnect: reownDisconnect }                         = useDisconnect();
+  const prevConnectedRef = useRef(false);
 
   // Swap — stores symbol + resolved mint + decimals for any token
   const [showSwap, setShowSwap]   = useState(false);
@@ -2001,16 +2030,8 @@ export default function JupChat() {
   };
 
   const disconnectWallet = () => {
-    try {
-      if (wcClientRef.current && wcSessionRef.current?.topic) {
-        wcClientRef.current.disconnect({ topic: wcSessionRef.current.topic, reason: { code: 0, message: "User disconnected" } }).catch(() => {});
-      }
-    } catch {}
-    wcSessionRef.current = null;
-    setWallet(null);
-    setWalletFull(null);
-    setPortfolio({});
-    setMsgs(m => [...m, { id: Date.now(), role: "ai", text: "👋 Wallet disconnected. Connect again anytime to access your portfolio and trading features." }]);
+    // Reown handles session teardown; our sync useEffect clears local state when reownConnected → false
+    reownDisconnect();
   };
 
   // ── Wallet Standard detection + mobile deep-link registry ───────────────────
@@ -2261,145 +2282,10 @@ export default function JupChat() {
   }, [showWalletModal]);
 
   // ── Wallet connect ──────────────────────────────────────────────────────────
-  const connectWallet = async (pendingSwap) => {
-    pendingSwapRef.current = pendingSwap;
-
-    // Auto-connect if a wallet is already injected (Jupiter Mobile, Phantom, etc.)
-    // This means tapping "Connect Wallet" inside Jupiter Mobile app connects instantly
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-    if (isMobile) {
-      // 1. Jupiter Mobile in-app browser — highest priority
-      const jupProvider =
-        (window?.solana?.isJupiter ? window.solana : null) ||
-        window?.jupiter?.solana ||
-        window?.jupiter || null;
-      if (jupProvider && typeof jupProvider.connect === "function") {
-        await doConnectWith({ name: "Jupiter", type: "legacy", connect: async () => jupProvider });
-        return;
-      }
-      // 2. Any other injected wallet (Phantom, Backpack, Solflare, OKX, etc.)
-      const anyProvider =
-        window?.phantom?.solana ||
-        window?.backpack?.solana ||
-        (window?.solflare?.isSolflare ? window.solflare : null) ||
-        window?.okxwallet?.solana ||
-        window?.trustwallet?.solana ||
-        window?.coin98?.sol ||
-        window?.solana || null;
-      if (anyProvider && typeof anyProvider.connect === "function") {
-        // Identify wallet name for a nicer message
-        let name = "Wallet";
-        if (anyProvider.isPhantom)  name = "Phantom";
-        else if (anyProvider.isSolflare) name = "Solflare";
-        else if (anyProvider.isBackpack) name = "Backpack";
-        else if (anyProvider.isTrust)    name = "Trust Wallet";
-        await doConnectWith({ name, type: "legacy", connect: async () => anyProvider });
-        return;
-      }
-    } else {
-      // Desktop: always show modal so user can pick which extension wallet to use.
-      // Don't auto-connect — Phantom/Solflare require a user-triggered popup,
-      // and the modal lets users choose between multiple installed wallets.
-    }
-
-    // No wallet detected — open modal so user can scan QR or pick a wallet
-    setShowWalletModal(true);
-  };
-
-  const doConnectWith = async (walletEntry) => {
-    // Download links — open in new tab
-    if (walletEntry.type === "download") {
-      window.open(walletEntry.deepLink, "_blank");
-      setShowWalletModal(false);
-      return;
-    }
-
-    // Mobile deep-links: open this dapp URL inside the wallet's in-app browser.
-    // This is the ONLY reliable way from Chrome mobile — custom URI schemes like
-    // phantom:// are blocked/redirect-looped by Chrome. Instead we send the user
-    // to the wallet's universal "browse to URL" link which opens the wallet app,
-    // loads this page inside its in-app browser (injecting the provider), and the
-    // user can then tap Connect Wallet again — this time the provider is detected.
-    if (walletEntry.type === "deeplink") {
-      const dappUrl = encodeURIComponent(window.location.href);
-      const ref     = encodeURIComponent(window.location.origin);
-      const BROWSE_LINKS = {
-        // Phantom: opens this URL inside Phantom's in-app browser
-        "Phantom":      `https://phantom.app/ul/browse/${encodeURIComponent(window.location.href)}?ref=${ref}`,
-        // Solflare: opens this URL inside Solflare's in-app browser
-        "Solflare":     `https://solflare.com/ul/v1/browse/${encodeURIComponent(window.location.href)}?ref=${ref}`,
-        // Backpack: opens URL in Backpack browser
-        "Backpack":     `https://backpack.app/browse/${encodeURIComponent(window.location.href)}`,
-        // OKX: opens dapp URL in OKX wallet browser
-        "OKX":          `https://www.okx.com/download?deeplink=${encodeURIComponent(`okx://wallet/dapp/url?dappUrl=${dappUrl}`)}`,
-        // Trust Wallet: opens URL inside Trust browser
-        "Trust Wallet": `https://link.trustwallet.com/open_url?coin_id=501&url=${dappUrl}`,
-        // Coin98: opens URL in Coin98 browser
-        "Coin98":       `https://coin98.com/dapp/${encodeURIComponent(window.location.href)}`,
-      };
-      const link = BROWSE_LINKS[walletEntry.name];
-      if (link) {
-        // Use anchor click to preserve user-gesture context — Chrome blocks
-        // programmatic window.location navigations to external app URLs.
-        const a = document.createElement("a");
-        a.href = link;
-        a.target = "_blank";
-        a.rel = "noreferrer";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setShowWalletModal(false);
-        return;
-      }
-      // Fallback for unknown deeplink wallets
-      window.open(walletEntry.deepLink, "_blank");
-      setShowWalletModal(false);
-      return;
-    }
-
-    setShowWalletModal(false);
-    let provider;
-    try {
-      provider = await walletEntry.connect();
-    } catch (err) {
-      push("ai", `Could not get wallet provider for ${walletEntry.name}. Please try again.`);
-      return;
-    }
-
-    try {
-      const resp   = await provider.connect();
-      // Solflare and some wallets put publicKey on the provider, not the connect() response
-      const pubkeyObj = resp?.publicKey || provider?.publicKey;
-      if (!pubkeyObj) throw new Error("No public key returned. Try opening this site inside your wallet's in-app browser.");
-      const pubkey = pubkeyObj.toString();
-      const display = pubkey.slice(0,4) + "…" + pubkey.slice(-4);
-      connectedProviderRef.current = provider;
-      setWallet(display);
-      setWalletFull(pubkey);
-      const balances = await fetchSolanaBalances(pubkey);
-      setPortfolio(balances);
-      const live = await fetchPrices();
-      const solUSD = balances.SOL && live.SOL ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})` : "";
-      const pendingSwap = pendingSwapRef.current;
-      if (pendingSwap) {
-        setSwapCfg(c => ({
-          ...c,
-          from: pendingSwap.from || "SOL",
-          fromMint: tokenCacheRef.current[pendingSwap.from?.toUpperCase()] || TOKEN_MINTS[pendingSwap.from?.toUpperCase()] || TOKEN_MINTS.SOL,
-          fromDecimals: tokenDecimalsRef.current[pendingSwap.from?.toUpperCase()] || 9,
-          to: pendingSwap.to || "JUP",
-          toMint: tokenCacheRef.current[pendingSwap.to?.toUpperCase()] || TOKEN_MINTS[pendingSwap.to?.toUpperCase()] || TOKEN_MINTS.JUP,
-          toDecimals: tokenDecimalsRef.current[pendingSwap.to?.toUpperCase()] || 6,
-          amount: "",
-        }));
-        setShowSwap(true);
-        push("ai", `Wallet connected. You have **${(balances.SOL||0).toFixed(4)} SOL**${solUSD} available. Swap interface is ready below.`);
-      } else {
-        push("ai", `Wallet connected ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}${Object.entries(balances).filter(([k])=>k!=="SOL").map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("")}\n\nWhat would you like to do?`);
-      }
-    } catch (err) {
-      push("ai", err?.code === 4001 ? "Wallet connection declined." : `Failed to connect ${walletEntry.name} — ${err?.message || "please try again."}`);
-    }
+  // ── Connect wallet — delegates to Reown AppKit modal ───────────────────────
+  const connectWallet = (pendingSwap) => {
+    pendingSwapRef.current = pendingSwap || null;
+    reownOpen(); // Reown handles wallet detection, QR, WalletConnect, mobile deep links
   };
 
   // ── Get active provider for signing ─────────────────────────────────────────
@@ -2868,6 +2754,43 @@ Order: \`${orderKey.slice(0,20)}…\`
     setMsgs(m => [...m, { id, role, text, ...extra }]);
     return id;
   };
+
+  // ── Reown connection sync ────────────────────────────────────────────────────
+  // Keeps local wallet/walletFull state in sync with Reown's connected account.
+  useEffect(() => {
+    if (reownConnected && reownAddress) {
+      const justConnected = !prevConnectedRef.current;
+      prevConnectedRef.current = true;
+      const display = reownAddress.slice(0,4) + "…" + reownAddress.slice(-4);
+      setWallet(display);
+      setWalletFull(reownAddress);
+      if (reownProvider) connectedProviderRef.current = reownProvider;
+      fetchSolanaBalances(reownAddress).then(balances => {
+        setPortfolio(balances);
+        if (justConnected) {
+          fetchPrices().then(live => {
+            const solUSD = balances.SOL && live.SOL
+              ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})`
+              : "";
+            push("ai",
+              `Wallet connected ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}` +
+              Object.entries(balances).filter(([k])=>k!=="SOL")
+                .map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("") +
+              "\n\nWhat would you like to do?"
+            );
+          }).catch(()=>{});
+        }
+      }).catch(()=>{});
+    } else if (!reownConnected && prevConnectedRef.current) {
+      prevConnectedRef.current = false;
+      connectedProviderRef.current = null;
+      setWallet(null);
+      setWalletFull(null);
+      setPortfolio({});
+      push("ai", "👋 Wallet disconnected. Connect again anytime to access your portfolio and trading features.");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reownConnected, reownAddress, reownProvider]);
 
   // ── Send message to Claude ──────────────────────────────────────────────────
   const send = async (override) => {
@@ -5024,159 +4947,6 @@ Order: \`${orderKey.slice(0,20)}…\`
           <div ref={endRef}/>
         </div>
 
-        {/* Wallet selection modal */}
-        {showWalletModal && (
-          <div style={{ position:"fixed", inset:0, zIndex:200, background:"rgba(0,0,0,0.55)", display:"flex", alignItems:"flex-end", justifyContent:"center" }}
-            onClick={e => { if (e.target === e.currentTarget) { cancelWalletConnect(); setShowWalletModal(false); } }}>
-            <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:"20px 20px 0 0", padding:"20px 20px 32px", width:"100%", maxWidth:480, boxShadow:"0 -8px 40px rgba(0,0,0,0.25)", maxHeight:"85vh", overflowY:"auto" }}>
-              {/* Handle bar */}
-              <div style={{ width:40, height:4, background:T.border, borderRadius:4, margin:"0 auto 18px" }}/>
-
-
-                  <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:4 }}>Connect Wallet</div>
-                  <div style={{ fontSize:12, color:T.text3, marginBottom:18 }}>
-                    {walletList.filter(w=>w.detected).length > 0
-                      ? "Detected wallets shown first. Tap to connect."
-                      : "No wallet detected in this browser. Open this page inside your wallet app, or tap a wallet below to launch it."}
-                  </div>
-
-                  {/* Mobile wallet picker — tap wallet → WC URI generates → wallet app opens straight to approve screen */}
-                  {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
-                    <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:8 }}>
-
-                      {/* Detected wallets: already injected in-app browser — connect directly, no WC needed */}
-                      {walletList.filter(w => w.detected).map((w, i) => (
-                        <button key={"det-"+i} onClick={() => doConnectWith(w)} className="hov-row"
-                          style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
-                          <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                            {typeof w.icon==="string"&&(w.icon.startsWith("data:")||w.icon.startsWith("http"))
-                              ? <img src={w.icon} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={w.name}/>
-                              : <span style={{ fontSize:22 }}>{w.icon}</span>}
-                          </span>
-                          <span style={{ flex:1 }}>
-                            <span style={{ fontWeight:600, display:"block" }}>{w.name}</span>
-                            <span style={{ fontSize:11, color:T.green }}>Detected — tap to connect</span>
-                          </span>
-                          <span style={{ fontSize:11, color:T.green, fontWeight:600, background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, padding:"2px 7px" }}>Detected</span>
-                        </button>
-                      ))}
-
-                      {/* Undetected wallets: tap → generate WC URI → immediately open wallet to approve screen */}
-                      {wcStatus !== "loading" && wcStatus !== "waiting" && [
-                        { name:"Phantom",      icon: WALLET_LOGOS["Phantom"] },
-                        { name:"Solflare",     icon: WALLET_LOGOS["Solflare"] },
-                        { name:"Jupiter",      icon: WALLET_LOGOS["Jupiter"] },
-                        { name:"Backpack",     icon: WALLET_LOGOS["Backpack"] },
-                        { name:"OKX",          icon: WALLET_LOGOS["OKX"] },
-                        { name:"Trust Wallet", icon: WALLET_LOGOS["Trust Wallet"] },
-                        { name:"Coin98",       icon: WALLET_LOGOS["Coin98"] },
-                      ].filter(w => !walletList.find(l => l.name === w.name && l.detected))
-                       .map(w => (
-                        <button key={w.name} onClick={() => initWalletConnect(w.name)} className="hov-row"
-                          style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
-                          <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                            <img src={w.icon} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={w.name} onError={e => { e.target.style.display="none"; }}/>
-                          </span>
-                          <span style={{ flex:1 }}>
-                            <span style={{ fontWeight:600, display:"block" }}>{w.name}</span>
-                            <span style={{ fontSize:11, color:T.text3 }}>
-                              {w.name === "Jupiter" ? "Opens Jupiter app → auto-connects" : "Tap to open → approve connection"}
-                            </span>
-                          </span>
-                          <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>→</span>
-                        </button>
-                      ))}
-
-                      {/* Loading: generating WC URI */}
-                      {wcStatus === "loading" && (
-                        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"14px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:12 }}>
-                          <span className="spinner" style={{ width:18, height:18, border:"2px solid rgba(0,0,0,0.1)", borderTopColor:T.accent, flexShrink:0 }}/>
-                          <span style={{ fontSize:13, color:T.text2 }}>Opening {wcPreferredWallet || "wallet"}…</span>
-                        </div>
-                      )}
-
-                      {/* Waiting: URI sent, user needs to tap Confirm in their wallet app */}
-                      {wcStatus === "waiting" && (
-                        <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:12, padding:"14px" }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-                            <div style={{ width:8, height:8, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite", flexShrink:0 }}/>
-                            <span style={{ fontSize:13, color:T.text1, fontWeight:600 }}>Waiting for approval in {wcPreferredWallet || "your wallet"}…</span>
-                          </div>
-                          <div style={{ fontSize:12, color:T.text3, marginBottom:12 }}>
-                            Switch to your wallet app and tap <strong style={{ color:T.text1 }}>Confirm</strong> to complete the connection.
-                          </div>
-                          <button onClick={() => {
-                              if (wcUri && wcPreferredWallet) {
-                                const link = getWcDirectLink(wcPreferredWallet, wcUri);
-                                if (link.startsWith("https://")) {
-                                  const a = document.createElement("a");
-                                  a.href = link; a.target = "_blank"; a.rel = "noreferrer";
-                                  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-                                } else {
-                                  window.location.href = link;
-                                }
-                              }
-                            }}
-                            style={{ width:"100%", padding:"10px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
-                            Open {wcPreferredWallet || "Wallet"} Again
-                          </button>
-                          <button onClick={() => { try { navigator.clipboard.writeText(wcUri); } catch {} setWcCopied(true); setTimeout(()=>setWcCopied(false),2500); }}
-                            style={{ width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:9, color: wcCopied ? T.green : T.text3, fontSize:12, cursor:"pointer" }}>
-                            {wcCopied ? "Copied" : "Copy URI as fallback"}
-                          </button>
-                        </div>
-                      )}
-
-                    </div>
-                  ) : (
-                    /* Desktop: WalletConnect QR */
-                    <button onClick={() => initWalletConnect(null)} className="hov-row"
-                      style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%", marginBottom:8 }}>
-                      <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", background:T.accent, borderRadius:8, flexShrink:0 }}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>
-                          <path d="M14 14h2v2h-2zM18 14h3M14 18v3M18 18h3v3h-3z"/>
-                        </svg>
-                      </span>
-                      <span style={{ flex:1 }}>
-                        <span style={{ fontWeight:600, display:"block", color:T.accent }}>WalletConnect (QR or URI)</span>
-                        <span style={{ fontSize:11, color:T.text3 }}>Jupiter, Phantom, Backpack + more</span>
-                      </span>
-                      <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>→</span>
-                    </button>
-                  )}
-
-                  {/* Desktop only: detected wallet list (mobile uses its own section above) */}
-                  {!(/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) && walletList.filter(w => w.detected || w.type === "download").length > 0 && (
-                    <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-                      {walletList.filter(w => w.detected || w.type === "download").map((w, i) => (
-                        <button key={i} onClick={() => doConnectWith(w)} className="hov-row"
-                          style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${w.detected ? T.accent+"44" : T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
-                          <span style={{ width:32, textAlign:"center", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
-                            {typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))
-                              ? <img src={w.icon} style={{ width:26, height:26, borderRadius:6, objectFit:"contain" }} alt={w.name} onError={e => { e.target.style.display="none"; e.target.nextSibling.style.display="inline"; }} />
-                              : null}
-                            <span style={{ fontSize:22, display: (typeof w.icon === "string" && (w.icon.startsWith("data:") || w.icon.startsWith("http"))) ? "none" : "inline" }}>{w.icon}</span>
-                          </span>
-                          <span style={{ flex:1, fontWeight: w.detected ? 500 : 400 }}>{w.name}</span>
-                          {w.detected && w.type !== "download" && (
-                            <span style={{ fontSize:11, color:T.green, fontWeight:600, background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, padding:"2px 7px" }}>Detected</span>
-                          )}
-                          {w.type === "download" && (
-                            <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Download →</span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  <button onClick={() => setShowWalletModal(false)}
-                    style={{ marginTop:14, width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
-                    Cancel
-                  </button>
-            </div>
-          </div>
-        )}
 
         {/* PWA Install Banner */}
         {installBanner && (
