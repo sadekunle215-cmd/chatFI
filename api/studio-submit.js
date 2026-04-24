@@ -1,6 +1,9 @@
 // api/studio-submit.js
 // Proxies multipart/form-data POST to Jupiter Studio /dbc-pool/submit
-// Uses CommonJS (module.exports) to match typical Vercel Next.js API route style
+// Uses Node's built-in https module to avoid any fetch/node-fetch issues
+
+const https = require("https");
+const url = require("url");
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -8,7 +11,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // Collect raw body from stream
+    // Collect raw body
     const rawBody = await new Promise((resolve, reject) => {
       const chunks = [];
       req.on("data", (chunk) => chunks.push(chunk));
@@ -17,28 +20,41 @@ module.exports = async function handler(req, res) {
     });
 
     const contentType = req.headers["content-type"] || "";
+    const target = url.parse("https://api.jup.ag/studio/v1/dbc-pool/submit");
 
-    const jupRes = await fetch("https://api.jup.ag/studio/v1/dbc-pool/submit", {
-      method: "POST",
-      headers: {
-        "content-type": contentType,
-        "x-api-key": process.env.JUP_API_KEY || "",
-      },
-      body: rawBody,
+    // Proxy using Node https directly
+    const result = await new Promise((resolve, reject) => {
+      const options = {
+        hostname: target.hostname,
+        path: target.path,
+        method: "POST",
+        headers: {
+          "content-type": contentType,
+          "content-length": rawBody.length,
+          "x-api-key": process.env.JUP_API_KEY || "",
+        },
+      };
+
+      const jupReq = https.request(options, (jupRes) => {
+        const chunks = [];
+        jupRes.on("data", (c) => chunks.push(c));
+        jupRes.on("end", () => resolve({ status: jupRes.statusCode, body: Buffer.concat(chunks).toString() }));
+      });
+
+      jupReq.on("error", reject);
+      jupReq.write(rawBody);
+      jupReq.end();
     });
 
-    // Safe parse — return whatever Jupiter sends back
-    const text = await jupRes.text();
     let data;
-    try { data = JSON.parse(text); }
-    catch { data = { error: text }; }
+    try { data = JSON.parse(result.body); }
+    catch { data = { error: result.body }; }
 
-    return res.status(jupRes.status).json(data);
+    return res.status(result.status).json(data);
   } catch (err) {
-    console.error("studio-submit proxy error:", err);
+    console.error("studio-submit error:", err);
     return res.status(500).json({ error: err.message || "Proxy error" });
   }
 };
 
-// Disable Vercel's default body parser so we get the raw stream
 module.exports.config = { api: { bodyParser: false } };
