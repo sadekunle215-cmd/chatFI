@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Transaction, VersionedTransaction } from "@solana/web3.js";
+import { Transaction, VersionedTransaction, Keypair } from "@solana/web3.js";
 
 // ── Reown AppKit (wallet connection) ────────────────────────────────────────
 import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect } from "@reown/appkit/react";
@@ -1371,6 +1371,25 @@ export default function JupChat() {
   // ── Send — real onchain tx via POST /send/v1/craft-send ─────────────────────
   // Jupiter Send creates a keypair-based invite link. The recipient claims it
   // without needing a wallet upfront. Sender signs; tokens locked until claimed or clawed back.
+  //
+  // Flow per Jupiter docs:
+  //  1. Generate a 12-char invite code client-side
+  //  2. Derive a Keypair from SHA-256 of invite code → this is the inviteSigner
+  //  3. POST craft-send with inviteSigner + sender + amount + mint
+  //  4. Partially sign tx with inviteKeypair, then wallet signs
+  //  5. Broadcast; share invite link so recipient claims via Jupiter Mobile
+  const generateInviteCode = () => {
+    const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+    const arr   = new Uint8Array(12);
+    crypto.getRandomValues(arr);
+    return Array.from(arr).map(b => chars[b % chars.length]).join("");
+  };
+  const inviteCodeToKeypair = async (code) => {
+    const data       = new TextEncoder().encode(code);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    return Keypair.fromSeed(new Uint8Array(hashBuffer));
+  };
+
   const doSend = async () => {
     const { token, amount, mint } = sendCfg;
     if (!amount || parseFloat(amount) <= 0) return;
@@ -1379,43 +1398,55 @@ export default function JupChat() {
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
     if (!mint) { push("ai", `Could not resolve mint for **${token}**. Try searching the token first.`); return; }
 
-    // Derive decimals: SOL=9, USDC/USDT/most SPL=6, BONK=5 etc
-    const decimals = token === "SOL" ? 9 : (tokenDecimalsRef.current[token.toUpperCase()] ?? 6);
+    const decimals  = token === "SOL" ? 9 : (tokenDecimalsRef.current[token.toUpperCase()] ?? 6);
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
 
     setSendStatus("signing");
     setShowSend(false);
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
-      // POST /send/v1/craft-send → returns { transaction, inviteLink } (base64 unsigned tx)
+      // Step 1 & 2: generate invite code + derive keypair
+      const inviteCode    = generateInviteCode();
+      const inviteKeypair = await inviteCodeToKeypair(inviteCode);
+      const inviteSigner  = inviteKeypair.publicKey.toBase58();
+
+      // Step 3: craft the send transaction
       const res = await jupFetch(`${JUP_SEND_API}/craft-send`, {
         method: "POST",
-        body: { sender: walletFull, tokenMint: mint, amount: amountRaw },
+        body: {
+          inviteSigner,
+          sender: walletFull,
+          amount: amountRaw,
+          mint,
+        },
       });
       if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
-      if (!res.transaction) throw new Error("No transaction returned from Jupiter Send.");
+      if (!res.tx)   throw new Error("No transaction returned from Jupiter Send.");
 
-      // Decode + sign
-      const binaryStr = atob(res.transaction);
-      const txBytes   = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
-      const tx = VersionedTransaction.deserialize(txBytes);
+      // Step 4: deserialize, partial-sign with invite keypair, then wallet signs
+      const tx = VersionedTransaction.deserialize(b64ToBytes(res.tx));
+      tx.sign([inviteKeypair]);                           // partial sign (invite keypair)
       if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
-      const signedTx = await provider.signTransaction(tx);
+      const signedTx = await provider.signTransaction(tx); // wallet adds second signature
 
-      // Submit via Solana RPC
-      const signedBytes = signedTx.serialize();
+      // Step 5: broadcast
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedBytes), { encoding:"base64", skipPreflight:true }] },
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
-      const link = res.inviteLink || res.claimLink || res.link || `https://jup.ag/send/claim`;
-      setSendLink(link);
+      const inviteLink = `https://jup.ag/send?code=${inviteCode}`;
+      setSendLink(inviteLink);
       setSendStatus("done");
-      push("ai", `Send submitted ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n🔗 **Invite link:** ${link}\n\nShare this link — the recipient can claim without a wallet. You can claw it back anytime if unclaimed.\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      push("ai",
+        `Send submitted ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n` +
+        `🔗 **Invite link:**\n\`${inviteLink}\`\n\n` +
+        `Share this link — recipient claims via **Jupiter Mobile** (no wallet needed upfront). ` +
+        `Tokens auto-return to you on expiry if unclaimed.\n\n` +
+        `Transaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`
+      );
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
