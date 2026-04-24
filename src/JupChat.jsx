@@ -32,7 +32,7 @@ const JUP_PERPS_API    = `${JUP_BASE}/perps/v1`;         // positions, orders, m
 const JUP_STUDIO_API   = `${JUP_BASE}/studio/v1`;        // DBC token creation, fee claims
 const JUP_LOCK_API     = `${JUP_BASE}/lock/v1`;          // token vesting / locking
 const JUP_ROUTE_API    = `${JUP_BASE}/swap/v1/quote`;    // raw quote with full route breakdown
-const SOLANA_RPC       = process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
+const SOLANA_RPC       = "SOLANA_RPC";
 const SPL_PROGRAM      = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 // JupUSD mint for prediction market deposits
 const JUPUSD_MINT      = "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD";
@@ -706,20 +706,6 @@ export default function JupChat() {
 
   // All Jupiter API calls go through /api/jupiter (Vercel serverless) which injects the API key
   const jupFetch = async (url, options = {}) => {
-    // Solana RPC calls go directly — detect by matching SOLANA_RPC or known RPC hostnames
-    const isRpc = url === SOLANA_RPC ||
-      url.includes("helius-rpc.com") ||
-      url.includes("mainnet-beta.solana.com") ||
-      url.includes("quiknode.pro") ||
-      url.includes("triton.one");
-    if (isRpc) {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: typeof options.body === "string" ? options.body : JSON.stringify(options.body),
-      });
-      return res.json();
-    }
     const payload = { url, method: (options.method || "GET").toUpperCase() };
     if (options.body !== undefined) {
       payload.body = typeof options.body === "string" ? JSON.parse(options.body) : options.body;
@@ -1439,26 +1425,13 @@ export default function JupChat() {
       const tx       = VersionedTransaction.deserialize(b64ToBytes(partiallySignedTx));
       const signedTx = await provider.signTransaction(tx);
 
-      // Step 5: broadcast directly to Solana RPC (not via jupFetch proxy)
-      const rpcRes = await fetch(SOLANA_RPC, {
+      // Step 5: broadcast
+      const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0", id: 1,
-          method: "sendTransaction",
-          params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: false }],
-        }),
-      }).then(r => r.json());
-
-      if (rpcRes?.error) {
-        const rpcMsg = rpcRes.error?.message || JSON.stringify(rpcRes.error);
-        // Surface simulation errors clearly (e.g. insufficient funds)
-        throw new Error(rpcMsg);
-      }
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
+      });
       const signature = rpcRes?.result;
-      if (!signature || typeof signature !== "string") {
-        throw new Error("RPC did not return a transaction signature. Broadcast failed.");
-      }
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
       const inviteLink = `https://jup.ag/send?code=${inviteCode}`;
       setSendLink(inviteLink);
