@@ -29,6 +29,9 @@ const JUP_EARN_API     = `${JUP_BASE}/lend/v1/earn`;   // deposit, withdraw, min
 const JUP_BORROW_API   = `${JUP_BASE}/lend/v1/borrow`;  // borrow vault data (SDK-based ops)
 const JUP_SEND_API     = `${JUP_BASE}/send/v1`;          // craft-send, craft-clawback, pending-invites, invite-history
 const JUP_PERPS_API    = `${JUP_BASE}/perps/v1`;         // positions, orders, markets, open/close
+const JUP_STUDIO_API   = `${JUP_BASE}/studio/v1`;        // DBC token creation, fee claims
+const JUP_LOCK_API     = `${JUP_BASE}/lock/v1`;          // token vesting / locking
+const JUP_ROUTE_API    = `${JUP_BASE}/swap/v1/quote`;    // raw quote with full route breakdown
 const SOLANA_RPC       = "SOLANA_RPC";
 const SPL_PROGRAM      = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 // JupUSD mint for prediction market deposits
@@ -104,7 +107,29 @@ JUPITER PERPS KNOWLEDGE:
 • Liquidation when position value < maintenance margin. Always set stop-loss.
 • Price impact increases with position size relative to pool liquidity.
 
-CRITICAL: ALWAYS reply with raw JSON ONLY. No code fences, no markdown, no text outside the JSON object. Output starts with { and ends with }:
+JUPITER STUDIO KNOWLEDGE:
+• Create tokens on Solana via Dynamic Bonding Curves (DBC) — automated liquidity from day 1.
+• Params: name, symbol, decimals (default 9), initial supply, description, website, twitter.
+• Creator earns buy/sell trading fees from their DBC pool automatically.
+• Claim creator fees: FETCH_STUDIO_FEES shows unclaimed SOL/token fees per DBC pool.
+• Good for: meme coins, project tokens, fan tokens, community launches.
+• DBC ensures tokens are tradeable immediately on Jupiter after creation.
+
+JUPITER LOCK KNOWLEDGE:
+• Lock tokens on-chain with cliff + linear vesting schedules. Non-custodial, on-chain guarantee.
+• Cliff: delay before ANY tokens unlock. After cliff, tokens vest linearly until end of vesting period.
+• Params: token, amount, cliff duration, vesting duration, recipient wallet.
+• Use cases: team vesting, investor allocations, personal time-lock, DAO treasury.
+• FETCH_LOCKS shows all locks where user is creator or recipient.
+• Vested tokens can be claimed progressively — no need to wait for full vest.
+
+JUPITER ROUTING KNOWLEDGE:
+• SHOW_ROUTE reveals the exact DEX path for any swap: which AMMs are used, split %, price impact per hop.
+• Powered by Jupiter's DEX aggregator across Orca, Raydium, Meteora, Lifinity, etc.
+• Useful for: understanding swap execution, comparing routes, verifying slippage before swapping.
+• Route data: routeInfo.marketInfos[] with dex name, input/output amounts, price impact.
+
+ No code fences, no markdown, no text outside the JSON object. Output starts with { and ends with }:
 {
   "text": "your message to the user",
   "action": null,
@@ -146,6 +171,11 @@ Available actions:
 - "FETCH_SEND_HISTORY" → actionData: { "type": "pending"|"history" } — show pending unclaimed invites (with clawback buttons) or full invite history
 - "SHOW_PERPS"       → actionData: { "market": "SOL-PERP"|"BTC-PERP"|"ETH-PERP", "side": "long"|"short", "collateral": "100", "leverage": "10", "reason": "brief why" } — open a perpetuals position. Collateral in USD. Leverage 1–100x.
 - "FETCH_PERPS_POSITIONS" → actionData: {} — show user's open perps positions with close/increase/decrease buttons
+- "SHOW_STUDIO"     → actionData: { "name": "MyToken", "symbol": "MTK", "supply": "1000000", "decimals": "9", "description": "brief token purpose", "website": "", "twitter": "" } — open Jupiter Studio token creation panel (Dynamic Bonding Curve). Pre-fill any fields the user mentioned.
+- "FETCH_STUDIO_FEES" → actionData: {} — check unclaimed DBC creator trading fees for connected wallet
+- "SHOW_LOCK"       → actionData: { "token": "JUP", "amount": "1000", "cliffDays": "90", "vestingDays": "365", "recipient": "" } — lock tokens with cliff+vesting schedule. recipient blank = connected wallet. Pre-fill fields from user message.
+- "FETCH_LOCKS"     → actionData: {} — view all token locks where user is creator or recipient. Shows claimable amounts.
+- "SHOW_ROUTE"      → actionData: { "from": "SOL", "to": "USDC", "amount": "1" } — show full DEX route breakdown for this swap: AMMs used, split percentages, price impact per hop.
 
 Rules:
 - "buy X" / "swap X to Y" / "exchange" → SHOW_SWAP — use EXACT symbol user mentioned even if unknown meme coin
@@ -179,6 +209,11 @@ Rules:
 - "send history" / "past sends" → FETCH_SEND_HISTORY with type:"history"
 - "perps" / "perpetuals" / "long SOL" / "short BTC" / "leveraged trade" / "futures" / "open long" / "open short" → SHOW_PERPS — pre-fill market + side from user intent
 - "my perps" / "my futures positions" / "open perps positions" / "close perp" → FETCH_PERPS_POSITIONS
+- "create token" / "launch token" / "mint token" / "DBC" / "dynamic bonding curve" / "token studio" / "launch on jupiter" → SHOW_STUDIO — open creation panel, pre-fill any params mentioned
+- "my creator fees" / "claim creator fees" / "DBC fees" / "studio fees" / "unclaimed fees" → FETCH_STUDIO_FEES
+- "lock tokens" / "vesting" / "lock JUP" / "lock SOL" / "lock my tokens" / "team vesting" / "investor lock" → SHOW_LOCK — open lock panel, pre-fill token/amount/cliff/vesting from user message
+- "my locks" / "vested tokens" / "claim vested" / "locked tokens" / "view locks" / "my vesting" → FETCH_LOCKS
+- "show route" / "how is swap routed" / "which DEX" / "route breakdown" / "swap path" / "which AMM" → SHOW_ROUTE
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
 - CRITICAL — SHOW_RECURRING is fully supported. When user asks for a recurring/DCA order, you MUST return action:"SHOW_RECURRING" with all fields pre-filled from the user's message. Never tell the user to do it manually.`;
@@ -194,6 +229,9 @@ const SUGGESTIONS = [
   "Top trending tokens today",
   "Arsenal vs Man City prediction",
   "Show earn vaults",
+  "Create a token on Jupiter Studio",
+  "Lock 1000 JUP for 1 year",
+  "Show swap route: SOL → USDC",
 ];
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -472,6 +510,29 @@ export default function JupChat() {
   const [earnWithdraw, setEarnWithdraw]       = useState({ vault:null, amount:"" });
   const [showEarnWithdraw, setShowEarnWithdraw] = useState(false);
 
+  // ── Jupiter Studio state ─────────────────────────────────────────────────────
+  const [showStudio, setShowStudio]         = useState(false);
+  const [studioCfg, setStudioCfg]           = useState({ name:"", symbol:"", supply:"1000000000", decimals:"9", description:"", website:"", twitter:"" });
+  const [studioStatus, setStudioStatus]     = useState(null); // null|"signing"|"done"|"error"
+  const [studioResult, setStudioResult]     = useState(null); // { mintAddress, txSig, poolAddress }
+  const [studioFees, setStudioFees]         = useState(null); // unclaimed fee data
+  const [showStudioFees, setShowStudioFees] = useState(false);
+
+  // ── Jupiter Lock state ───────────────────────────────────────────────────────
+  const [showLock, setShowLock]             = useState(false);
+  const [lockCfg, setLockCfg]              = useState({ token:"JUP", mint:TOKEN_MINTS.JUP, amount:"", cliffDays:"90", vestingDays:"365", recipient:"" });
+  const [lockStatus, setLockStatus]         = useState(null); // null|"signing"|"done"|"error"
+  const [lockResult, setLockResult]         = useState(null); // { lockId, txSig }
+  const [showLocks, setShowLocks]           = useState(false);
+  const [lockList, setLockList]             = useState([]);
+  const [locksLoading, setLocksLoading]     = useState(false);
+  const [claimingLock, setClaimingLock]     = useState(null); // lockId being claimed
+
+  // ── Route Inspector state ────────────────────────────────────────────────────
+  const [showRoute, setShowRoute]           = useState(false);
+  const [routeData, setRouteData]           = useState(null); // full Jupiter v1 quote response
+  const [routeLoading, setRouteLoading]     = useState(false);
+
   // ── Jupiter official docs — fetched once, injected into AI system prompt ────
   const [jupDocs, setJupDocs] = useState("");
 
@@ -593,7 +654,7 @@ export default function JupChat() {
     if (!container) return;
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (isNearBottom) endRef.current?.scrollIntoView({ behavior:"smooth" });
-  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showTrigV2, showTrigOrders, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders]);
+  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showTrigV2, showTrigOrders, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders, showStudio, showStudioFees, showLock, showLocks, showRoute]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -880,6 +941,213 @@ export default function JupChat() {
       results.earnPositions = earnArr;
     } catch {}
     return results;
+  };
+
+  // ── Studio: fetch unclaimed DBC creator fees ────────────────────────────────
+  const fetchStudioFees = async () => {
+    if (!walletFull) { push("ai", "Connect your wallet first to check creator fees."); return; }
+    setShowStudioFees(false);
+    try {
+      const data = await jupFetch(`${JUP_STUDIO_API}/dbc/fee`, {
+        method: "POST",
+        body: { creator: walletFull },
+      });
+      setStudioFees(data);
+      setShowStudioFees(true);
+      if (!data || data.error) {
+        push("ai", "No unclaimed creator fees found — either you have no DBC pools, or fees have already been claimed.");
+      }
+    } catch {
+      push("ai", "Could not fetch studio fees. Try again shortly.");
+    }
+  };
+
+  // ── Studio: create token via DBC (craft tx, sign, execute) ─────────────────
+  const doCreateToken = async () => {
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet not connected."); return; }
+    const { name, symbol, supply, decimals, description, website, twitter } = studioCfg;
+    if (!name.trim() || !symbol.trim() || !supply) return;
+    setStudioStatus("signing");
+    try {
+      // Build DBC creation request per Jupiter Studio API
+      const body = {
+        creator: walletFull,
+        name: name.trim(),
+        symbol: symbol.trim().toUpperCase(),
+        decimals: parseInt(decimals) || 9,
+        supply: supply.toString(),
+        ...(description && { description }),
+        ...(website    && { website }),
+        ...(twitter    && { twitter }),
+      };
+      const res = await jupFetch(`${JUP_STUDIO_API}/dbc/create`, { method: "POST", body });
+      if (res.error) throw new Error(res.error?.message || res.error);
+      if (!res.transaction) throw new Error("No transaction returned from Studio API.");
+
+      const bytes = b64ToBytes(res.transaction);
+      const tx    = VersionedTransaction.deserialize(bytes);
+      const signed = await provider.signTransaction(tx);
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signed.serialize()), { encoding:"base64", skipPreflight:true }] },
+      });
+      const sig = rpcRes?.result;
+      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed.");
+
+      setStudioStatus("done");
+      setStudioResult({ mintAddress: res.mint || res.mintAddress, txSig: sig, poolAddress: res.poolAddress });
+      push("ai", `**Token created ✓**\n\n**${name.trim()} (${symbol.trim().toUpperCase()})** is live on Jupiter!\n\nMint: \`${(res.mint || res.mintAddress || "").slice(0,20)}…\`\nDBC Pool: \`${(res.poolAddress || "").slice(0,20)}…\`\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})\n\nYour token is now tradeable via Jupiter Swap. Creator fees will accrue as people trade.`);
+      setShowStudio(false);
+    } catch (err) {
+      setStudioStatus("error");
+      push("ai", `Token creation failed: ${err?.message}\n\nTip: Make sure your wallet has enough SOL for rent + pool creation (~0.05–0.1 SOL).`);
+    }
+    setStudioStatus(null);
+  };
+
+  // ── Lock: fetch existing locks for wallet ────────────────────────────────────
+  const fetchLocks = async () => {
+    if (!walletFull) { push("ai", "Connect your wallet first to view locks."); return; }
+    setLocksLoading(true);
+    setShowLocks(false);
+    setLockList([]);
+    try {
+      // Fetch locks where user is creator OR recipient
+      const [created, received] = await Promise.allSettled([
+        jupFetch(`${JUP_LOCK_API}/accounts?creator=${walletFull}`),
+        jupFetch(`${JUP_LOCK_API}/accounts?recipient=${walletFull}`),
+      ]);
+      const toArr = (r) => {
+        const d = r.status === "fulfilled" ? r.value : null;
+        if (!d || d.error) return [];
+        return Array.isArray(d) ? d : (d.data || d.locks || d.accounts || []);
+      };
+      const combined = [...toArr(created), ...toArr(received)];
+      // Deduplicate by lockId / pubkey
+      const seen = new Set();
+      const unique = combined.filter(l => {
+        const k = l.lockId || l.pubkey || l.id || JSON.stringify(l);
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      });
+      setLockList(unique);
+      setShowLocks(true);
+      if (!unique.length) push("ai", "No token locks found for your wallet.");
+    } catch {
+      push("ai", "Could not fetch locks. Try again shortly.");
+    }
+    setLocksLoading(false);
+  };
+
+  // ── Lock: create a new token lock ───────────────────────────────────────────
+  const doCreateLock = async () => {
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet not connected."); return; }
+    const { mint, amount, cliffDays, vestingDays, recipient } = lockCfg;
+    if (!mint || !amount || parseFloat(amount) <= 0) return;
+    setLockStatus("signing");
+    try {
+      const cliffSecs   = Math.floor(parseFloat(cliffDays   || 0) * 86400);
+      const vestingSecs = Math.floor(parseFloat(vestingDays || 365) * 86400);
+      const recipientAddr = recipient?.trim() || walletFull;
+      // Resolve token decimals
+      const dec = tokenDecimalsRef.current[lockCfg.token?.toUpperCase()] || 6;
+      const amtRaw = Math.floor(parseFloat(amount) * Math.pow(10, dec)).toString();
+
+      const res = await jupFetch(`${JUP_LOCK_API}/create`, {
+        method: "POST",
+        body: {
+          funder:       walletFull,
+          recipient:    recipientAddr,
+          mint,
+          amount:       amtRaw,
+          cliffTime:    cliffSecs,
+          vestingTime:  vestingSecs,
+        },
+      });
+      if (res.error) throw new Error(res.error?.message || res.error);
+      if (!res.transaction) throw new Error("No transaction returned.");
+
+      const bytes = b64ToBytes(res.transaction);
+      const tx    = VersionedTransaction.deserialize(bytes);
+      const signed = await provider.signTransaction(tx);
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signed.serialize()), { encoding:"base64", skipPreflight:true }] },
+      });
+      const sig = rpcRes?.result;
+      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed.");
+
+      setLockStatus("done");
+      setLockResult({ lockId: res.lockId || res.pubkey, txSig: sig });
+      push("ai", `**Lock created ✓**\n\n**${amount} ${lockCfg.token}** locked for **${recipient?.trim() ? `\`${recipientAddr.slice(0,12)}…\`` : "your wallet"}**\n\nCliff: ${cliffDays} days · Vesting: ${vestingDays} days total\nLock ID: \`${(res.lockId || res.pubkey || "").slice(0,20)}…\`\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
+      setShowLock(false);
+    } catch (err) {
+      setLockStatus("error");
+      push("ai", `Lock creation failed: ${err?.message}`);
+    }
+    setLockStatus(null);
+  };
+
+  // ── Lock: claim vested tokens ────────────────────────────────────────────────
+  const doClaimLock = async (lockId, lockPubkey) => {
+    const provider = getActiveProvider();
+    if (!provider || !walletFull) { push("ai", "Wallet not connected."); return; }
+    setClaimingLock(lockId || lockPubkey);
+    try {
+      const res = await jupFetch(`${JUP_LOCK_API}/claim`, {
+        method: "POST",
+        body: { lockId: lockId || lockPubkey, recipient: walletFull },
+      });
+      if (res.error) throw new Error(res.error?.message || res.error);
+      if (!res.transaction) throw new Error("No transaction returned.");
+
+      const bytes = b64ToBytes(res.transaction);
+      const tx    = VersionedTransaction.deserialize(bytes);
+      const signed = await provider.signTransaction(tx);
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signed.serialize()), { encoding:"base64", skipPreflight:true }] },
+      });
+      const sig = rpcRes?.result;
+      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed.");
+      push("ai", `Vested tokens claimed ✓\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
+      await fetchLocks(); // refresh list
+    } catch (err) {
+      push("ai", `Claim failed: ${err?.message}`);
+    }
+    setClaimingLock(null);
+  };
+
+  // ── Route Inspector: fetch Jupiter v1 quote with full route breakdown ────────
+  const fetchRouteBreakdown = async (fromSym, toSym, amount) => {
+    setRouteLoading(true);
+    setRouteData(null);
+    setShowRoute(false);
+    try {
+      const fromMint = tokenCacheRef.current[fromSym?.toUpperCase()] || TOKEN_MINTS[fromSym?.toUpperCase()];
+      const toMint   = tokenCacheRef.current[toSym?.toUpperCase()]   || TOKEN_MINTS[toSym?.toUpperCase()];
+      if (!fromMint || !toMint) {
+        // Try to resolve unknown tokens
+        const rF = fromMint ? null : await resolveToken(fromSym);
+        const rT = toMint   ? null : await resolveToken(toSym);
+        if (!fromMint && !rF?.mint) { push("ai", `Could not find mint for **${fromSym}**.`); setRouteLoading(false); return; }
+        if (!toMint   && !rT?.mint) { push("ai", `Could not find mint for **${toSym}**.`);   setRouteLoading(false); return; }
+      }
+      const fMint = fromMint || (await resolveToken(fromSym))?.mint;
+      const tMint = toMint   || (await resolveToken(toSym))?.mint;
+      const dec   = tokenDecimalsRef.current[fromSym?.toUpperCase()] || 6;
+      const amtRaw = Math.floor(parseFloat(amount || 1) * Math.pow(10, dec)).toString();
+
+      const data = await jupFetch(`${JUP_ROUTE_API}?inputMint=${fMint}&outputMint=${tMint}&amount=${amtRaw}&slippageBps=50`);
+      if (!data || data.error) throw new Error(data?.error?.message || "No route data returned.");
+      setRouteData({ ...data, fromSym: fromSym?.toUpperCase(), toSym: toSym?.toUpperCase(), amount });
+      setShowRoute(true);
+    } catch (err) {
+      push("ai", `Could not fetch route: ${err?.message}`);
+    }
+    setRouteLoading(false);
   };
 
   // ── Predictions — GET /prediction/v1/events ──────────────────────────────
@@ -3330,6 +3598,55 @@ Order: \`${orderKey.slice(0,20)}…\`
           setPerpsLoading(false);
         }
 
+      } else if (action === "SHOW_STUDIO") {
+        setStudioCfg(c => ({
+          ...c,
+          name:        actionData?.name        || c.name,
+          symbol:      actionData?.symbol      || c.symbol,
+          supply:      actionData?.supply      || c.supply,
+          decimals:    actionData?.decimals    || c.decimals,
+          description: actionData?.description || c.description,
+          website:     actionData?.website     || c.website,
+          twitter:     actionData?.twitter     || c.twitter,
+        }));
+        setStudioStatus(null);
+        setStudioResult(null);
+        setShowStudio(true);
+        push("ai", text);
+
+      } else if (action === "FETCH_STUDIO_FEES") {
+        push("ai", text);
+        await fetchStudioFees();
+
+      } else if (action === "SHOW_LOCK") {
+        const tokSym = (actionData?.token || "JUP").toUpperCase();
+        const resolvedTok = await resolveToken(tokSym);
+        setLockCfg(c => ({
+          ...c,
+          token:       tokSym,
+          mint:        resolvedTok?.mint || TOKEN_MINTS[tokSym] || c.mint,
+          amount:      actionData?.amount      || c.amount,
+          cliffDays:   actionData?.cliffDays   || c.cliffDays,
+          vestingDays: actionData?.vestingDays || c.vestingDays,
+          recipient:   actionData?.recipient   || c.recipient,
+        }));
+        if (resolvedTok?.decimals) tokenDecimalsRef.current[tokSym] = resolvedTok.decimals;
+        setLockStatus(null);
+        setLockResult(null);
+        setShowLock(true);
+        push("ai", text);
+
+      } else if (action === "FETCH_LOCKS") {
+        push("ai", text);
+        await fetchLocks();
+
+      } else if (action === "SHOW_ROUTE") {
+        push("ai", text);
+        const from = actionData?.from || "SOL";
+        const to   = actionData?.to   || "USDC";
+        const amt  = actionData?.amount || "1";
+        await fetchRouteBreakdown(from, to, amt);
+
       } else {
         push("ai", text);
       }
@@ -4930,6 +5247,290 @@ Order: \`${orderKey.slice(0,20)}…\`
                   Cancel
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* ── Jupiter Studio — Token Creation Panel ──────────────── */}
+          {showStudio && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🎨 Jupiter Studio — Create Token</div>
+                <button onClick={() => setShowStudio(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
+              </div>
+              <div style={{ fontSize:11, color:T.text3, marginBottom:14, lineHeight:1.5 }}>
+                Launch a token with a Dynamic Bonding Curve — tradeable on Jupiter from day 1. Earn creator fees on every trade.
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+                <div>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token Name *</div>
+                  <input value={studioCfg.name} onChange={e => setStudioCfg(c=>({...c,name:e.target.value}))}
+                    placeholder="e.g. My Token"
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                </div>
+                <div>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Symbol *</div>
+                  <input value={studioCfg.symbol} onChange={e => setStudioCfg(c=>({...c,symbol:e.target.value.toUpperCase()}))}
+                    placeholder="e.g. MTK"
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                </div>
+                <div>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Initial Supply</div>
+                  <input type="number" value={studioCfg.supply} onChange={e => setStudioCfg(c=>({...c,supply:e.target.value}))}
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                </div>
+                <div>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Decimals</div>
+                  <input type="number" value={studioCfg.decimals} onChange={e => setStudioCfg(c=>({...c,decimals:e.target.value}))}
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                </div>
+              </div>
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Description</div>
+                <textarea value={studioCfg.description} onChange={e => setStudioCfg(c=>({...c,description:e.target.value}))}
+                  placeholder="Brief description of your token (optional)"
+                  rows={2}
+                  style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, resize:"none" }}/>
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
+                <div>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Website</div>
+                  <input value={studioCfg.website} onChange={e => setStudioCfg(c=>({...c,website:e.target.value}))}
+                    placeholder="https://..."
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                </div>
+                <div>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Twitter / X</div>
+                  <input value={studioCfg.twitter} onChange={e => setStudioCfg(c=>({...c,twitter:e.target.value}))}
+                    placeholder="@handle"
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                </div>
+              </div>
+              {studioStatus === "done" && studioResult && (
+                <div style={{ padding:"10px 12px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.green }}>
+                  ✓ Token created! Mint: <code>{(studioResult.mintAddress||"").slice(0,20)}…</code>
+                </div>
+              )}
+              {studioStatus === "error" && (
+                <div style={{ padding:"10px 12px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.red }}>
+                  Creation failed. Check wallet has enough SOL (~0.05–0.1 SOL for pool creation).
+                </div>
+              )}
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={doCreateToken}
+                  disabled={!studioCfg.name.trim() || !studioCfg.symbol.trim() || studioStatus==="signing" || !walletFull}
+                  className="hov-btn"
+                  style={{ flex:1, padding:"10px", background: (!studioCfg.name.trim()||!studioCfg.symbol.trim()||studioStatus==="signing"||!walletFull)?T.border:T.accentBg, border:`1px solid ${(!studioCfg.name.trim()||!studioCfg.symbol.trim()||studioStatus==="signing"||!walletFull)?T.border:T.accent}`, borderRadius:8, color:(!studioCfg.name.trim()||!studioCfg.symbol.trim()||studioStatus==="signing"||!walletFull)?T.text3:T.accent, fontSize:14, fontWeight:600, cursor:"pointer" }}>
+                  {studioStatus==="signing" ? "Signing…" : "🚀 Launch Token"}
+                </button>
+                <button onClick={() => setShowStudio(false)}
+                  style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
+                  Cancel
+                </button>
+              </div>
+              {!walletFull && <div style={{ fontSize:11, color:T.red, marginTop:8, textAlign:"center" }}>Connect your wallet to create a token</div>}
+            </div>
+          )}
+
+          {/* ── Studio Fees Panel ────────────────────────────────────── */}
+          {showStudioFees && studioFees && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>💰 Creator Fees</div>
+                <button onClick={() => setShowStudioFees(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
+              </div>
+              {(() => {
+                const pools = studioFees.pools || studioFees.data || (Array.isArray(studioFees) ? studioFees : []);
+                if (!pools.length) return <div style={{ fontSize:13, color:T.text3 }}>No unclaimed fees found.</div>;
+                return pools.map((pool, i) => (
+                  <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <div>
+                      <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{pool.symbol || pool.name || `Pool ${i+1}`}</div>
+                      <div style={{ fontSize:11, color:T.text3 }}>{pool.poolAddress?.slice?.(0,16)}…</div>
+                    </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontSize:13, fontWeight:700, color:T.green }}>{pool.unclaimedFeeUsd ? `$${parseFloat(pool.unclaimedFeeUsd).toFixed(4)}` : (pool.unclaimedFee || "—")}</div>
+                      <div style={{ fontSize:11, color:T.text3 }}>unclaimed</div>
+                    </div>
+                  </div>
+                ));
+              })()}
+              <div style={{ fontSize:11, color:T.text3, marginTop:8 }}>
+                To claim fees, visit <a href="https://jup.ag/studio" target="_blank" rel="noreferrer" style={{ color:T.accent }}>jup.ag/studio</a>
+              </div>
+            </div>
+          )}
+
+          {/* ── Jupiter Lock — Token Lock Panel ─────────────────────── */}
+          {showLock && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🔒 Lock Tokens</div>
+                <button onClick={() => setShowLock(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
+              </div>
+              <div style={{ fontSize:11, color:T.text3, marginBottom:14, lineHeight:1.5 }}>
+                Lock tokens on-chain with cliff + linear vesting. Non-custodial — only the recipient can claim vested tokens.
+              </div>
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token</div>
+                <TokenPicker value={lockCfg.token} jupFetch={jupFetch}
+                  onSelect={(sym, mint, dec) => {
+                    setLockCfg(c => ({ ...c, token: sym, mint }));
+                    if (dec) tokenDecimalsRef.current[sym] = dec;
+                  }}/>
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:10 }}>
+                <div>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount</div>
+                  <input type="number" value={lockCfg.amount} onChange={e => setLockCfg(c=>({...c,amount:e.target.value}))}
+                    placeholder="0"
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                </div>
+                <div>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Cliff (days)</div>
+                  <input type="number" value={lockCfg.cliffDays} onChange={e => setLockCfg(c=>({...c,cliffDays:e.target.value}))}
+                    placeholder="90"
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                </div>
+                <div>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Vesting (days)</div>
+                  <input type="number" value={lockCfg.vestingDays} onChange={e => setLockCfg(c=>({...c,vestingDays:e.target.value}))}
+                    placeholder="365"
+                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                </div>
+              </div>
+              <div style={{ marginBottom:14 }}>
+                <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Recipient wallet (blank = your wallet)</div>
+                <input value={lockCfg.recipient} onChange={e => setLockCfg(c=>({...c,recipient:e.target.value}))}
+                  placeholder="Solana address (leave blank for self)"
+                  style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+              </div>
+              {lockCfg.cliffDays && lockCfg.vestingDays && (
+                <div style={{ padding:"8px 12px", background:T.tealBg, border:`1px solid ${T.border}`, borderRadius:8, fontSize:11, color:T.text2, marginBottom:12 }}>
+                  📅 Unlocks start after <strong style={{ color:T.teal }}>{lockCfg.cliffDays} days</strong>, then vest linearly over <strong style={{ color:T.teal }}>{lockCfg.vestingDays} days</strong> total.
+                </div>
+              )}
+              {lockStatus === "done" && lockResult && (
+                <div style={{ padding:"10px 12px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.green }}>
+                  ✓ Lock created! ID: <code>{(lockResult.lockId||"").slice(0,20)}…</code>
+                </div>
+              )}
+              {lockStatus === "error" && (
+                <div style={{ padding:"10px 12px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.red }}>
+                  Lock creation failed. Make sure you have enough SOL for the transaction.
+                </div>
+              )}
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={doCreateLock}
+                  disabled={!lockCfg.mint || !lockCfg.amount || parseFloat(lockCfg.amount)<=0 || lockStatus==="signing" || !walletFull}
+                  className="hov-btn"
+                  style={{ flex:1, padding:"10px", background:T.purpleBg, border:`1px solid ${T.purple}`, borderRadius:8, color:T.purple, fontSize:14, fontWeight:600, cursor:"pointer" }}>
+                  {lockStatus==="signing" ? "Signing…" : "🔒 Create Lock"}
+                </button>
+                <button onClick={() => setShowLock(false)}
+                  style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Lock List Panel ──────────────────────────────────────── */}
+          {showLocks && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🔒 Token Locks</div>
+                <button onClick={() => setShowLocks(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
+              </div>
+              {locksLoading && <div style={{ fontSize:13, color:T.text3 }}>Loading locks…</div>}
+              {!locksLoading && !lockList.length && <div style={{ fontSize:13, color:T.text3 }}>No locks found for your wallet.</div>}
+              {lockList.map((lock, i) => {
+                const id = lock.lockId || lock.pubkey || lock.id;
+                const isClaimable = lock.claimable === true || (lock.claimableAmount && parseFloat(lock.claimableAmount) > 0);
+                const sym = lock.symbol || lock.token?.symbol || lock.mintSymbol || "tokens";
+                const totalAmt = lock.totalAmount || lock.amount || "—";
+                const vestPct  = lock.vestedPercent ? `${parseFloat(lock.vestedPercent).toFixed(1)}%` : null;
+                return (
+                  <div key={i} style={{ padding:"12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+                      <div>
+                        <span style={{ fontSize:14, fontWeight:600, color:T.text1 }}>{sym}</span>
+                        <span style={{ fontSize:11, color:T.text3, marginLeft:8 }}>{id?.slice?.(0,14)}…</span>
+                      </div>
+                      <span style={{ fontSize:12, padding:"2px 8px", borderRadius:10, background: isClaimable ? T.greenBg : T.surface, color: isClaimable ? T.green : T.text3, border:`1px solid ${isClaimable ? T.greenBd : T.border}` }}>
+                        {isClaimable ? "Claimable" : "Locked"}
+                      </span>
+                    </div>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:isClaimable?8:0 }}>
+                      Amount: <strong style={{ color:T.text2 }}>{totalAmt}</strong>
+                      {vestPct && <> · Vested: <strong style={{ color:T.teal }}>{vestPct}</strong></>}
+                      {lock.cliffEnd && <> · Cliff ends: {new Date(lock.cliffEnd * 1000).toLocaleDateString()}</>}
+                    </div>
+                    {isClaimable && (
+                      <button onClick={() => doClaimLock(id, lock.pubkey)}
+                        disabled={claimingLock === id} className="hov-btn"
+                        style={{ padding:"6px 14px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                        {claimingLock === id ? "Claiming…" : `Claim ${lock.claimableAmount ? parseFloat(lock.claimableAmount).toFixed(4) : ""} ${sym}`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── Route Inspector Panel ────────────────────────────────── */}
+          {showRoute && routeData && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🗺️ Swap Route: {routeData.fromSym} → {routeData.toSym}</div>
+                <button onClick={() => setShowRoute(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
+              </div>
+              {routeLoading && <div style={{ fontSize:13, color:T.text3 }}>Fetching route…</div>}
+              {!routeLoading && (() => {
+                const outAmt   = routeData.outAmount ? (parseInt(routeData.outAmount) / Math.pow(10, routeData.outputDecimals || 6)).toFixed(6) : "—";
+                const impact   = routeData.priceImpactPct ? `${(parseFloat(routeData.priceImpactPct)*100).toFixed(4)}%` : routeData.priceImpact || "—";
+                const hops     = routeData.routeInfo?.marketInfos || routeData.routePlan || [];
+                const slippage = routeData.slippageBps ? `${routeData.slippageBps / 100}%` : "0.5%";
+                return (
+                  <>
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:14 }}>
+                      {[
+                        ["Input",        `${routeData.amount} ${routeData.fromSym}`],
+                        ["Output",       `${outAmt} ${routeData.toSym}`],
+                        ["Price Impact", impact],
+                      ].map(([lbl, val]) => (
+                        <div key={lbl} style={{ padding:"8px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>
+                          <div style={{ fontSize:10, color:T.text3 }}>{lbl}</div>
+                          <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {hops.length > 0 && (
+                      <>
+                        <div style={{ fontSize:11, color:T.text3, marginBottom:8 }}>ROUTE ({hops.length} hop{hops.length!==1?"s":""})</div>
+                        {hops.map((hop, i) => {
+                          const dex    = hop.ammKey?.label || hop.marketMeta?.amm?.label || hop.label || hop.dex || `DEX ${i+1}`;
+                          const inSym  = hop.inputMint  ? `${hop.inAmount ? (parseInt(hop.inAmount)/1e6).toFixed(4)  : ""} ${routeData.fromSym}` : "";
+                          const outSym = hop.outputMint ? `${hop.outAmount ? (parseInt(hop.outAmount)/1e6).toFixed(4) : ""} ${routeData.toSym}`   : "";
+                          const pi     = hop.priceImpactPct ? `${(parseFloat(hop.priceImpactPct)*100).toFixed(4)}% impact` : null;
+                          const pct    = hop.percent    ? `${hop.percent}%` : null;
+                          return (
+                            <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:6, fontSize:12 }}>
+                              <span style={{ width:20, height:20, borderRadius:"50%", background:T.accentBg, border:`1px solid ${T.accent}`, display:"flex", alignItems:"center", justifyContent:"center", color:T.accent, fontSize:10, flexShrink:0 }}>{i+1}</span>
+                              <span style={{ fontWeight:600, color:T.teal, flex:1 }}>{dex}</span>
+                              {pct   && <span style={{ color:T.text3 }}>{pct}</span>}
+                              {pi    && <span style={{ color: parseFloat(hop.priceImpactPct||0)*100 > 1 ? T.red : T.text3 }}>{pi}</span>}
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
+                    <div style={{ marginTop:8, fontSize:11, color:T.text3 }}>
+                      Slippage tolerance: {slippage} · Powered by Jupiter DEX aggregator
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
 
