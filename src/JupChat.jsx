@@ -1839,6 +1839,31 @@ export default function JupChat() {
     }
   };
 
+  // Build the direct WC deep link for a wallet given a WC URI.
+  // These links open the wallet app straight to its WalletConnect approve screen.
+  const getWcDirectLink = (walletName, wcUriStr) => {
+    const enc = encodeURIComponent(wcUriStr);
+    switch (walletName) {
+      case "Phantom":
+        // Phantom universal link: opens WC pairing screen directly
+        return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta&wc_uri=${enc}`;
+      case "Solflare":
+        return `https://solflare.com/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta&wc_uri=${enc}`;
+      case "Jupiter":
+        return `https://jup.ag/wc?uri=${enc}`;
+      case "Backpack":
+        return `https://backpack.app/wc?uri=${enc}`;
+      case "OKX":
+        return `okx://wallet/wc?uri=${enc}`;
+      case "Trust Wallet":
+        return `https://link.trustwallet.com/wc?uri=${enc}`;
+      case "Coin98":
+        return `coin98://wc?uri=${enc}`;
+      default:
+        return `https://phantom.app/ul/v1/connect?app_url=${encodeURIComponent(window.location.origin)}&redirect_link=${encodeURIComponent(window.location.href)}&cluster=mainnet-beta&wc_uri=${enc}`;
+    }
+  };
+
   const initWalletConnect = async (preferredWallet = null) => {
     setWcStatus("loading");
     const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -1866,13 +1891,22 @@ export default function JupChat() {
       setWcStatus("waiting");
       if (preferredWallet) setWcPreferredWallet(preferredWallet);
 
-      // Auto-open intentionally removed from here.
-      // window.open / location.href called from an async context (after multiple awaits)
-      // is silently blocked by mobile browsers. The modal now shows a prominent button
-      // the user taps directly — that direct-click context allows location.href to open the
-      // wallet app via its custom scheme without killing this page.
+      // ── Direct open: if a wallet was chosen, immediately deep-link into its
+      // WalletConnect approve screen. No QR needed — the URI is embedded in the link.
+      // We use a hidden <a> click to preserve the user-gesture context so Chrome
+      // doesn't block the navigation to an external app URL.
+      if (preferredWallet && isMobile) {
+        const directLink = getWcDirectLink(preferredWallet, uri);
+        const a = document.createElement("a");
+        a.href = directLink;
+        a.target = "_blank";
+        a.rel = "noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
 
-      // Await wallet approval — the WC relay keeps the session open while user taps the button
+      // Await wallet approval — relay stays open while user approves in their wallet
       const session = await approval();
       wcSessionRef.current = session;
 
@@ -4976,181 +5010,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               {/* Handle bar */}
               <div style={{ width:40, height:4, background:T.border, borderRadius:4, margin:"0 auto 18px" }}/>
 
-              {/* ── WalletConnect QR / URI screen ──────────────────────── */}
-              {(wcStatus === "loading" || wcStatus === "waiting") ? (
-                <div style={{ padding:"8px 0 12px" }}>
-                  {/* Header */}
-                  <div style={{ textAlign:"center", marginBottom:16 }}>
-                    <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:3 }}>Connect via WalletConnect</div>
-                    <div style={{ fontSize:12, color:T.text3 }}>Use any WalletConnect-compatible Solana wallet</div>
-                  </div>
 
-                  {/* Tabs */}
-                  {wcStatus === "waiting" && (
-                    <div style={{ display:"flex", gap:6, background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:4, marginBottom:18 }}>
-                      {[
-                        { id:"qr",  label:"📷  Scan QR Code" },
-                        { id:"uri", label:"🔗  Copy URI" },
-                      ].map(tab => (
-                        <button key={tab.id} onClick={() => setWcMode(tab.id)}
-                          style={{ flex:1, padding:"7px 0", border:"none", borderRadius:8, fontSize:12, fontWeight:wcMode===tab.id?600:400,
-                            background: wcMode===tab.id ? T.surface : "transparent",
-                            color: wcMode===tab.id ? T.text1 : T.text3,
-                            boxShadow: wcMode===tab.id ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
-                            cursor:"pointer", transition:"all 0.15s" }}>
-                          {tab.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Loading spinner */}
-                  {wcStatus === "loading" && (
-                    <div style={{ padding:40, display:"flex", flexDirection:"column", alignItems:"center", gap:12, color:T.text3, fontSize:13 }}>
-                      <span className="spinner" style={{ width:28, height:28, border:"3px solid rgba(0,0,0,0.1)", borderTopColor:T.accent }}/>
-                      Generating pairing code…
-                    </div>
-                  )}
-
-                  {/* QR tab */}
-                  {wcStatus === "waiting" && wcMode === "qr" && (
-                    <div style={{ textAlign:"center" }}>
-                      {/* ── "Open in wallet" buttons — works from Chrome without scanning ── */}
-                      {wcUri && (() => {
-                        const enc = encodeURIComponent(wcUri);
-                        const currentUrl = encodeURIComponent(window.location.href);
-                        const ref = encodeURIComponent(window.location.origin);
-                        const walletButtons = [
-                          { name:"Phantom",      link:`https://phantom.app/ul/browse/${currentUrl}?ref=${ref}`,                                         logo: WALLET_LOGOS["Phantom"] },
-                          { name:"Solflare",     link:`https://solflare.com/ul/v1/browse/${currentUrl}?ref=${ref}`,                                      logo: WALLET_LOGOS["Solflare"] },
-                          { name:"Jupiter",      link:`https://jup.ag/wc?uri=${enc}`,                                                                    logo: WALLET_LOGOS["Jupiter"] },
-                          { name:"Backpack",     link:`https://backpack.app/wc?uri=${enc}`,                                                              logo: WALLET_LOGOS["Backpack"] },
-                          { name:"OKX",          link:`https://www.okx.com/download?deeplink=${encodeURIComponent(`okx://wallet/dapp/url?dappUrl=${currentUrl}`)}`, logo: WALLET_LOGOS["OKX"] },
-                          { name:"Trust Wallet", link:`https://link.trustwallet.com/open_url?coin_id=501&url=${currentUrl}`,                             logo: WALLET_LOGOS["Trust Wallet"] },
-                        ];
-                        return (
-                          <div style={{ marginBottom:14 }}>
-                            <div style={{ fontSize:12, color:T.text3, marginBottom:8, fontWeight:500 }}>
-                              📱 <strong style={{ color:T.text1 }}>On the same phone?</strong> Tap your wallet to open &amp; approve directly from Chrome:
-                            </div>
-                            <div style={{ display:"flex", flexWrap:"wrap", gap:8, justifyContent:"center", marginBottom:10 }}>
-                              {walletButtons.map(wb => (
-                                <a key={wb.name} href={wb.link} target="_blank" rel="noreferrer"
-                                  style={{ display:"flex", alignItems:"center", gap:7, padding:"8px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}55`, borderRadius:10, color:T.text1, fontSize:13, fontWeight:600, textDecoration:"none", cursor:"pointer" }}>
-                                  <img src={wb.logo} style={{ width:20, height:20, borderRadius:4, objectFit:"contain" }} alt={wb.name} onError={e=>e.target.style.display="none"}/>
-                                  {wb.name}
-                                </a>
-                              ))}
-                            </div>
-                            <div style={{ fontSize:11, color:T.text3 }}>↓ Or scan with another device:</div>
-                          </div>
-                        );
-                      })()}
-                      <div style={{ fontSize:12, color:T.text3, marginBottom:8 }}>
-                        Open <strong style={{ color:T.text1 }}>any WalletConnect wallet</strong> → tap the <strong style={{ color:T.text1 }}>scan icon</strong> → scan this QR code
-                      </div>
-                      <div style={{ display:"inline-block", padding:12, background:T.bg, border:`2px solid ${T.border}`, borderRadius:16, marginBottom:14 }}>
-                        <canvas ref={wcQrRef} style={{ display:"block", borderRadius:8 }}/>
-                      </div>
-                      {/* Quick copy shortcut */}
-                      <button onClick={() => {
-                          try { navigator.clipboard.writeText(wcUri); } catch {}
-                          setWcCopied(true);
-                          setTimeout(() => setWcCopied(false), 2500);
-                        }}
-                        style={{ width:"100%", padding:"10px", background: wcCopied ? T.greenBg : T.accentBg,
-                          border:`1.5px solid ${wcCopied ? T.greenBd : T.accent+"66"}`,
-                          borderRadius:10, color: wcCopied ? T.green : T.accent,
-                          fontSize:13, fontWeight:600, cursor:"pointer", marginBottom:10, transition:"all 0.2s" }}>
-                        {wcCopied ? "✓ Copied!" : "📋 Copy URI to clipboard"}
-                      </button>
-                      <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Waiting for wallet to approve…</div>
-                      <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", marginBottom:4 }}>
-                        <div style={{ width:7, height:7, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite" }}/>
-                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Listening for connection</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* URI tab */}
-                  {wcStatus === "waiting" && wcMode === "uri" && (
-                    <div>
-                      <div style={{ fontSize:12, color:T.text3, marginBottom:10, textAlign:"center" }}>
-                        Copy this URI and paste it into your wallet app's WalletConnect screen
-                      </div>
-
-                      {/* ── Per-wallet direct open buttons ── */}
-                      {wcUri && (() => {
-                        const enc = encodeURIComponent(wcUri);
-                        const currentUrl = encodeURIComponent(window.location.href);
-                        const ref = encodeURIComponent(window.location.origin);
-                        const walletButtons = [
-                          { name:"Phantom",      link:`https://phantom.app/ul/browse/${currentUrl}?ref=${ref}` },
-                          { name:"Solflare",     link:`https://solflare.com/ul/v1/browse/${currentUrl}?ref=${ref}` },
-                          { name:"Jupiter",      link:`https://jup.ag/wc?uri=${enc}` },
-                          { name:"Backpack",     link:`https://backpack.app/wc?uri=${enc}` },
-                          { name:"OKX",          link:`https://www.okx.com/download?deeplink=${encodeURIComponent(`okx://wallet/dapp/url?dappUrl=${currentUrl}`)}` },
-                          { name:"Trust Wallet", link:`https://link.trustwallet.com/open_url?coin_id=501&url=${currentUrl}` },
-                        ];
-                        return (
-                          <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:12, padding:"10px 12px", marginBottom:12 }}>
-                            <div style={{ fontSize:11, fontWeight:600, color:T.accent, marginBottom:8 }}>Open wallet directly from Chrome:</div>
-                            <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                              {walletButtons.map(wb => (
-                                <a key={wb.name} href={wb.link} target="_blank" rel="noreferrer"
-                                  style={{ display:"flex", alignItems:"center", gap:5, padding:"6px 10px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, color:T.text1, fontSize:12, fontWeight:500, textDecoration:"none", cursor:"pointer" }}>
-                                  <img src={WALLET_LOGOS[wb.name]} style={{ width:16, height:16, borderRadius:3, objectFit:"contain" }} alt={wb.name} onError={e=>e.target.style.display="none"}/>
-                                  {wb.name}
-                                </a>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })()}
-
-                      {/* URI display box */}
-                      <div style={{ background:T.bg, border:`1.5px solid ${T.border}`, borderRadius:12, padding:"12px 14px", marginBottom:12, wordBreak:"break-all", fontFamily:T.mono, fontSize:10, color:T.text2, lineHeight:1.5, maxHeight:100, overflowY:"auto" }}>
-                        {wcUri}
-                      </div>
-
-                      {/* Copy button */}
-                      <button onClick={() => {
-                          try { navigator.clipboard.writeText(wcUri); } catch {}
-                          setWcCopied(true);
-                          setTimeout(() => setWcCopied(false), 2500);
-                        }}
-                        style={{ width:"100%", padding:"11px", background: wcCopied ? T.greenBg : T.accentBg,
-                          border:`1.5px solid ${wcCopied ? T.greenBd : T.accent+"66"}`,
-                          borderRadius:10, color: wcCopied ? T.green : T.accent,
-                          fontSize:13, fontWeight:600, cursor:"pointer", marginBottom:14, transition:"all 0.2s" }}>
-                        {wcCopied ? "✓ Copied to clipboard!" : "Copy WalletConnect URI"}
-                      </button>
-
-                      {/* How-to steps */}
-                      <div style={{ background:T.purpleBg, border:`1px solid ${T.purple}33`, borderRadius:10, padding:"10px 14px", fontSize:11, color:T.text2, lineHeight:1.7 }}>
-                        <div style={{ fontWeight:600, color:T.purple, marginBottom:4 }}>How to connect manually:</div>
-                        <div>1. Copy the URI above</div>
-                        <div>2. Open your wallet app → find <strong>WalletConnect</strong> or the <strong>scan icon</strong></div>
-                        <div>3. Paste the URI (or choose "Paste from clipboard")</div>
-                        <div>4. Tap <strong>Approve</strong> — connection completes here automatically</div>
-                        <div style={{ marginTop:6, color:T.accent }}>💡 <strong>Jupiter:</strong> scan icon → Paste · <strong>Phantom:</strong> Settings → WalletConnect · <strong>Solflare:</strong> scan icon</div>
-                      </div>
-
-                      <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", marginTop:12, marginBottom:4 }}>
-                        <div style={{ width:7, height:7, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite" }}/>
-                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Waiting for wallet to approve…</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <button onClick={cancelWalletConnect}
-                    style={{ marginTop:10, width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                /* ── Normal wallet list ─────────────────────────────────── */
-                <>
                   <div style={{ fontFamily:T.serif, fontSize:17, fontWeight:500, color:T.text1, marginBottom:4 }}>Connect Wallet</div>
                   <div style={{ fontSize:12, color:T.text3, marginBottom:18 }}>
                     {walletList.filter(w=>w.detected).length > 0
@@ -5158,11 +5018,11 @@ Order: \`${orderKey.slice(0,20)}…\`
                       : "No wallet detected in this browser. Open this page inside your wallet app, or tap a wallet below to launch it."}
                   </div>
 
-                  {/* Mobile: Jupiter = WalletConnect; others = direct connect deep-link */}
+                  {/* Mobile wallet picker — tap wallet → WC URI generates → wallet app opens straight to approve screen */}
                   {/iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ? (
                     <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:8 }}>
 
-                      {/* 1. Detected wallets (in-app browser) — connect directly */}
+                      {/* Detected wallets: already injected in-app browser — connect directly, no WC needed */}
                       {walletList.filter(w => w.detected).map((w, i) => (
                         <button key={"det-"+i} onClick={() => doConnectWith(w)} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
@@ -5179,103 +5039,66 @@ Order: \`${orderKey.slice(0,20)}…\`
                         </button>
                       ))}
 
-                      {/* 2. Jupiter — WalletConnect QR scan (no valid browser deep link exists) */}
-                      {!walletList.find(w => w.name === "Jupiter" && w.detected) && (
-                        <button onClick={() => initWalletConnect("Jupiter")} className="hov-row"
-                          style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.accentBg, border:`1.5px solid ${T.accent}66`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
-                          <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                            <img src={WALLET_LOGOS["Jupiter"]} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt="Jupiter"/>
-                          </span>
-                          <span style={{ flex:1 }}>
-                            <span style={{ fontWeight:600, display:"block" }}>Jupiter</span>
-                            <span style={{ fontSize:11, color:T.text3 }}>Scan QR with Jupiter app → scan icon</span>
-                          </span>
-                          <span style={{ fontSize:13, color:T.accent, fontWeight:600 }}>→</span>
-                        </button>
-                      )}
-
-                      {/* 3. Other wallets — direct connect deep-link (opens app, triggers connect popup) */}
-                      {[
+                      {/* Undetected wallets: tap → generate WC URI → immediately open wallet to approve screen */}
+                      {wcStatus !== "loading" && wcStatus !== "waiting" && [
                         { name:"Phantom",      icon: WALLET_LOGOS["Phantom"] },
                         { name:"Solflare",     icon: WALLET_LOGOS["Solflare"] },
+                        { name:"Jupiter",      icon: WALLET_LOGOS["Jupiter"] },
                         { name:"Backpack",     icon: WALLET_LOGOS["Backpack"] },
                         { name:"OKX",          icon: WALLET_LOGOS["OKX"] },
                         { name:"Trust Wallet", icon: WALLET_LOGOS["Trust Wallet"] },
                         { name:"Coin98",       icon: WALLET_LOGOS["Coin98"] },
                       ].filter(w => !walletList.find(l => l.name === w.name && l.detected))
                        .map(w => (
-                        <button key={w.name} onClick={() => doConnectWith({ name:w.name, type:"deeplink" })} className="hov-row"
+                        <button key={w.name} onClick={() => initWalletConnect(w.name)} className="hov-row"
                           style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
                           <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                            <img src={w.icon} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={w.name}
-                              onError={e => { e.target.style.display="none"; }}/>
+                            <img src={w.icon} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt={w.name} onError={e => { e.target.style.display="none"; }}/>
                           </span>
                           <span style={{ flex:1 }}>
                             <span style={{ fontWeight:600, display:"block" }}>{w.name}</span>
-                            <span style={{ fontSize:11, color:T.text3 }}>Open in {w.name} app browser</span>
+                            <span style={{ fontSize:11, color:T.text3 }}>Tap to open &amp; approve connection</span>
                           </span>
-                          <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Open →</span>
+                          <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>→</span>
                         </button>
                       ))}
 
-                      {/* 4. Download Jupiter if not installed */}
-                      <button onClick={() => window.open("https://jup.ag/mobile","_blank")} className="hov-row"
-                        style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:12, cursor:"pointer", fontSize:14, color:T.text1, textAlign:"left", width:"100%" }}>
-                        <span style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                          <img src={WALLET_LOGOS["Jupiter"]} style={{ width:28, height:28, borderRadius:6, objectFit:"contain" }} alt="Get Jupiter"/>
-                        </span>
-                        <span style={{ flex:1 }}>
-                          <span style={{ fontWeight:600, display:"block" }}>Get Jupiter Wallet</span>
-                          <span style={{ fontSize:11, color:T.text3 }}>Download the app</span>
-                        </span>
-                        <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Download →</span>
-                      </button>
-
-                      {/* WC waiting state */}
-                      {wcStatus === "waiting" && wcUri && (
-                        <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 12px", marginTop:4 }}>
-                          {/* Open in any wallet — direct deep links with the WC URI */}
-                          {(() => {
-                            const enc = encodeURIComponent(wcUri);
-                            const currentUrl = encodeURIComponent(window.location.href);
-                            const ref = encodeURIComponent(window.location.origin);
-                            const walletButtons = [
-                              { name:"Phantom",      link:`https://phantom.app/ul/browse/${currentUrl}?ref=${ref}` },
-                              { name:"Solflare",     link:`https://solflare.com/ul/v1/browse/${currentUrl}?ref=${ref}` },
-                              { name:"Jupiter",      link:`https://jup.ag/wc?uri=${enc}` },
-                              { name:"Backpack",     link:`https://backpack.app/wc?uri=${enc}` },
-                              { name:"OKX",          link:`https://www.okx.com/download?deeplink=${encodeURIComponent(`okx://wallet/dapp/url?dappUrl=${currentUrl}`)}` },
-                              { name:"Trust Wallet", link:`https://link.trustwallet.com/open_url?coin_id=501&url=${currentUrl}` },
-                            ];
-                            return (
-                              <div style={{ marginBottom:10 }}>
-                                <div style={{ fontSize:11, color:T.text3, marginBottom:7, fontWeight:500 }}>Open wallet &amp; approve — straight from Chrome:</div>
-                                <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:8 }}>
-                                  {walletButtons.map(wb => (
-                                    <a key={wb.name} href={wb.link} target="_blank" rel="noreferrer"
-                                      style={{ display:"flex", alignItems:"center", gap:5, padding:"7px 11px", background:T.accentBg, border:`1.5px solid ${T.accent}55`, borderRadius:9, color:T.text1, fontSize:12, fontWeight:600, textDecoration:"none", cursor:"pointer" }}>
-                                      <img src={WALLET_LOGOS[wb.name]} style={{ width:16, height:16, borderRadius:3, objectFit:"contain" }} alt={wb.name} onError={e=>e.target.style.display="none"}/>
-                                      {wb.name}
-                                    </a>
-                                  ))}
-                                </div>
-                              </div>
-                            );
-                          })()}
-                          <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>
-                            Or copy this URI and paste it in your wallet's WalletConnect screen:
-                          </div>
-                          <div style={{ fontFamily:T.mono, fontSize:9, color:T.text2, wordBreak:"break-all", marginBottom:8, maxHeight:48, overflowY:"auto" }}>{wcUri}</div>
-                          <button onClick={() => { try { navigator.clipboard.writeText(wcUri); } catch {} setWcCopied(true); setTimeout(()=>setWcCopied(false),2500); }}
-                            style={{ width:"100%", padding:"8px", background: wcCopied ? T.greenBg : T.accentBg, border:`1px solid ${wcCopied ? T.greenBd : T.accent+"66"}`, borderRadius:8, color: wcCopied ? T.green : T.accent, fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                            {wcCopied ? "✓ Copied!" : "Copy WalletConnect URI"}
-                          </button>
-                          <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"center", marginTop:8 }}>
-                            <div style={{ width:6, height:6, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite" }}/>
-                            <span style={{ fontSize:11, color:T.accent, fontWeight:500 }}>Waiting for approval in your wallet…</span>
-                          </div>
+                      {/* Loading: generating WC URI */}
+                      {wcStatus === "loading" && (
+                        <div style={{ display:"flex", alignItems:"center", gap:10, padding:"14px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:12 }}>
+                          <span className="spinner" style={{ width:18, height:18, border:"2px solid rgba(0,0,0,0.1)", borderTopColor:T.accent, flexShrink:0 }}/>
+                          <span style={{ fontSize:13, color:T.text2 }}>Opening {wcPreferredWallet || "wallet"}…</span>
                         </div>
                       )}
+
+                      {/* Waiting: URI sent, user needs to tap Confirm in their wallet app */}
+                      {wcStatus === "waiting" && (
+                        <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:12, padding:"14px" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                            <div style={{ width:8, height:8, borderRadius:"50%", background:T.accent, animation:"blink 1.4s infinite", flexShrink:0 }}/>
+                            <span style={{ fontSize:13, color:T.text1, fontWeight:600 }}>Waiting for approval in {wcPreferredWallet || "your wallet"}…</span>
+                          </div>
+                          <div style={{ fontSize:12, color:T.text3, marginBottom:12 }}>
+                            Switch to your wallet app and tap <strong style={{ color:T.text1 }}>Confirm</strong> to complete the connection.
+                          </div>
+                          <button onClick={() => {
+                              if (wcUri && wcPreferredWallet) {
+                                const a = document.createElement("a");
+                                a.href = getWcDirectLink(wcPreferredWallet, wcUri);
+                                a.target = "_blank"; a.rel = "noreferrer";
+                                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                              }
+                            }}
+                            style={{ width:"100%", padding:"10px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
+                            Open {wcPreferredWallet || "Wallet"} Again
+                          </button>
+                          <button onClick={() => { try { navigator.clipboard.writeText(wcUri); } catch {} setWcCopied(true); setTimeout(()=>setWcCopied(false),2500); }}
+                            style={{ width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:9, color: wcCopied ? T.green : T.text3, fontSize:12, cursor:"pointer" }}>
+                            {wcCopied ? "Copied" : "Copy URI as fallback"}
+                          </button>
+                        </div>
+                      )}
+
                     </div>
                   ) : (
                     /* Desktop: WalletConnect QR */
@@ -5323,8 +5146,6 @@ Order: \`${orderKey.slice(0,20)}…\`
                     style={{ marginTop:14, width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
                     Cancel
                   </button>
-                </>
-              )}
             </div>
           </div>
         )}
