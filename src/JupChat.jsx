@@ -6,6 +6,129 @@ import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDiscon
 import { SolanaAdapter } from "@reown/appkit-adapter-solana";
 import { solana as solanaMainnet } from "@reown/appkit/networks";
 
+// ── SVG Icon Components ─────────────────────────────────────────────────────
+const SvgChat = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+  </svg>
+);
+const SvgWallet = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="5" width="20" height="14" rx="2"/><path d="M16 12h2"/>
+    <path d="M2 10h20"/>
+  </svg>
+);
+const SvgZap = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+  </svg>
+);
+const SvgBarChart = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+  </svg>
+);
+const SvgLink = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+  </svg>
+);
+const SvgTwitterX = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.743l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+  </svg>
+);
+const SvgDiscord = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+  </svg>
+);
+const SvgTelegram = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/>
+  </svg>
+);
+const SvgGithub = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+    <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+  </svg>
+);
+const SvgBlog = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+    <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+  </svg>
+);
+const SvgPhone = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+  </svg>
+);
+const SvgLock = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+  </svg>
+);
+const SvgPalette = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/>
+    <circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/>
+    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>
+  </svg>
+);
+const SvgCoin = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
+  </svg>
+);
+const SvgMap = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>
+  </svg>
+);
+const SvgUpload = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/>
+    <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/>
+  </svg>
+);
+const SvgCalendar = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+  </svg>
+);
+const SvgRocket = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/>
+    <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>
+    <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>
+  </svg>
+);
+const SvgWarning = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+    <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>
+);
+const SvgFrog = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="9" cy="9" r="2"/><circle cx="15" cy="9" r="2"/>
+    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
+    <path d="M8 15s1.5 2 4 2 4-2 4-2"/>
+  </svg>
+);
+const SvgArrowReturn = ({size=14,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.43"/>
+  </svg>
+);
+const SvgSearch = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+  </svg>
+);
+
 // ─── Jupiter API endpoints (verified against developers.jup.ag docs Apr 2026) ─
 const JUP_BASE         = "https://api.jup.ag";
 const JUP_LITE         = "https://lite-api.jup.ag";
@@ -218,20 +341,27 @@ Rules:
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
 - CRITICAL — SHOW_RECURRING is fully supported. When user asks for a recurring/DCA order, you MUST return action:"SHOW_RECURRING" with all fields pre-filled from the user's message. Never tell the user to do it manually.`;
 
-const SUGGESTIONS = [
-  "What's the SOL price?",
-  "Swap SOL to BONK",
-  "Long SOL 10x perps",
-  "Limit order: buy SOL below $140",
-  "OCO: TP $200 SL $120 on SOL",
-  "DCA $10 USDC into SOL daily",
-  "Send 1 SOL via invite link",
-  "Top trending tokens today",
-  "Arsenal vs Man City prediction",
-  "Show earn vaults",
-  "Create a token on Jupiter Studio",
-  "Lock 1000 JUP for 1 year",
-  "Show swap route: SOL → USDC",
+const SUGGESTION_GROUPS = [
+  {
+    label: "Market",
+    color: "#c7f284",
+    items: ["What's the SOL price?", "Top trending tokens today", "Show swap route: SOL → USDC"],
+  },
+  {
+    label: "Trade",
+    color: "#63b3ed",
+    items: ["Swap SOL to BONK", "Limit order: buy SOL below $140", "OCO: TP $200 SL $120 on SOL", "Long SOL 10x perps"],
+  },
+  {
+    label: "Earn",
+    color: "#68d391",
+    items: ["Show earn vaults", "DCA $10 USDC into SOL daily"],
+  },
+  {
+    label: "Tools",
+    color: "#f6ad55",
+    items: ["Send 1 SOL via invite link", "Create a token on Jupiter Studio", "Lock 1000 JUP for 1 year", "Arsenal vs Man City prediction"],
+  },
 ];
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -644,7 +774,7 @@ export default function JupChat() {
       .dot2{animation-delay:0.2s} .dot3{animation-delay:0.4s}
       .hov-row:hover { background:rgba(255,255,255,0.06) !important; }
       .hov-btn:hover { opacity:0.8; }
-      .hov-sugg:hover { background:#1e2d3d !important; color:#e8f4f0 !important; }
+      .hov-sugg:hover { background:#1e2d3d !important; color:#e8f4f0 !important; border-color:#2d4a5a !important; transform:translateY(-1px); box-shadow:0 2px 8px rgba(0,0,0,0.3); }
       .hov-pick:hover { border-color:#c7f284 !important; }
       .send-btn:not(:disabled):hover { background:#c4562a !important; }
       .spinner { width:14px; height:14px; border:2px solid rgba(255,255,255,0.3); border-top-color:#fff; border-radius:50%; animation:spin 0.7s linear infinite; }
@@ -3953,7 +4083,7 @@ Order: \`${orderKey.slice(0,20)}…\`
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{ display:"flex", height:"100vh", background:T.bg, fontFamily:T.body, color:T.text1, overflow:"hidden" }}>
+    <div style={{ display:"flex", height:"100dvh", background:T.bg, fontFamily:T.body, color:T.text1, overflow:"hidden" }}>
 
       {/* Sidebar — fullscreen overlay on mobile, fixed panel on desktop */}
       {sidebarOpen && (
@@ -4014,11 +4144,11 @@ Order: \`${orderKey.slice(0,20)}…\`
         {/* ── Jupiter-style Transparent Nav ── */}
         {(() => {
           const socials = [
-            { label:"Twitter / X", icon:"𝕏", url:"https://x.com/JupiterExchange" },
-            { label:"Discord",     icon:"💬", url:"https://discord.gg/jup" },
-            { label:"Telegram",    icon:"✈️", url:"https://t.me/jupiter_exchange" },
-            { label:"GitHub",      icon:"⌥",  url:"https://github.com/jup-ag" },
-            { label:"Blog",        icon:"📝", url:"https://station.jup.ag/blog" },
+            { label:"Twitter / X", icon:<SvgTwitterX size={15} color="currentColor"/>, url:"https://x.com/JupiterExchange" },
+            { label:"Discord",     icon:<SvgDiscord size={15} color="currentColor"/>,  url:"https://discord.gg/jup" },
+            { label:"Telegram",    icon:<SvgTelegram size={15} color="currentColor"/>, url:"https://t.me/jupiter_exchange" },
+            { label:"GitHub",      icon:<SvgGithub size={15} color="currentColor"/>,   url:"https://github.com/jup-ag" },
+            { label:"Blog",        icon:<SvgBlog size={15} color="currentColor"/>,     url:"https://station.jup.ag/blog" },
           ];
           return (
             <>
@@ -4036,7 +4166,6 @@ Order: \`${orderKey.slice(0,20)}…\`
                     style={{ background:"none", border:"none", cursor:"pointer", color:T.text2, fontSize:20, padding:"4px 6px", lineHeight:1, borderRadius:8 }}
                     className="hov-btn">☰</button>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                    <div style={{ width:22, height:22, borderRadius:"50%", background:`linear-gradient(135deg, ${T.accent}, #00c3a0)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:"#0d1117" }}>J</div>
                     <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1, letterSpacing:"-0.2px" }}>JupChat</span>
                   </div>
                 </div>
@@ -4112,10 +4241,10 @@ Order: \`${orderKey.slice(0,20)}…\`
                   </div>
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))", gap:10 }}>
                     {[
-                      { icon:"💬", title:"Ask Anything", desc:"Prices, swaps, predictions, yields — just type naturally." },
-                      { icon:"🔗", title:"Connect Wallet", desc:"Tap Connect Wallet to swap, earn, or trade directly in-chat." },
-                      { icon:"⚡", title:"Execute On-Chain", desc:"Transactions happen via Jupiter APIs — no copy-paste needed." },
-                      { icon:"📊", title:"Track Portfolio", desc:"Ask for your balances, positions, or PnL anytime." },
+                      { icon:<SvgChat size={20} color="currentColor"/>, title:"Ask Anything", desc:"Prices, swaps, predictions, yields — just type naturally." },
+                      { icon:<SvgWallet size={20} color="currentColor"/>, title:"Connect Wallet", desc:"Tap Connect Wallet to swap, earn, or trade directly in-chat." },
+                      { icon:<SvgZap size={20} color="currentColor"/>, title:"Execute On-Chain", desc:"Transactions happen via Jupiter APIs — no copy-paste needed." },
+                      { icon:<SvgBarChart size={20} color="currentColor"/>, title:"Track Portfolio", desc:"Ask for your balances, positions, or PnL anytime." },
                     ].map(step => (
                       <div key={step.title} style={{ padding:"12px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
                         <div style={{ fontSize:20, marginBottom:6 }}>{step.icon}</div>
@@ -4140,7 +4269,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         })()}
 
         {/* Messages */}
-        <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"80px 20px 24px" }}>
+        <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"74px 20px 24px", backgroundImage:"radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)", backgroundSize:"24px 24px" }}>
           {msgs.map(m => (
             <div key={m.id} className="msg-enter" style={{ marginBottom:20, display:"flex", gap:12, justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
               {m.role==="ai" && (
@@ -4153,14 +4282,14 @@ Order: \`${orderKey.slice(0,20)}…\`
                 {m.showConnectBtn && !wallet && (
                   <button onClick={() => connectWallet(null)}
                     style={{ marginTop:12, display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"9px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
-                    🔗 Connect Wallet
+                    <SvgLink size={14} color="#0d1117"/> Connect Wallet
                   </button>
                 )}
                 {m.clawbackItems?.length > 0 && (
                   <div style={{ marginTop:12, display:"flex", flexDirection:"column", gap:6 }}>
                     {m.clawbackItems.map((inv, idx) => (
                       <div key={idx} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"7px 10px" }}>
-                        <span style={{ fontSize:12, color:T.text2 }}>↩ {inv.amount} {inv.token}</span>
+                        <span style={{ fontSize:12, color:T.text2, display:"flex", alignItems:"center", gap:5 }}><SvgArrowReturn size={12} color={T.text2}/> {inv.amount} {inv.token}</span>
                         <button onClick={() => doClawback(inv.code)}
                           style={{ padding:"5px 12px", background:"none", border:`1px solid ${T.border}`, borderRadius:7, color:T.text2, fontSize:11, cursor:"pointer", whiteSpace:"nowrap" }}>
                           Claw Back
@@ -5689,7 +5818,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           {showStudio && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🎨 Jupiter Studio — Create Token</div>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgPalette size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Jupiter Studio — Create Token</span></div>
                 <button onClick={() => setShowStudio(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
               </div>
               <div style={{ fontSize:11, color:T.text3, marginBottom:14, lineHeight:1.5 }}>
@@ -5742,7 +5871,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                       </div>
                     </>
                   ) : (
-                    <div style={{ fontSize:12, color:T.text3 }}>📁 Click to upload token image</div>
+                    <div style={{ fontSize:12, color:T.text3, display:"flex", alignItems:"center", gap:6 }}><SvgUpload size={14} color={T.text3}/> Click to upload token image</div>
                   )}
                   <input type="file" accept="image/*" style={{ display:"none" }}
                     onChange={e => {
@@ -5817,7 +5946,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           {showStudioFees && studioFees && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>💰 Creator Fees</div>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgCoin size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Creator Fees</span></div>
                 <button onClick={() => setShowStudioFees(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
               </div>
               {(() => {
@@ -5846,7 +5975,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           {showLock && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🔒 Lock Tokens</div>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgLock size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Lock Tokens</span></div>
                 <button onClick={() => setShowLock(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
               </div>
               <div style={{ fontSize:11, color:T.text3, marginBottom:14, lineHeight:1.5 }}>
@@ -5920,7 +6049,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           {showLocks && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🔒 Token Locks</div>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgLock size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Token Locks</span></div>
                 <button onClick={() => setShowLocks(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
               </div>
               {locksLoading && <div style={{ fontSize:13, color:T.text3 }}>Loading locks…</div>}
@@ -5964,7 +6093,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           {showRoute && routeData && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🗺️ Swap Route: {routeData.fromSym} → {routeData.toSym}</div>
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgMap size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Swap Route: {routeData.fromSym} → {routeData.toSym}</span></div>
                 <button onClick={() => setShowRoute(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
               </div>
               {routeLoading && <div style={{ fontSize:13, color:T.text3 }}>Fetching route…</div>}
@@ -6018,13 +6147,37 @@ Order: \`${orderKey.slice(0,20)}…\`
 
           {/* Suggestions */}
           {msgs.length <= 2 && !typing && (
-            <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:20, paddingLeft:44 }}>
-              {SUGGESTIONS.map(s => (
-                <button key={s} onClick={() => send(s)} className="hov-sugg"
-                  style={{ padding:"7px 14px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:20, fontSize:12, color:T.text2, cursor:"pointer" }}>
-                  {s}
-                </button>
-              ))}
+            <div style={{ marginBottom:24, paddingLeft:0 }}>
+              <div style={{ fontSize:11, color:T.text3, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:14, paddingLeft:4 }}>Quick actions</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+                {SUGGESTION_GROUPS.map(group => (
+                  <div key={group.label}>
+                    <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:8 }}>
+                      <div style={{ width:6, height:6, borderRadius:"50%", background:group.color, flexShrink:0 }}/>
+                      <span style={{ fontSize:10, fontWeight:700, color:group.color, letterSpacing:"0.1em", textTransform:"uppercase" }}>{group.label}</span>
+                    </div>
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                      {group.items.map(s => (
+                        <button key={s} onClick={() => send(s)} className="hov-sugg"
+                          style={{
+                            padding:"7px 13px",
+                            background:T.surface,
+                            border:`1px solid ${T.border}`,
+                            borderRadius:10,
+                            fontSize:12,
+                            color:T.text2,
+                            cursor:"pointer",
+                            lineHeight:1.3,
+                            transition:"all 0.15s",
+                            textAlign:"left",
+                          }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           <div ref={endRef}/>
@@ -6034,7 +6187,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         {/* PWA Install Banner */}
         {installBanner && (
           <div style={{ position:"absolute", bottom:80, left:12, right:12, zIndex:100, background:T.surface, border:`1px solid ${T.accent}`, borderRadius:16, padding:"14px 16px", boxShadow:"0 -4px 24px rgba(0,0,0,0.4)", display:"flex", alignItems:"center", gap:12, animation:"fadeUp 0.3s ease" }}>
-            <span style={{ fontSize:24, flexShrink:0 }}>📲</span>
+            <span style={{ fontSize:24, flexShrink:0, display:"flex", alignItems:"center" }}><SvgPhone size={24} color={T.accent}/></span>
             <div style={{ flex:1 }}>
               <div style={{ fontSize:13, fontWeight:600, color:T.text1, marginBottom:2 }}>Add ChatFi to Home Screen</div>
               <div style={{ fontSize:11, color:T.text2 }}>{installBanner.isIOS ? "Tap Share → Add to Home Screen" : "Instant access, no browser bar"}</div>
@@ -6058,7 +6211,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         )}
 
         {/* ── Circular Input Bar ── */}
-        <div style={{ padding:"10px 16px 18px", background:"transparent" }}>
+        <div style={{ padding:"10px 16px 0", paddingBottom:"calc(max(18px, env(safe-area-inset-bottom, 18px)) + 8px)", background:T.bg, borderTop:`1px solid ${T.border}22`, flexShrink:0 }}>
           <div style={{
             display:"flex", alignItems:"center", gap:0,
             background:T.surface,
