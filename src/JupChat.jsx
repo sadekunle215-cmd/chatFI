@@ -407,13 +407,100 @@ createAppKit({
   features: { analytics: false },
 });
 
-const fmt = (text = "") =>
-  text
-    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.*?)\*/g, "<em>$1</em>")
-    .replace(/`(.*?)`/g, "<code>$1</code>")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer" style="color:#c7f284;text-decoration:underline">$1</a>')
-    .replace(/\n/g, "<br/>");
+const fmt = (text = "") => {
+  // Inline markdown helpers
+  const inlineMd = (s) =>
+    s.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+     .replace(/\*(.*?)\*/g, "<em>$1</em>")
+     .replace(/`(.*?)`/g, "<code>$1</code>")
+     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer" style="color:#c7f284;text-decoration:underline">$1</a>');
+
+  const lines = text.split("\n");
+  let html = "";
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // ── Numbered list item: "1. TOKEN — Name $price (+x%) · score N"
+    const numMatch = line.match(/^(\d+)\.\s+(.+)/);
+    if (numMatch) {
+      // Collect consecutive numbered lines into a card grid
+      const items = [];
+      while (i < lines.length) {
+        const m = lines[i].match(/^(\d+)\.\s+(.+)/);
+        if (!m) break;
+        items.push({ num: m[1], content: m[2] });
+        i++;
+      }
+
+      html += `<div style="display:flex;flex-direction:column;gap:6px;margin:10px 0">`;
+      for (const item of items) {
+        // Parse "**SYMBOL** — Name ✓ $price (+x%) · score N" or "SYMBOL — Name ✓ $price (+x%) · score N"
+        const tokenMatch = item.content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+-]+)\s+\(([^)]+)\)(?:\s+[·•]\s+score\s+(\d+))?/);
+        if (tokenMatch) {
+          const [, sym, name, price, change, score] = tokenMatch;
+          const isUp = change.startsWith("+");
+          const isVerified = item.content.includes("✓");
+          const changeColor = isUp ? "#68d391" : "#fc8181";
+          const scoreNum = score ? parseInt(score) : null;
+          const scoreColor = scoreNum >= 90 ? "#c7f284" : scoreNum >= 70 ? "#68d391" : "#8fa8b8";
+
+          html += `<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:#161e27;border:1px solid #1e2d3d;border-radius:10px;transition:all 0.15s">
+            <span style="font-size:11px;font-weight:700;color:#4d6a7a;min-width:18px;text-align:right">${item.num}</span>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:5px">
+                <span style="font-size:13px;font-weight:700;color:#e8f4f0">${sym.replace(/✓/g,"").trim()}</span>
+                ${isVerified ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="#c7f284" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ""}
+                <span style="font-size:11px;color:#8fa8b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">${name.replace(/✓/g,"").trim()}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+                <span style="font-size:12px;font-weight:600;color:#e8f4f0">${price}</span>
+                <span style="font-size:11px;font-weight:600;color:${changeColor}">${change}</span>
+              </div>
+            </div>
+            ${scoreNum ? `<div style="text-align:right"><div style="font-size:10px;color:#4d6a7a;margin-bottom:1px">score</div><div style="font-size:13px;font-weight:700;color:${scoreColor}">${scoreNum}</div></div>` : ""}
+          </div>`;
+        } else {
+          // Generic numbered item — still render as a clean pill
+          html += `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 12px;background:#161e27;border:1px solid #1e2d3d;border-radius:10px">
+            <span style="font-size:11px;font-weight:700;color:#4d6a7a;min-width:18px;text-align:right;padding-top:1px">${item.num}</span>
+            <span style="font-size:13px;color:#e8f4f0;line-height:1.5">${inlineMd(item.content)}</span>
+          </div>`;
+        }
+      }
+      html += `</div>`;
+      continue;
+    }
+
+    // ── Section header: line ending with colon or all-caps short phrase
+    if (/^[A-Z][^a-z]{0,40}:$/.test(line.trim()) || /^\*\*[^*]+\*\*$/.test(line.trim())) {
+      html += `<div style="font-size:11px;font-weight:700;color:#4d6a7a;letter-spacing:0.08em;text-transform:uppercase;margin:12px 0 6px">${inlineMd(line.trim().replace(/:$/, ""))}</div>`;
+      i++;
+      continue;
+    }
+
+    // ── Bullet list item
+    if (/^[-•]\s/.test(line)) {
+      html += `<div style="display:flex;gap:8px;padding:3px 0"><span style="color:#c7f284;font-size:10px;margin-top:4px;flex-shrink:0">▸</span><span style="font-size:13px;color:#e8f4f0;line-height:1.5">${inlineMd(line.replace(/^[-•]\s+/, ""))}</span></div>`;
+      i++;
+      continue;
+    }
+
+    // ── Blank line → small gap
+    if (line.trim() === "") {
+      html += `<div style="height:6px"></div>`;
+      i++;
+      continue;
+    }
+
+    // ── Normal paragraph line
+    html += `<span style="font-size:14px;line-height:1.6">${inlineMd(line)}</span><br/>`;
+    i++;
+  }
+
+  return html;
+};
 
 // ─── Token search picker component ───────────────────────────────────────────
 function TokenPicker({ value, onSelect, jupFetch }) {
