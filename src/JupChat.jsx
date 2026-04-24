@@ -999,19 +999,17 @@ export default function JupChat() {
       const presetCfg = presets[preset] || presets.meme;
       const imageType = studioImage.type || "image/jpeg";
 
-      // ── Step 1: Get transaction + presigned URLs ──
-      const createRes = await fetch(`${JUP_STUDIO_API}/dbc-pool/create-tx`, {
+      // ── Step 1: Get transaction + presigned URLs (via proxy to avoid CORS) ──
+      const createData = await jupFetch(`${JUP_STUDIO_API}/dbc-pool/create-tx`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: {
           ...presetCfg,
           tokenName: name.trim(),
           tokenSymbol: symbol.trim().toUpperCase(),
           tokenImageContentType: imageType,
           creator: walletFull,
-        }),
+        },
       });
-      const createData = await createRes.json();
       if (createData.error) throw new Error(createData.error?.message || JSON.stringify(createData.error));
       if (!createData.transaction) throw new Error("No transaction returned from Studio API.");
 
