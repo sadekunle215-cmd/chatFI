@@ -1,12 +1,9 @@
-// api/send.js — Vercel serverless function
-// Handles Jupiter Send invite keypair generation + partial signing server-side.
-// Uses CommonJS (require) to match the rest of the api/ folder.
-//
+// api/send.js — Vercel serverless function (ESM — matches "type":"module" in package.json)
 // Actions:
 //   action: "send"     (default) — craft + partially sign a new invite send tx
 //   action: "clawback"           — craft + partially sign a clawback tx for existing invite
 
-const { Keypair, VersionedTransaction } = require("@solana/web3.js");
+import { Keypair, VersionedTransaction } from "@solana/web3.js";
 
 const JUP_SEND_API = "https://api.jup.ag/send/v1";
 
@@ -19,19 +16,19 @@ function bytesToB64(bytes) {
 
 function generateInviteCode() {
   const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-  const arr   = new Uint8Array(12);
+  const arr = new Uint8Array(12);
   crypto.getRandomValues(arr);
   return Array.from(arr).map(b => chars[b % chars.length]).join("");
 }
 
 async function inviteCodeToKeypair(code) {
-  const data       = new TextEncoder().encode(code);
+  const data = new TextEncoder().encode(code);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   return Keypair.fromSeed(new Uint8Array(hashBuffer));
 }
 
 async function partialSignWithInviteKeypair(tx, inviteKeypair) {
-  const msgBytes  = tx.message.serialize();
+  const msgBytes = tx.message.serialize();
   const inviteIdx = tx.message.staticAccountKeys.findIndex(
     key => key.equals(inviteKeypair.publicKey)
   );
@@ -48,12 +45,19 @@ async function partialSignWithInviteKeypair(tx, inviteKeypair) {
   );
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { action = "send", sender, amount, mint, inviteCode } = req.body || {};
+  let body = req.body;
+  // Vercel ESM functions sometimes don't auto-parse body — handle both cases
+  if (typeof body === "string") {
+    try { body = JSON.parse(body); } catch { body = {}; }
+  }
+  body = body || {};
+
+  const { action = "send", sender, amount, mint, inviteCode } = body;
   const jupHeaders = {
     "Content-Type": "application/json",
     ...(process.env.JUPITER_API_KEY ? { "x-api-key": process.env.JUPITER_API_KEY } : {}),
@@ -113,4 +117,4 @@ module.exports = async function handler(req, res) {
     console.error("[api/send] error:", err);
     return res.status(500).json({ error: err?.message || "Internal server error" });
   }
-};
+}
