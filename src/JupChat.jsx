@@ -434,7 +434,7 @@ const fmt = (text = "") => {
         i++;
       }
 
-      html += `<div style="display:flex;flex-direction:column;gap:6px;margin:10px 0">`;
+      html += `<div style="display:flex;flex-direction:column;gap:5px;margin:10px 0">`;
       for (const item of items) {
         // Parse "**SYMBOL** — Name ✓ $price (+x%) · score N" or "SYMBOL — Name ✓ $price (+x%) · score N"
         const tokenMatch = item.content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+-]+)\s+\(([^)]+)\)(?:\s+[·•]\s+score\s+(\d+))?/);
@@ -443,29 +443,40 @@ const fmt = (text = "") => {
           const isUp = change.startsWith("+");
           const isVerified = item.content.includes("✓");
           const changeColor = isUp ? "#68d391" : "#fc8181";
+          const changeBg = isUp ? "rgba(104,211,145,0.1)" : "rgba(252,129,129,0.1)";
           const scoreNum = score ? parseInt(score) : null;
           const scoreColor = scoreNum >= 90 ? "#c7f284" : scoreNum >= 70 ? "#68d391" : "#8fa8b8";
+          const rankNum = parseInt(item.num);
+          const rankColor = rankNum === 1 ? "#f6d860" : rankNum === 2 ? "#c0c0c0" : rankNum === 3 ? "#cd7f32" : "#2d4a5a";
 
-          html += `<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:#161e27;border:1px solid #1e2d3d;border-radius:10px;transition:all 0.15s">
-            <span style="font-size:11px;font-weight:700;color:#4d6a7a;min-width:18px;text-align:right">${item.num}</span>
-            <div style="flex:1;min-width:0">
-              <div style="display:flex;align-items:center;gap:5px">
-                <span style="font-size:13px;font-weight:700;color:#e8f4f0">${sym.replace(/✓/g,"").trim()}</span>
-                ${isVerified ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="#c7f284" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ""}
-                <span style="font-size:11px;color:#8fa8b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">${name.replace(/✓/g,"").trim()}</span>
+          html += `<div style="display:flex;align-items:center;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;">
+            <div style="width:3px;align-self:stretch;background:${rankNum<=3 ? rankColor : "#1e2d3d"};flex-shrink:0"></div>
+            <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;flex:1;min-width:0">
+              <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;flex-shrink:0">${item.num}</span>
+              <div style="flex:1;min-width:0;overflow:hidden">
+                <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
+                  <span style="font-size:13px;font-weight:700;color:#e8f4f0;letter-spacing:-0.2px">${sym.replace(/✓/g,"").trim()}</span>
+                  ${isVerified ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="#c7f284" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ""}
+                  <span style="font-size:11px;color:#4d6a7a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name.replace(/✓/g,"").trim()}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span style="font-size:12px;font-weight:600;color:#c8d8e0">${price}</span>
+                  <span style="font-size:10px;font-weight:700;color:${changeColor};background:${changeBg};padding:1px 6px;border-radius:5px">${change}</span>
+                </div>
               </div>
-              <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
-                <span style="font-size:12px;font-weight:600;color:#e8f4f0">${price}</span>
-                <span style="font-size:11px;font-weight:600;color:${changeColor}">${change}</span>
-              </div>
+              ${scoreNum ? `<div style="text-align:center;flex-shrink:0;padding-left:4px"><div style="font-size:9px;color:#4d6a7a;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:1px">score</div><div style="font-size:14px;font-weight:800;color:${scoreColor};line-height:1">${scoreNum}</div></div>` : ""}
             </div>
-            ${scoreNum ? `<div style="text-align:right"><div style="font-size:10px;color:#4d6a7a;margin-bottom:1px">score</div><div style="font-size:13px;font-weight:700;color:${scoreColor}">${scoreNum}</div></div>` : ""}
           </div>`;
         } else {
-          // Generic numbered item — still render as a clean pill
-          html += `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 12px;background:#161e27;border:1px solid #1e2d3d;border-radius:10px">
-            <span style="font-size:11px;font-weight:700;color:#4d6a7a;min-width:18px;text-align:right;padding-top:1px">${item.num}</span>
-            <span style="font-size:13px;color:#e8f4f0;line-height:1.5">${inlineMd(item.content)}</span>
+          // Generic numbered item — clean pill
+          const rankNum = parseInt(item.num);
+          const rankColor = rankNum === 1 ? "#f6d860" : rankNum === 2 ? "#c0c0c0" : rankNum === 3 ? "#cd7f32" : "#2d4a5a";
+          html += `<div style="display:flex;align-items:flex-start;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;">
+            <div style="width:3px;align-self:stretch;background:${rankNum<=3 ? rankColor : "#1e2d3d"};flex-shrink:0"></div>
+            <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;flex:1">
+              <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;padding-top:2px;flex-shrink:0">${item.num}</span>
+              <span style="font-size:13px;color:#e8f4f0;line-height:1.5">${inlineMd(item.content)}</span>
+            </div>
           </div>`;
         }
       }
@@ -490,6 +501,19 @@ const fmt = (text = "") => {
     // ── Blank line → small gap
     if (line.trim() === "") {
       html += `<div style="height:6px"></div>`;
+      i++;
+      continue;
+    }
+
+    // ── Price line: "TOKEN: $price" or "SOL: $86.84"
+    const priceLineMatch = line.match(/^([A-Z]{2,10}):\s+(\$[\d.,]+)(\s+.*)?$/);
+    if (priceLineMatch) {
+      const [, tok, price, rest] = priceLineMatch;
+      html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#161e27;border:1px solid #1e2d3d;border-radius:10px;margin:4px 0">
+        <span style="font-size:13px;font-weight:700;color:#8fa8b8">${tok}</span>
+        <span style="font-size:16px;font-weight:800;color:#e8f4f0;letter-spacing:-0.3px">${price}</span>
+        ${rest ? `<span style="font-size:12px;color:#68d391">${inlineMd(rest.trim())}</span>` : ""}
+      </div>`;
       i++;
       continue;
     }
@@ -4253,7 +4277,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                     style={{ background:"none", border:"none", cursor:"pointer", color:T.text2, fontSize:20, padding:"4px 6px", lineHeight:1, borderRadius:8 }}
                     className="hov-btn">☰</button>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                    <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1, letterSpacing:"-0.2px" }}>JupChat</span>
+                    <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1, letterSpacing:"-0.2px" }}>ChatFi</span>
                   </div>
                 </div>
 
@@ -4323,7 +4347,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                   boxShadow:"0 8px 32px rgba(0,0,0,0.4)",
                 }}>
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-                    <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1 }}>How JupChat Works</div>
+                    <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1 }}>How ChatFi Works</div>
                     <button onClick={() => setShowHowItWorks(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:18, cursor:"pointer", lineHeight:1 }}>✕</button>
                   </div>
                   <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(160px, 1fr))", gap:10 }}>
@@ -5343,44 +5367,77 @@ Order: \`${orderKey.slice(0,20)}…\`
 
           {/* ── Portfolio panel ───────────────────────────────────────── */}
           {showPortfolio && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>💼 Portfolio</div>
-              <div style={{ fontSize:11, color:T.text3, marginBottom:12 }}>{walletFull?.slice(0,4)}…{walletFull?.slice(-4)}</div>
+            <div style={{ margin:"0 0 20px 44px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, overflow:"hidden" }}>
+              {/* Header */}
+              <div style={{ padding:"16px 16px 12px", borderBottom:`1px solid ${T.border}`, background:`linear-gradient(135deg, #161e27 0%, #1a2535 100%)` }}>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <div style={{ width:36, height:36, borderRadius:10, background:`linear-gradient(135deg, ${T.accent}22, ${T.accent}44)`, border:`1px solid ${T.accent}44`, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                      <SvgBarChart size={18} color={T.accent}/>
+                    </div>
+                    <div>
+                      <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1 }}>Portfolio</div>
+                      <div style={{ fontSize:10, color:T.text3, fontFamily:"monospace", marginTop:1 }}>{walletFull?.slice(0,6)}…{walletFull?.slice(-6)}</div>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowPortfolio(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:18, cursor:"pointer", lineHeight:1, padding:"4px 6px" }}>✕</button>
+                </div>
+              </div>
 
               {portfolioLoading ? (
-                <div style={{ fontSize:12, color:T.text3 }}>Loading portfolio…</div>
+                <div style={{ padding:20, fontSize:12, color:T.text3, display:"flex", alignItems:"center", gap:8 }}>
+                  <span className="spinner" style={{ borderTopColor:T.accent }}/> Loading portfolio…
+                </div>
               ) : !portfolioData ? (
-                <div style={{ fontSize:12, color:T.text3 }}>No data available.</div>
+                <div style={{ padding:20, fontSize:12, color:T.text3 }}>No data available.</div>
               ) : (
-                <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+                <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
 
                   {/* Token balances */}
                   <div>
-                    <div style={{ fontSize:12, fontWeight:700, color:T.text2, marginBottom:6 }}>💰 Token Balances</div>
-                    {Object.entries(portfolioData.solBalance || {}).length === 0 ? (
-                      <div style={{ fontSize:12, color:T.text3 }}>No balances found.</div>
-                    ) : (
-                      Object.entries(portfolioData.solBalance || {}).map(([sym, bal]) => {
-                        const usdVal = portfolioData.prices?.[sym] ? (bal * portfolioData.prices[sym]) : null;
-                        return (
-                          <div key={sym} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:`1px solid ${T.border}`, fontSize:13 }}>
-                            <span style={{ color:T.text1, fontWeight:600 }}>{sym}</span>
-                            <span style={{ color:T.text2 }}>{bal < 1 ? bal.toFixed(6) : bal.toFixed(4)}{usdVal ? <span style={{ color:T.text3, marginLeft:6, fontSize:11 }}>(${usdVal.toFixed(2)})</span> : null}</span>
-                          </div>
-                        );
-                      })
-                    )}
+                    <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                      <SvgCoin size={13} color={T.accent}/>
+                      <span style={{ fontSize:11, fontWeight:700, color:T.accent, letterSpacing:"0.08em", textTransform:"uppercase" }}>Token Balances</span>
+                    </div>
+                    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                      {Object.entries(portfolioData.solBalance || {}).length === 0 ? (
+                        <div style={{ fontSize:12, color:T.text3 }}>No balances found.</div>
+                      ) : (
+                        Object.entries(portfolioData.solBalance || {}).map(([sym, bal]) => {
+                          const usdVal = portfolioData.prices?.[sym] ? (bal * portfolioData.prices[sym]) : null;
+                          return (
+                            <div key={sym} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                <div style={{ width:28, height:28, borderRadius:8, background:`linear-gradient(135deg, ${T.border}, ${T.surface})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:T.text2 }}>{sym.slice(0,2)}</div>
+                                <span style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{sym}</span>
+                              </div>
+                              <div style={{ textAlign:"right" }}>
+                                <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{bal < 1 ? bal.toFixed(6) : bal.toFixed(4)}</div>
+                                {usdVal && <div style={{ fontSize:11, color:T.text3, marginTop:1 }}>${usdVal.toFixed(2)}</div>}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
                   </div>
 
                   {/* DeFi positions */}
                   {portfolioData.defi?.positions?.length > 0 && (
                     <div>
-                      <div style={{ fontSize:12, fontWeight:700, color:T.text2, marginBottom:6 }}>🏦 DeFi Positions ({portfolioData.defi.positions.length})</div>
-                      {portfolioData.defi.positions.slice(0,5).map((p, i) => (
-                        <div key={i} style={{ fontSize:12, color:T.text2, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
-                          {p.platform || p.type || "Position"}: {p.value ? `$${parseFloat(p.value).toFixed(2)}` : "—"}
-                        </div>
-                      ))}
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                        <SvgZap size={13} color="#63b3ed"/>
+                        <span style={{ fontSize:11, fontWeight:700, color:"#63b3ed", letterSpacing:"0.08em", textTransform:"uppercase" }}>DeFi Positions</span>
+                        <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.defi.positions.length}</span>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {portfolioData.defi.positions.slice(0,5).map((p, i) => (
+                          <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
+                            <span style={{ color:T.text2 }}>{p.platform || p.type || "Position"}</span>
+                            <span style={{ fontWeight:600, color:T.text1 }}>{p.value ? `$${parseFloat(p.value).toFixed(2)}` : "—"}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -5389,18 +5446,25 @@ Order: \`${orderKey.slice(0,20)}…\`
                     const earnPos = (portfolioData.earnPositions||[]).filter(e => parseFloat(e.underlyingAssets||e.underlying_assets||0)>0 || parseFloat(e.shares||0)>0);
                     return earnPos.length > 0 ? (
                       <div>
-                        <div style={{ fontSize:12, fontWeight:700, color:T.text2, marginBottom:6 }}>💎 Earn Positions ({earnPos.length})</div>
-                        {earnPos.slice(0,5).map((e, i) => {
-                          const sym = e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
-                          const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
-                          const dec = e.asset?.decimals ?? e.decimals ?? 6;
-                          const amt = ua > 1e6 ? (ua/Math.pow(10,dec)).toFixed(4) : ua.toFixed(4);
-                          return (
-                            <div key={i} style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:T.text2, padding:"4px 0", borderBottom:`1px solid ${T.border}` }}>
-                              <span>{sym} (Earn)</span><span style={{ color:T.green }}>{amt}</span>
-                            </div>
-                          );
-                        })}
+                        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                          <SvgBarChart size={13} color="#68d391"/>
+                          <span style={{ fontSize:11, fontWeight:700, color:"#68d391", letterSpacing:"0.08em", textTransform:"uppercase" }}>Earn Positions</span>
+                          <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{earnPos.length}</span>
+                        </div>
+                        <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                          {earnPos.slice(0,5).map((e, i) => {
+                            const sym = e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
+                            const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
+                            const dec = e.asset?.decimals ?? e.decimals ?? 6;
+                            const amt = ua > 1e6 ? (ua/Math.pow(10,dec)).toFixed(4) : ua.toFixed(4);
+                            return (
+                              <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
+                                <span style={{ color:T.text2 }}>{sym} <span style={{ fontSize:10, color:T.text3 }}>Earn</span></span>
+                                <span style={{ fontWeight:600, color:"#68d391" }}>{amt}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     ) : null;
                   })()}
@@ -5408,29 +5472,39 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {/* Prediction positions */}
                   {(portfolioData.predPositions||[]).length > 0 && (
                     <div>
-                      <div style={{ fontSize:12, fontWeight:700, color:T.text2, marginBottom:6 }}>🎯 Prediction Positions ({portfolioData.predPositions.length})</div>
-                      {portfolioData.predPositions.slice(0,5).map((p, i) => {
-                        const title = p.marketMetadata?.title || p.marketId || "Market";
-                        const side  = p.isYes ? "YES" : "NO";
-                        const cost  = p.totalCostUsd ? `$${(parseInt(p.totalCostUsd)/1_000_000).toFixed(2)}` : "";
-                        const claimable = p.claimable;
-                        return (
-                          <div key={i} style={{ fontSize:12, padding:"4px 0", borderBottom:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between" }}>
-                            <span style={{ color: side==="YES" ? T.green : T.red }}>{side}</span>
-                            <span style={{ color:T.text2, flex:1, margin:"0 8px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{title.slice(0,35)}</span>
-                            <span style={{ color: claimable ? T.green : T.text3 }}>{claimable ? "🏆 Claim" : cost}</span>
-                          </div>
-                        );
-                      })}
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                        <SvgZap size={13} color="#f6ad55"/>
+                        <span style={{ fontSize:11, fontWeight:700, color:"#f6ad55", letterSpacing:"0.08em", textTransform:"uppercase" }}>Predictions</span>
+                        <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.predPositions.length}</span>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {portfolioData.predPositions.slice(0,5).map((p, i) => {
+                          const title = p.marketMetadata?.title || p.marketId || "Market";
+                          const side  = p.isYes ? "YES" : "NO";
+                          const cost  = p.totalCostUsd ? `$${(parseInt(p.totalCostUsd)/1_000_000).toFixed(2)}` : "";
+                          const claimable = p.claimable;
+                          return (
+                            <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${claimable ? T.greenBd : T.border}`, borderRadius:10, fontSize:12 }}>
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
+                                <span style={{ fontSize:11, fontWeight:700, padding:"2px 7px", borderRadius:6, background: side==="YES" ? T.greenBg : T.redBg, color: side==="YES" ? T.green : T.red }}>{side}</span>
+                                <span style={{ fontWeight:600, color: claimable ? T.green : T.text3 }}>{claimable ? "🏆 Claimable" : cost}</span>
+                              </div>
+                              <div style={{ color:T.text2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{title.slice(0,42)}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
               )}
 
-              <button onClick={() => setShowPortfolio(false)}
-                style={{ marginTop:14, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
-                Close
-              </button>
+              <div style={{ padding:"0 16px 16px" }}>
+                <button onClick={() => setShowPortfolio(false)}
+                  style={{ width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer", letterSpacing:"0.02em" }}>
+                  Close
+                </button>
+              </div>
             </div>
           )}
 
