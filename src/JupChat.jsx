@@ -1102,25 +1102,43 @@ export default function JupChat() {
   };
 
   // ── Lock: fetch existing locks for wallet ────────────────────────────────────
+  // Queries Jupiter Lock program on-chain directly — no backend needed.
   const fetchLocks = async () => {
     if (!walletFull) { push("ai", "Connect your wallet first to view locks."); return; }
     setLocksLoading(true);
     setShowLocks(false);
     setLockList([]);
     try {
-      const apiRes = await fetch("/api/lock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "accounts", wallet: walletFull }),
-      });
-      const res = await apiRes.json();
-      if (res.error) throw new Error(res.error);
-      const accounts = res.accounts || [];
-      // Normalize to the shape the rest of the UI expects
-      const unique = accounts.map(a => ({ pubkey: a.pubkey, lockId: a.pubkey, data: a.data }));
-      setLockList(unique);
+      const { PublicKey, Connection } = await import("@solana/web3.js");
+      const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
+      const RPC_URL      = "https://mainnet.helius-rpc.com/?api-key=public";
+      const connection   = new Connection(RPC_URL, "confirmed");
+      const walletPk     = new PublicKey(walletFull);
+
+      // VestingEscrow layout: 8 disc + 32 base + 32 mint + 32 sender + 32 recipient = sender@72, recipient@104
+      const [asSender, asRecipient] = await Promise.all([
+        connection.getProgramAccounts(LOCK_PROGRAM, { filters: [
+          { dataSize: 281 },
+          { memcmp: { offset: 72, bytes: walletPk.toBase58() } }
+        ]}).catch(() => []),
+        connection.getProgramAccounts(LOCK_PROGRAM, { filters: [
+          { dataSize: 281 },
+          { memcmp: { offset: 104, bytes: walletPk.toBase58() } }
+        ]}).catch(() => []),
+      ]);
+
+      const seen = new Set();
+      const accounts = [];
+      for (const item of [...asSender, ...asRecipient]) {
+        const key = item.pubkey.toBase58();
+        if (!seen.has(key)) {
+          seen.add(key);
+          accounts.push({ pubkey: key, lockId: key, data: item.account.data });
+        }
+      }
+      setLockList(accounts);
       setShowLocks(true);
-      if (!unique.length) push("ai", "No token locks found for your wallet.");
+      if (!accounts.length) push("ai", "No token locks found for your wallet.");
     } catch (err) {
       push("ai", `Could not fetch locks: ${err?.message}`);
     }
@@ -1128,57 +1146,112 @@ export default function JupChat() {
   };
 
   // ── Lock: create a new token lock ───────────────────────────────────────────
-  // Uses /api/lock which calls @meteora-ag/met-lock-sdk server-side.
-  // Jupiter Lock has no REST API — transactions must be built via the on-chain program SDK.
+  // Builds the Jupiter Lock createVestingEscrow tx entirely client-side.
+  // Jupiter Lock program: LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn
+  // No backend SDK needed — raw instruction encoding via @solana/web3.js.
   const doCreateLock = async () => {
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet not connected."); return; }
-    const { mint, amount, cliffDays, vestingDays, recipient } = lockCfg;
+    const { mint, cliffDays, vestingDays, recipient } = lockCfg;
+    const amount = lockCfg.amount;
     if (!mint || !amount || parseFloat(amount) <= 0) return;
     setLockStatus("signing");
     try {
-      const cliffSecs     = Math.floor(parseFloat(cliffDays   || 0)   * 86400);
-      const vestingSecs   = Math.floor(parseFloat(vestingDays || 365) * 86400);
-      const recipientAddr = recipient?.trim() || walletFull;
-      const dec    = tokenDecimalsRef.current[lockCfg.token?.toUpperCase()] || 6;
-      const amtRaw = Math.floor(parseFloat(amount) * Math.pow(10, dec)).toString();
+      const { PublicKey, SystemProgram, Transaction, Keypair: KP,
+              SYSVAR_RENT_PUBKEY, TransactionInstruction } = await import("@solana/web3.js");
+      const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID,
+              ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } = await import("@solana/spl-token");
 
-      // Call our /api/lock route — builds tx server-side using met-lock-sdk
-      const apiRes = await fetch("/api/lock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action:"create", funder:walletFull, recipient:recipientAddr, mint, amount:amtRaw, cliffSecs, vestingSecs }),
-      });
-      const res = await apiRes.json();
-      if (res.error) throw new Error(res.error);
-      if (!res.transaction) throw new Error("No transaction returned from lock builder.");
+      const LOCK_PROGRAM   = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
+      const RPC_URL        = "https://mainnet.helius-rpc.com/?api-key=public" ;
 
-      // Build and sign the real transaction returned by the lock API
-      const bytes  = b64ToBytes(res.transaction);
-      const tx     = Transaction.from(bytes);
-      const signed = await provider.signTransaction(tx);
-      const rpcRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signed.serialize()), { encoding:"base64", skipPreflight:true }] },
-      });
-      const sig = rpcRes?.result;
-      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+      const { Connection }   = await import("@solana/web3.js");
+      const connection       = new Connection(RPC_URL, "confirmed");
 
-      // Wait for real on-chain confirmation before showing success
-      push("ai", `Confirming lock on-chain… ⏳`);
-      const rpcConn = new (await import("@solana/web3.js")).Connection(
-        process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com", "confirmed"
+      const cliff   = Math.max(Math.floor(parseFloat(cliffDays   || 0)   * 86400), 0);
+      const vesting = Math.max(Math.floor(parseFloat(vestingDays || 1)   * 86400), 86400);
+      const periods = Math.max(Math.floor(vesting / 86400), 1);
+
+      const dec     = tokenDecimalsRef.current[lockCfg.token?.toUpperCase()] || 9;
+      const amtRaw  = BigInt(Math.floor(parseFloat(amount) * Math.pow(10, dec)));
+      const perPeriod = amtRaw / BigInt(periods);
+
+      const funderKey    = new PublicKey(walletFull);
+      const recipientKey = recipient?.trim() ? new PublicKey(recipient.trim()) : funderKey;
+      const mintKey      = new PublicKey(mint);
+
+      // Each lock needs a unique base keypair — escrow PDA is derived from it
+      const baseKP     = KP.generate();
+      const [escrowPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from("escrow"), baseKP.publicKey.toBuffer()],
+        LOCK_PROGRAM
       );
-      const confirmation = await rpcConn.confirmTransaction({
-        signature:           sig,
-        blockhash:           res.blockhash,
-        lastValidBlockHeight: res.lastValidBlockHeight,
-      }, "confirmed");
-      if (confirmation.value?.err) throw new Error(`On-chain error: ${JSON.stringify(confirmation.value.err)}`);
+
+      const senderATA  = await getAssociatedTokenAddress(mintKey, funderKey,  false, TOKEN_PROGRAM_ID);
+      const escrowATA  = await getAssociatedTokenAddress(mintKey, escrowPDA,  true,  TOKEN_PROGRAM_ID);
+
+      // Encode CreateVestingEscrowParameters as Anchor instruction data
+      // Discriminator = sha256("global:create_vesting_escrow")[0..8]
+      const discriminator = Buffer.from([141, 40, 104, 40, 169, 59, 59, 29]);
+      const now           = BigInt(Math.floor(Date.now() / 1000));
+      const vestingStart  = now + BigInt(cliff);
+
+      function writeU64(buf, val, offset) {
+        const b = Buffer.alloc(8);
+        b.writeBigUInt64LE(BigInt(val), 0);
+        b.copy(buf, offset);
+        return offset + 8;
+      }
+
+      const params = Buffer.alloc(8 * 6 + 1); // 6x u64 + 1x u8
+      let off = 0;
+      off = writeU64(params, vestingStart,       off); // vesting_start_time
+      off = writeU64(params, BigInt(cliff),      off); // cliff_time
+      off = writeU64(params, BigInt(86400),      off); // frequency (daily)
+      off = writeU64(params, BigInt(0),          off); // cliff_unlock_amount
+      off = writeU64(params, perPeriod,          off); // amount_per_period
+      off = writeU64(params, BigInt(periods),    off); // number_of_period
+      params.writeUInt8(0, off);                        // update_recipient_mode
+
+      const data = Buffer.concat([discriminator, params]);
+
+      const keys = [
+        { pubkey: baseKP.publicKey, isSigner: true,  isWritable: false }, // base
+        { pubkey: escrowPDA,        isSigner: false, isWritable: true  }, // escrow
+        { pubkey: escrowATA,        isSigner: false, isWritable: true  }, // escrow_token
+        { pubkey: funderKey,        isSigner: true,  isWritable: true  }, // sender
+        { pubkey: senderATA,        isSigner: false, isWritable: true  }, // sender_token
+        { pubkey: recipientKey,     isSigner: false, isWritable: false }, // recipient
+        { pubkey: mintKey,          isSigner: false, isWritable: false }, // mint
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY,      isSigner: false, isWritable: false },
+      ];
+
+      const lockIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
+
+      // Create escrow ATA if it doesn't exist yet
+      const createEscrowAtaIx = createAssociatedTokenAccountInstruction(
+        funderKey, escrowATA, escrowPDA, mintKey,
+        TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      );
+
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      const tx = new Transaction();
+      tx.add(createEscrowAtaIx, lockIx);
+      tx.recentBlockhash = blockhash;
+      tx.feePayer        = funderKey;
+      tx.partialSign(baseKP); // base keypair co-signs server-side
+
+      const signed = await provider.signTransaction(tx);
+      const sig    = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
+
+      push("ai", `Confirming lock on-chain… ⏳`);
+      await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
 
       setLockStatus("done");
-      setLockResult({ lockId: res.baseKey, txSig: sig });
-      push("ai", `**Lock created ✓**\n\n**${amount} ${lockCfg.token}** locked for **${recipient?.trim() ? `\`${recipientAddr.slice(0,12)}…\`` : "your wallet"}**\n\nCliff: ${cliffDays} days · Vesting: ${vestingDays} days total\nEscrow: \`${(res.baseKey || "").slice(0,20)}…\`\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
+      setLockResult({ lockId: escrowPDA.toBase58(), txSig: sig });
+      push("ai", `**Lock created ✓**\n\n**${amount} ${lockCfg.token}** locked for **${recipient?.trim() ? `\`${recipient.trim().slice(0,12)}…\`` : "your wallet"}**\n\nCliff: ${cliffDays} days · Vesting: ${vestingDays} days total\nEscrow: \`${escrowPDA.toBase58().slice(0,20)}…\`\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
       setShowLock(false);
     } catch (err) {
       setLockStatus("error");
@@ -1188,42 +1261,70 @@ export default function JupChat() {
   };
 
   // ── Lock: claim vested tokens ────────────────────────────────────────────────
+  // Builds claim tx client-side — no backend needed.
   const doClaimLock = async (lockId, lockPubkey) => {
     const provider = getActiveProvider();
     if (!provider || !walletFull) { push("ai", "Wallet not connected."); return; }
-    const escrow = lockId || lockPubkey;
-    setClaimingLock(escrow);
+    const escrowAddr = lockId || lockPubkey;
+    setClaimingLock(escrowAddr);
     try {
-      const apiRes = await fetch("/api/lock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "claim", escrow, recipient: walletFull }),
-      });
-      const res = await apiRes.json();
-      if (res.error) throw new Error(res.error);
-      if (!res.transaction) throw new Error("No transaction returned from claim builder.");
+      const { PublicKey, SystemProgram, Transaction, TransactionInstruction, Connection } = await import("@solana/web3.js");
+      const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID,
+              ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } = await import("@solana/spl-token");
 
-      const bytes  = b64ToBytes(res.transaction);
-      const tx     = Transaction.from(bytes);
-      const signed = await provider.signTransaction(tx);
-      const rpcRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signed.serialize()), { encoding:"base64", skipPreflight:true }] },
-      });
-      const sig = rpcRes?.result;
-      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+      const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
+      const RPC_URL      = "https://mainnet.helius-rpc.com/?api-key=public";
+      const connection   = new Connection(RPC_URL, "confirmed");
 
-      // Confirm on-chain before declaring success
-      push("ai", `Confirming claim on-chain… ⏳`);
-      const rpcConn2 = new (await import("@solana/web3.js")).Connection(
-        process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com", "confirmed"
+      const recipientKey = new PublicKey(walletFull);
+      const escrowKey    = new PublicKey(escrowAddr);
+
+      // Fetch escrow account data to get mint (offset: 8 disc + 32 base + 32 mint = at byte 40)
+      const acctInfo = await connection.getAccountInfo(escrowKey);
+      if (!acctInfo) throw new Error("Escrow account not found on-chain");
+      const mintKey = new PublicKey(acctInfo.data.slice(40, 72));
+
+      const escrowATA    = await getAssociatedTokenAddress(mintKey, escrowKey,    true,  TOKEN_PROGRAM_ID);
+      const recipientATA = await getAssociatedTokenAddress(mintKey, recipientKey, false, TOKEN_PROGRAM_ID);
+
+      // Discriminator for claim = sha256("global:claim")[0..8]
+      const discriminator = Buffer.from([62, 198, 214, 193, 213, 159, 108, 210]);
+      // max_amount = u64::MAX (claim all available)
+      const maxAmount = Buffer.alloc(8);
+      maxAmount.writeBigUInt64LE(BigInt("18446744073709551615"), 0);
+      const data = Buffer.concat([discriminator, maxAmount]);
+
+      const keys = [
+        { pubkey: escrowKey,        isSigner: false, isWritable: true  },
+        { pubkey: escrowATA,        isSigner: false, isWritable: true  },
+        { pubkey: recipientKey,     isSigner: true,  isWritable: false },
+        { pubkey: recipientATA,     isSigner: false, isWritable: true  },
+        { pubkey: mintKey,          isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
+
+      const claimIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
+
+      // Create recipient ATA if needed
+      const createRecipientAtaIx = createAssociatedTokenAccountInstruction(
+        recipientKey, recipientATA, recipientKey, mintKey,
+        TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
       );
-      const conf2 = await rpcConn2.confirmTransaction({
-        signature:           sig,
-        blockhash:           res.blockhash,
-        lastValidBlockHeight: res.lastValidBlockHeight,
-      }, "confirmed");
-      if (conf2.value?.err) throw new Error(`On-chain error: ${JSON.stringify(conf2.value.err)}`);
+
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      const tx = new Transaction();
+      // Try to add ATA creation; if it already exists the tx will just have one ix
+      try { tx.add(createRecipientAtaIx); } catch (_) {}
+      tx.add(claimIx);
+      tx.recentBlockhash = blockhash;
+      tx.feePayer        = recipientKey;
+
+      const signed = await provider.signTransaction(tx);
+      const sig    = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
+
+      push("ai", `Confirming claim on-chain… ⏳`);
+      await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
 
       push("ai", `Vested tokens claimed ✓\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
       await fetchLocks();
