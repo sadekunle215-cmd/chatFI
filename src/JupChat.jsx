@@ -1108,34 +1108,28 @@ export default function JupChat() {
     setShowLocks(false);
     setLockList([]);
     try {
-      // Fetch locks where user is creator OR recipient
-      const [created, received] = await Promise.allSettled([
-        jupFetch(`${JUP_LOCK_API}/accounts?creator=${walletFull}`),
-        jupFetch(`${JUP_LOCK_API}/accounts?recipient=${walletFull}`),
-      ]);
-      const toArr = (r) => {
-        const d = r.status === "fulfilled" ? r.value : null;
-        if (!d || d.error) return [];
-        return Array.isArray(d) ? d : (d.data || d.locks || d.accounts || []);
-      };
-      const combined = [...toArr(created), ...toArr(received)];
-      // Deduplicate by lockId / pubkey
-      const seen = new Set();
-      const unique = combined.filter(l => {
-        const k = l.lockId || l.pubkey || l.id || JSON.stringify(l);
-        if (seen.has(k)) return false;
-        seen.add(k); return true;
+      const apiRes = await fetch("/api/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "accounts", wallet: walletFull }),
       });
+      const res = await apiRes.json();
+      if (res.error) throw new Error(res.error);
+      const accounts = res.accounts || [];
+      // Normalize to the shape the rest of the UI expects
+      const unique = accounts.map(a => ({ pubkey: a.pubkey, lockId: a.pubkey, data: a.data }));
       setLockList(unique);
       setShowLocks(true);
       if (!unique.length) push("ai", "No token locks found for your wallet.");
-    } catch {
-      push("ai", "Could not fetch locks. Try again shortly.");
+    } catch (err) {
+      push("ai", `Could not fetch locks: ${err?.message}`);
     }
     setLocksLoading(false);
   };
 
   // ── Lock: create a new token lock ───────────────────────────────────────────
+  // Uses /api/lock which calls @meteora-ag/met-lock-sdk server-side.
+  // Jupiter Lock has no REST API — transactions must be built via the on-chain program SDK.
   const doCreateLock = async () => {
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet not connected."); return; }
@@ -1143,42 +1137,36 @@ export default function JupChat() {
     if (!mint || !amount || parseFloat(amount) <= 0) return;
     setLockStatus("signing");
     try {
-      const cliffSecs   = Math.floor(parseFloat(cliffDays   || 0) * 86400);
-      const vestingSecs = Math.floor(parseFloat(vestingDays || 365) * 86400);
+      const cliffSecs     = Math.floor(parseFloat(cliffDays   || 0)   * 86400);
+      const vestingSecs   = Math.floor(parseFloat(vestingDays || 365) * 86400);
       const recipientAddr = recipient?.trim() || walletFull;
-      // Resolve token decimals
-      const dec = tokenDecimalsRef.current[lockCfg.token?.toUpperCase()] || 6;
+      const dec    = tokenDecimalsRef.current[lockCfg.token?.toUpperCase()] || 6;
       const amtRaw = Math.floor(parseFloat(amount) * Math.pow(10, dec)).toString();
 
-      const res = await jupFetch(`${JUP_LOCK_API}/create`, {
+      // Call our /api/lock route — builds tx server-side using met-lock-sdk
+      const apiRes = await fetch("/api/lock", {
         method: "POST",
-        body: {
-          funder:      walletFull,
-          recipient:   recipientAddr,
-          mint,
-          amount:      amtRaw,
-          cliffTime:   cliffSecs,
-          vestingTime: vestingSecs,
-        },
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action:"create", funder:walletFull, recipient:recipientAddr, mint, amount:amtRaw, cliffSecs, vestingSecs }),
       });
-      if (res.error) throw new Error(res.error?.message || res.error);
-      // DEBUG: show full response until we confirm the correct field name
-      const txB64 = res.transaction || res.tx || res.serializedTransaction || res.data?.transaction;
-      if (!txB64) throw new Error(`Lock API raw response: ${JSON.stringify(res).slice(0, 300)}`);
+      const res = await apiRes.json();
+      if (res.error) throw new Error(res.error);
+      if (!res.transaction) throw new Error("No transaction returned from lock builder.");
 
-      const bytes = b64ToBytes(txB64);
-      const tx    = VersionedTransaction.deserialize(bytes);
+      // SDK returns a legacy Transaction (not VersionedTransaction)
+      const bytes  = b64ToBytes(res.transaction);
+      const tx     = Transaction.from(bytes);
       const signed = await provider.signTransaction(tx);
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
         body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signed.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
       const sig = rpcRes?.result;
-      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed.");
+      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
       setLockStatus("done");
-      setLockResult({ lockId: res.lockId || res.pubkey, txSig: sig });
-      push("ai", `**Lock created ✓**\n\n**${amount} ${lockCfg.token}** locked for **${recipient?.trim() ? `\`${recipientAddr.slice(0,12)}…\`` : "your wallet"}**\n\nCliff: ${cliffDays} days · Vesting: ${vestingDays} days total\nLock ID: \`${(res.lockId || res.pubkey || "").slice(0,20)}…\`\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
+      setLockResult({ lockId: res.baseKey, txSig: sig });
+      push("ai", `**Lock created ✓**\n\n**${amount} ${lockCfg.token}** locked for **${recipient?.trim() ? `\`${recipientAddr.slice(0,12)}…\`` : "your wallet"}**\n\nCliff: ${cliffDays} days · Vesting: ${vestingDays} days total\nEscrow: \`${(res.baseKey || "").slice(0,20)}…\`\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
       setShowLock(false);
     } catch (err) {
       setLockStatus("error");
@@ -1191,26 +1179,30 @@ export default function JupChat() {
   const doClaimLock = async (lockId, lockPubkey) => {
     const provider = getActiveProvider();
     if (!provider || !walletFull) { push("ai", "Wallet not connected."); return; }
-    setClaimingLock(lockId || lockPubkey);
+    const escrow = lockId || lockPubkey;
+    setClaimingLock(escrow);
     try {
-      const res = await jupFetch(`${JUP_LOCK_API}/claim`, {
+      const apiRes = await fetch("/api/lock", {
         method: "POST",
-        body: { lockId: lockId || lockPubkey, recipient: walletFull },
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "claim", escrow, recipient: walletFull }),
       });
-      if (res.error) throw new Error(res.error?.message || res.error);
-      if (!res.transaction) throw new Error("No transaction returned from Claim API.");
+      const res = await apiRes.json();
+      if (res.error) throw new Error(res.error);
+      if (!res.transaction) throw new Error("No transaction returned from claim builder.");
 
-      const bytes = b64ToBytes(res.transaction);
-      const tx    = VersionedTransaction.deserialize(bytes);
+      // SDK returns a legacy Transaction
+      const bytes  = b64ToBytes(res.transaction);
+      const tx     = Transaction.from(bytes);
       const signed = await provider.signTransaction(tx);
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
         body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signed.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
       const sig = rpcRes?.result;
-      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed.");
+      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
       push("ai", `Vested tokens claimed ✓\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
-      await fetchLocks(); // refresh list
+      await fetchLocks();
     } catch (err) {
       push("ai", `Claim failed: ${err?.message}`);
     }
