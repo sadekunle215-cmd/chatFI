@@ -541,6 +541,8 @@ export default function JupChat() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatHistory, setChatHistory] = useState([{ id:"default", title:"New conversation", active:true }]);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
+  const [showSocialsNav, setShowSocialsNav] = useState(false);
 
   // Dynamic token cache — grows as user searches any token
   const tokenCacheRef    = useRef({ ...TOKEN_MINTS });
@@ -640,7 +642,7 @@ export default function JupChat() {
       code { font-family:'JetBrains Mono',monospace; background:#1e2d3d; padding:1px 5px; border-radius:3px; font-size:0.87em; color:#c7f284; }
       .dot1,.dot2,.dot3 { display:inline-block; width:7px; height:7px; border-radius:50%; background:#4d6a7a; animation:blink 1.2s infinite; }
       .dot2{animation-delay:0.2s} .dot3{animation-delay:0.4s}
-      .hov-row:hover { background:#e8e2d5 !important; }
+      .hov-row:hover { background:rgba(255,255,255,0.06) !important; }
       .hov-btn:hover { opacity:0.8; }
       .hov-sugg:hover { background:#1e2d3d !important; color:#e8f4f0 !important; }
       .hov-pick:hover { border-color:#c7f284 !important; }
@@ -4011,8 +4013,6 @@ Order: \`${orderKey.slice(0,20)}…\`
 
         {/* ── Jupiter-style Transparent Nav ── */}
         {(() => {
-          const [showHowItWorks, setShowHowItWorks] = React.useState(false);
-          const [showSocials, setShowSocials] = React.useState(false);
           const socials = [
             { label:"Twitter / X", icon:"𝕏", url:"https://x.com/JupiterExchange" },
             { label:"Discord",     icon:"💬", url:"https://discord.gg/jup" },
@@ -4044,18 +4044,18 @@ Order: \`${orderKey.slice(0,20)}…\`
                 {/* Right: nav items */}
                 <div style={{ display:"flex", alignItems:"center", gap:4 }}>
                   {/* How It Works */}
-                  <button onClick={() => { setShowHowItWorks(h=>!h); setShowSocials(false); }}
+                  <button onClick={() => { setShowHowItWorks(h=>!h); setShowSocialsNav(false); }}
                     style={{ padding:"5px 11px", background:"none", border:`1px solid ${showHowItWorks ? T.accent+"66" : T.border+"88"}`, borderRadius:20, color: showHowItWorks ? T.accent : T.text2, fontSize:11, fontWeight:500, cursor:"pointer", whiteSpace:"nowrap", transition:"all 0.15s" }}
                     className="hov-btn">How it works</button>
 
                   {/* Social */}
                   <div style={{ position:"relative" }}>
-                    <button onClick={() => { setShowSocials(s=>!s); setShowHowItWorks(false); }}
-                      style={{ padding:"5px 11px", background:"none", border:`1px solid ${showSocials ? T.accent+"66" : T.border+"88"}`, borderRadius:20, color: showSocials ? T.accent : T.text2, fontSize:11, fontWeight:500, cursor:"pointer", transition:"all 0.15s" }}
+                    <button onClick={() => { setShowSocialsNav(s=>!s); setShowHowItWorks(false); }}
+                      style={{ padding:"5px 11px", background:"none", border:`1px solid ${showSocialsNav ? T.accent+"66" : T.border+"88"}`, borderRadius:20, color: showSocialsNav ? T.accent : T.text2, fontSize:11, fontWeight:500, cursor:"pointer", transition:"all 0.15s" }}
                       className="hov-btn">Social</button>
 
                     {/* Social popup */}
-                    {showSocials && (
+                    {showSocialsNav && (
                       <div style={{
                         position:"absolute", top:"calc(100% + 8px)", right:0, zIndex:400,
                         background:T.surface, border:`1px solid ${T.border}`, borderRadius:14,
@@ -4072,7 +4072,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                             <span>{s.label}</span>
                           </a>
                         ))}
-                        <button onClick={() => setShowSocials(false)}
+                        <button onClick={() => setShowSocialsNav(false)}
                           style={{ display:"none" }}/>
                       </div>
                     )}
@@ -4131,8 +4131,8 @@ Order: \`${orderKey.slice(0,20)}…\`
               )}
 
               {/* Overlay to close popups on outside click */}
-              {(showSocials || showHowItWorks) && (
-                <div onClick={() => { setShowSocials(false); setShowHowItWorks(false); }}
+              {(showSocialsNav || showHowItWorks) && (
+                <div onClick={() => { setShowSocialsNav(false); setShowHowItWorks(false); }}
                   style={{ position:"fixed", inset:0, zIndex:198 }}/>
               )}
             </>
