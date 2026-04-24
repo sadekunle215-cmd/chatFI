@@ -512,7 +512,8 @@ export default function JupChat() {
 
   // ── Jupiter Studio state ─────────────────────────────────────────────────────
   const [showStudio, setShowStudio]         = useState(false);
-  const [studioCfg, setStudioCfg]           = useState({ name:"", symbol:"", supply:"1000000000", decimals:"9", description:"", website:"", twitter:"" });
+  const [studioCfg, setStudioCfg]           = useState({ name:"", symbol:"", description:"", website:"", twitter:"", preset:"meme" });
+  const [studioImage, setStudioImage]       = useState(null); // { file, dataUrl, type }
   const [studioStatus, setStudioStatus]     = useState(null); // null|"signing"|"done"|"error"
   const [studioResult, setStudioResult]     = useState(null); // { mintAddress, txSig, poolAddress }
   const [studioFees, setStudioFees]         = useState(null); // unclaimed fee data
@@ -955,7 +956,7 @@ export default function JupChat() {
     try {
       const data = await jupFetch(`${JUP_STUDIO_API}/dbc/fee`, {
         method: "POST",
-        body: JSON.stringify({ creator: walletFull }),
+        body: { creator: walletFull },
       });
       setStudioFees(data);
       setShowStudioFees(true);
@@ -967,46 +968,104 @@ export default function JupChat() {
     }
   };
 
-  // ── Studio: create token via DBC (craft tx, sign, execute) ─────────────────
+  // ── Studio: create token via DBC — correct Jupiter Studio API flow ──────────
+  // Flow: POST /dbc-pool/create-tx → PUT image presigned URL → PUT metadata presigned URL → POST /dbc-pool/submit (multipart)
   const doCreateToken = async () => {
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet not connected."); return; }
-    const { name, symbol, supply, decimals, description, website, twitter } = studioCfg;
-    if (!name.trim() || !symbol.trim() || !supply) return;
+    const { name, symbol, description, website, twitter, preset } = studioCfg;
+    if (!name.trim() || !symbol.trim()) return;
+    if (!studioImage) { push("ai", "Please upload a token image before launching."); return; }
     setStudioStatus("signing");
     try {
-      // Build DBC creation request per Jupiter Studio API
-      const body = {
-        creator: walletFull,
-        name: name.trim(),
-        symbol: symbol.trim().toUpperCase(),
-        decimals: parseInt(decimals) || 9,
-        supply: supply.toString(),
-        ...(description && { description }),
-        ...(website    && { website }),
-        ...(twitter    && { twitter }),
+      // ── Preset configs per Jupiter Studio docs ──
+      const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+      const presets = {
+        meme: {
+          buildCurveByMarketCapParam: {
+            quoteMint: USDC, initialMarketCap: 16000, migrationMarketCap: 69000, tokenQuoteDecimal: 6,
+            lockedVestingParam: { totalLockedVestingAmount:0, cliffUnlockAmount:0, numberOfVestingPeriod:0, totalVestingDuration:0, cliffDurationFromMigrationTime:0 },
+          },
+          antiSniping: false, fee:{ feeBps:100 }, isLpLocked: true,
+        },
+        indie: {
+          buildCurveByMarketCapParam: {
+            quoteMint: USDC, initialMarketCap: 32000, migrationMarketCap: 240000, tokenQuoteDecimal: 6,
+            lockedVestingParam: { totalLockedVestingAmount:100000000, cliffUnlockAmount:0, numberOfVestingPeriod:365, totalVestingDuration:31536000, cliffDurationFromMigrationTime:0 },
+          },
+          antiSniping: true, fee:{ feeBps:100 }, isLpLocked: true,
+        },
       };
-      const res = await jupFetch(`${JUP_STUDIO_API}/dbc/create`, { method: "POST", body: JSON.stringify(body) });
-      if (res.error) throw new Error(res.error?.message || res.error);
-      if (!res.transaction) throw new Error("No transaction returned from Studio API.");
+      const presetCfg = presets[preset] || presets.meme;
+      const imageType = studioImage.type || "image/jpeg";
 
-      const bytes = b64ToBytes(res.transaction);
-      const tx    = VersionedTransaction.deserialize(bytes);
-      const signed = await provider.signTransaction(tx);
-      const rpcRes = await jupFetch(SOLANA_RPC, {
+      // ── Step 1: Get transaction + presigned URLs ──
+      const createRes = await fetch(`${JUP_STUDIO_API}/dbc-pool/create-tx`, {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signed.serialize()), { encoding:"base64", skipPreflight:true }] },
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...presetCfg,
+          tokenName: name.trim(),
+          tokenSymbol: symbol.trim().toUpperCase(),
+          tokenImageContentType: imageType,
+          creator: walletFull,
+        }),
       });
-      const sig = rpcRes?.result;
-      if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed.");
+      const createData = await createRes.json();
+      if (createData.error) throw new Error(createData.error?.message || JSON.stringify(createData.error));
+      if (!createData.transaction) throw new Error("No transaction returned from Studio API.");
+
+      const { transaction: txB64, imagePresignedUrl, metadataPresignedUrl, imageUrl, mint } = createData;
+
+      // ── Step 2: Upload token image to presigned URL ──
+      await fetch(imagePresignedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": imageType },
+        body: studioImage.file,
+      });
+
+      // ── Step 3: Upload token metadata to presigned URL ──
+      await fetch(metadataPresignedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          symbol: symbol.trim().toUpperCase(),
+          description: description || "",
+          image: imageUrl,
+          website: website || "",
+          twitter: twitter || "",
+        }),
+      });
+
+      // ── Step 4: Sign transaction ──
+      const bytes = b64ToBytes(txB64);
+      const tx = VersionedTransaction.deserialize(bytes);
+      const signed = await provider.signTransaction(tx);
+      const signedB64 = bytesToB64(signed.serialize());
+
+      // ── Step 5: Submit via multipart/form-data to /dbc-pool/submit ──
+      const formData = new FormData();
+      formData.append("transaction", signedB64);
+      formData.append("owner", walletFull);
+      formData.append("content", description || "");
+      formData.append("headerImage", new File([studioImage.file], "header", { type: imageType }));
+
+      const submitRes = await fetch(`${JUP_STUDIO_API}/dbc-pool/submit`, {
+        method: "POST",
+        body: formData,
+        // NOTE: Do NOT set Content-Type header — browser sets it with boundary automatically
+      });
+      const submitData = await submitRes.json();
+      if (submitData.error) throw new Error(submitData.error?.message || JSON.stringify(submitData.error));
 
       setStudioStatus("done");
-      setStudioResult({ mintAddress: res.mint || res.mintAddress, txSig: sig, poolAddress: res.poolAddress });
-      push("ai", `**Token created ✓**\n\n**${name.trim()} (${symbol.trim().toUpperCase()})** is live on Jupiter!\n\nMint: \`${(res.mint || res.mintAddress || "").slice(0,20)}…\`\nDBC Pool: \`${(res.poolAddress || "").slice(0,20)}…\`\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})\n\nYour token is now tradeable via Jupiter Swap. Creator fees will accrue as people trade.`);
+      setStudioResult({ mintAddress: mint, poolAddress: submitData.poolAddress });
+      push("ai", `**Token created ✓**\n\n**${name.trim()} (${symbol.trim().toUpperCase()})** is live on Jupiter Studio!\n\nMint: \`${(mint||"").slice(0,20)}…\`\n\nView on: [jup.ag/studio](https://jup.ag/studio) · [Solscan](https://solscan.io/token/${mint})\n\nCreator fees will accrue as people trade your DBC pool.`);
       setShowStudio(false);
     } catch (err) {
       setStudioStatus("error");
-      push("ai", `Token creation failed: ${err?.message}\n\nTip: Make sure your wallet has enough SOL for rent + pool creation (~0.05–0.1 SOL).`);
+      push("ai", `Token creation failed: ${err?.message}\n\nTip: Make sure your wallet has enough SOL for pool creation (~0.05–0.1 SOL).`);
     }
     setStudioStatus(null);
   };
@@ -3688,12 +3747,11 @@ Order: \`${orderKey.slice(0,20)}…\`
           ...c,
           name:        actionData?.name        || c.name,
           symbol:      actionData?.symbol      || c.symbol,
-          supply:      actionData?.supply      || c.supply,
-          decimals:    actionData?.decimals    || c.decimals,
           description: actionData?.description || c.description,
           website:     actionData?.website     || c.website,
           twitter:     actionData?.twitter     || c.twitter,
         }));
+        setStudioImage(null);
         setStudioStatus(null);
         setStudioResult(null);
         setShowStudio(true);
@@ -5378,6 +5436,25 @@ Order: \`${orderKey.slice(0,20)}…\`
               <div style={{ fontSize:11, color:T.text3, marginBottom:14, lineHeight:1.5 }}>
                 Launch a token with a Dynamic Bonding Curve — tradeable on Jupiter from day 1. Earn creator fees on every trade.
               </div>
+
+              {/* Preset selector */}
+              <div style={{ marginBottom:12 }}>
+                <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Launch Preset</div>
+                <div style={{ display:"flex", gap:8 }}>
+                  {[
+                    { id:"meme", label:"🐸 Meme", desc:"16K→69K MC, raises ~18K USDC" },
+                    { id:"indie", label:"🚀 Indie", desc:"32K→240K MC, raises ~58K USDC + vesting" },
+                  ].map(p => (
+                    <button key={p.id} onClick={() => setStudioCfg(c=>({...c,preset:p.id}))}
+                      style={{ flex:1, padding:"8px 10px", borderRadius:8, border:`1px solid ${studioCfg.preset===p.id ? T.accent : T.border}`, background: studioCfg.preset===p.id ? T.accentBg : T.bg, color: studioCfg.preset===p.id ? T.accent : T.text2, fontSize:12, cursor:"pointer", textAlign:"left" }}>
+                      <div style={{ fontWeight:600 }}>{p.label}</div>
+                      <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{p.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Name + Symbol */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
                 <div>
                   <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token Name *</div>
@@ -5391,17 +5468,35 @@ Order: \`${orderKey.slice(0,20)}…\`
                     placeholder="e.g. MTK"
                     style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
                 </div>
-                <div>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Initial Supply</div>
-                  <input type="number" value={studioCfg.supply} onChange={e => setStudioCfg(c=>({...c,supply:e.target.value}))}
-                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
-                </div>
-                <div>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Decimals</div>
-                  <input type="number" value={studioCfg.decimals} onChange={e => setStudioCfg(c=>({...c,decimals:e.target.value}))}
-                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
-                </div>
               </div>
+
+              {/* Token Image upload */}
+              <div style={{ marginBottom:12 }}>
+                <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token Image * <span style={{ color:T.text3 }}>(JPG/PNG/GIF, shown on jup.ag)</span></div>
+                <label style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 12px", border:`1px dashed ${studioImage ? T.accent : T.border}`, borderRadius:8, cursor:"pointer", background:T.bg }}>
+                  {studioImage ? (
+                    <>
+                      <img src={studioImage.dataUrl} alt="token" style={{ width:40, height:40, borderRadius:8, objectFit:"cover" }}/>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:12, color:T.text1 }}>{studioImage.file.name}</div>
+                        <div style={{ fontSize:10, color:T.text3 }}>Click to change</div>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ fontSize:12, color:T.text3 }}>📁 Click to upload token image</div>
+                  )}
+                  <input type="file" accept="image/*" style={{ display:"none" }}
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = ev => setStudioImage({ file, dataUrl: ev.target.result, type: file.type || "image/jpeg" });
+                      reader.readAsDataURL(file);
+                    }}/>
+                </label>
+              </div>
+
+              {/* Description */}
               <div style={{ marginBottom:10 }}>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Description</div>
                 <textarea value={studioCfg.description} onChange={e => setStudioCfg(c=>({...c,description:e.target.value}))}
@@ -5409,6 +5504,8 @@ Order: \`${orderKey.slice(0,20)}…\`
                   rows={2}
                   style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, resize:"none" }}/>
               </div>
+
+              {/* Website + Twitter */}
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
                 <div>
                   <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Website</div>
@@ -5423,6 +5520,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                     style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
                 </div>
               </div>
+
+              {/* Status banners */}
+              {studioStatus === "signing" && (
+                <div style={{ padding:"10px 12px", background:T.accentBg, border:`1px solid ${T.accent}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.accent }}>
+                  ⏳ Uploading metadata &amp; signing transaction…
+                </div>
+              )}
               {studioStatus === "done" && studioResult && (
                 <div style={{ padding:"10px 12px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.green }}>
                   ✓ Token created! Mint: <code>{(studioResult.mintAddress||"").slice(0,20)}…</code>
@@ -5433,12 +5537,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                   Creation failed. Check wallet has enough SOL (~0.05–0.1 SOL for pool creation).
                 </div>
               )}
+
               <div style={{ display:"flex", gap:8 }}>
                 <button onClick={doCreateToken}
-                  disabled={!studioCfg.name.trim() || !studioCfg.symbol.trim() || studioStatus==="signing" || !walletFull}
+                  disabled={!studioCfg.name.trim() || !studioCfg.symbol.trim() || !studioImage || studioStatus==="signing" || !walletFull}
                   className="hov-btn"
-                  style={{ flex:1, padding:"10px", background: (!studioCfg.name.trim()||!studioCfg.symbol.trim()||studioStatus==="signing"||!walletFull)?T.border:T.accentBg, border:`1px solid ${(!studioCfg.name.trim()||!studioCfg.symbol.trim()||studioStatus==="signing"||!walletFull)?T.border:T.accent}`, borderRadius:8, color:(!studioCfg.name.trim()||!studioCfg.symbol.trim()||studioStatus==="signing"||!walletFull)?T.text3:T.accent, fontSize:14, fontWeight:600, cursor:"pointer" }}>
-                  {studioStatus==="signing" ? "Signing…" : "🚀 Launch Token"}
+                  style={{ flex:1, padding:"10px", background: (!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accentBg, border:`1px solid ${(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accent}`, borderRadius:8, color:(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.text3:T.accent, fontSize:14, fontWeight:600, cursor:"pointer" }}>
+                  {studioStatus==="signing" ? "Launching…" : "🚀 Launch Token"}
                 </button>
                 <button onClick={() => setShowStudio(false)}
                   style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
