@@ -8,13 +8,18 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  let LockClient, Connection, PublicKey, Keypair, Transaction, BN, getAssociatedTokenAddressSync;
+  let LockClient, Connection, PublicKey, Keypair, Transaction, BN,
+      TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync;
 
   try {
     ({ LockClient }           = await import("@meteora-ag/met-lock-sdk"));
     ({ Connection, PublicKey, Keypair, Transaction } = await import("@solana/web3.js"));
     ({ default: BN }          = await import("bn.js"));
-    ({ getAssociatedTokenAddressSync } = await import("@solana/spl-token"));
+    ({
+      TOKEN_PROGRAM_ID,
+      TOKEN_2022_PROGRAM_ID,
+      getAssociatedTokenAddressSync,
+    } = await import("@solana/spl-token"));
   } catch (importErr) {
     return res.status(500).json({
       error: `SDK not installed. Run: npm install @meteora-ag/met-lock-sdk @solana/web3.js @solana/spl-token bn.js — ${importErr.message}`,
@@ -39,6 +44,18 @@ export default async function handler(req, res) {
       const WSOL_MINT = "So11111111111111111111111111111111111111112";
       const resolvedMint = mint === "SOL" ? WSOL_MINT : mint;
 
+      // Detect Token-2022 vs legacy SPL token program
+      // Try fetching mint account info to check the owner program
+      let tokenProgram = TOKEN_PROGRAM_ID;
+      try {
+        const mintInfo = await connection.getAccountInfo(new PublicKey(resolvedMint));
+        if (mintInfo && mintInfo.owner.toBase58() === TOKEN_2022_PROGRAM_ID.toBase58()) {
+          tokenProgram = TOKEN_2022_PROGRAM_ID;
+        }
+      } catch (_) {
+        // default to legacy SPL if lookup fails
+      }
+
       const now            = Math.floor(Date.now() / 1000);
       const cliffSecsInt   = Math.max(parseInt(cliffSecs)  || 0, 0);
       const vestingSecsInt = Math.max(parseInt(vestingSecs) || 86400, 1);
@@ -51,26 +68,16 @@ export default async function handler(req, res) {
 
       const base = Keypair.generate();
 
-      // Derive escrow PDA and its token account explicitly to avoid
-      // "Reached maximum depth for account resolution: escrowToken" error
-      const LOCK_PROGRAM_ID = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
-      const [escrowPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from("escrow"), base.publicKey.toBuffer()],
-        LOCK_PROGRAM_ID
-      );
-      const escrowToken = getAssociatedTokenAddressSync(
-        new PublicKey(resolvedMint),
-        escrowPDA,
-        true // allowOwnerOffCurve — required since escrowPDA is a PDA
-      );
-
+      // ── FIX: pass `tokenProgram` instead of `escrowToken` ──────────────────
+      // The SDK derives escrowToken internally when tokenProgram is supplied.
+      // Passing escrowToken directly is NOT a valid param and caused the
+      // "Reached maximum depth for account resolution: escrowToken" error.
       const tx = await client.createVestingEscrowV2({
         base:                base.publicKey,
         sender:              new PublicKey(funder),
         isSenderMultiSig:    false,
         payer:               new PublicKey(funder),
         tokenMint:           new PublicKey(resolvedMint),
-        escrowToken,
         vestingStartTime:    new BN(now),
         cliffTime:           new BN(now + cliffSecsInt),
         frequency,
@@ -80,6 +87,7 @@ export default async function handler(req, res) {
         recipient:           new PublicKey(recipient || funder),
         updateRecipientMode: 0,
         cancelMode:          0,
+        tokenProgram,          // ← required: lets SDK resolve escrowToken internally
       });
 
       tx.partialSign(base);
