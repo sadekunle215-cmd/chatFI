@@ -1117,7 +1117,7 @@ export default function JupChat() {
       // POST /send/v1/craft-send → returns { transaction, inviteLink } (base64 unsigned tx)
       const res = await jupFetch(`${JUP_SEND_API}/craft-send`, {
         method: "POST",
-        body: { sender: walletFull, tokenMint: mint, amount: amountRaw },
+        body: { inviteSigner: walletFull, tokenMint: mint, amount: amountRaw },
       });
       if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
       if (!res.transaction) throw new Error("No transaction returned from Jupiter Send.");
