@@ -1,84 +1,85 @@
-// pages/api/lock.js  (or api/lock.js — place next to your jupiter.js)
-// Builds Jupiter/Meteora Lock vesting escrow transactions server-side.
-// Uses @meteora-ag/met-lock-sdk — install with: npm install @meteora-ag/met-lock-sdk
-
-import { LockClient } from "@meteora-ag/met-lock-sdk";
-import { Connection, PublicKey, Keypair } from "@solana/web3.js";
-import BN from "bn.js";
-
+// pages/api/lock.js
+// Requires: npm install @meteora-ag/met-lock-sdk @solana/web3.js bn.js
 export default async function handler(req, res) {
+  // Always return JSON — never let Next.js return an HTML error page
+  res.setHeader("Content-Type", "application/json");
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { action } = req.body;
+  let LockClient, Connection, PublicKey, Keypair, Transaction, BN;
+
+  try {
+    ({ LockClient }           = await import("@meteora-ag/met-lock-sdk"));
+    ({ Connection, PublicKey, Keypair, Transaction } = await import("@solana/web3.js"));
+    ({ default: BN }          = await import("bn.js"));
+  } catch (importErr) {
+    return res.status(500).json({
+      error: `SDK not installed. Run: npm install @meteora-ag/met-lock-sdk @solana/web3.js bn.js — ${importErr.message}`,
+    });
+  }
+
+  const { action } = req.body || {};
   if (!action) return res.status(400).json({ error: "Missing action" });
 
   const SOLANA_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
-  const connection = new Connection(SOLANA_RPC, "confirmed");
-  const client = new LockClient(connection, "confirmed");
 
   try {
-    // ── CREATE VESTING ESCROW ─────────────────────────────────────────────────
+    const connection = new Connection(SOLANA_RPC, "confirmed");
+    const client     = new LockClient(connection, "confirmed");
+
     if (action === "create") {
       const { funder, recipient, mint, amount, cliffSecs, vestingSecs } = req.body;
+      if (!funder) return res.status(400).json({ error: "Missing: funder" });
+      if (!mint)   return res.status(400).json({ error: "Missing: mint" });
+      if (!amount) return res.status(400).json({ error: "Missing: amount" });
 
-      if (!funder || !mint || !amount) {
-        return res.status(400).json({ error: "Missing required fields: funder, mint, amount" });
-      }
+      const WSOL_MINT = "So11111111111111111111111111111111111111112";
+      const resolvedMint = mint === "SOL" ? WSOL_MINT : mint;
 
-      const now = Math.floor(Date.now() / 1000);
-
-      // Generate a random base keypair — used for PDA derivation, must sign the tx
-      const base = Keypair.generate();
-
-      const amountBN       = new BN(String(amount));
+      const now            = Math.floor(Date.now() / 1000);
+      const cliffSecsInt   = Math.max(parseInt(cliffSecs)  || 0, 0);
       const vestingSecsInt = Math.max(parseInt(vestingSecs) || 86400, 1);
-      const cliffSecsInt   = Math.max(parseInt(cliffSecs)  || 0,     0);
+      const amountBN       = new BN(String(amount));
 
-      // Linear vesting: 1 unlock per second for smooth distribution
-      const frequency      = new BN(1);
-      const numberOfPeriod = new BN(vestingSecsInt);
-      const amountPerPeriod = amountBN.divn(vestingSecsInt);
-      // Any remainder from integer division is released at the cliff
+      const frequency         = new BN(1);
+      const numberOfPeriod    = new BN(vestingSecsInt);
+      const amountPerPeriod   = amountBN.divn(vestingSecsInt);
       const cliffUnlockAmount = amountBN.sub(amountPerPeriod.muln(vestingSecsInt));
 
+      const base = Keypair.generate();
+
       const tx = await client.createVestingEscrowV2({
-        base:               base.publicKey,
-        sender:             new PublicKey(funder),
-        isSenderMultiSig:   false,
-        payer:              new PublicKey(funder),
-        tokenMint:          new PublicKey(mint),
-        vestingStartTime:   new BN(now),
-        cliffTime:          new BN(now + cliffSecsInt),
+        base:                base.publicKey,
+        sender:              new PublicKey(funder),
+        isSenderMultiSig:    false,
+        payer:               new PublicKey(funder),
+        tokenMint:           new PublicKey(resolvedMint),
+        vestingStartTime:    new BN(now),
+        cliffTime:           new BN(now + cliffSecsInt),
         frequency,
         cliffUnlockAmount,
         amountPerPeriod,
         numberOfPeriod,
-        recipient:          new PublicKey(recipient || funder),
-        updateRecipientMode: 0, // neither can update recipient
-        cancelMode:          0, // irrevocable (matches Jupiter Lock UI default)
+        recipient:           new PublicKey(recipient || funder),
+        updateRecipientMode: 0,
+        cancelMode:          0,
       });
 
-      // Partially sign with the base keypair (required signer for PDA derivation)
       tx.partialSign(base);
 
       const serialized = Buffer.from(
         tx.serialize({ requireAllSignatures: false })
       ).toString("base64");
 
-      return res.status(200).json({
-        transaction: serialized,
-        baseKey: base.publicKey.toBase58(), // return so frontend can display lock address
-      });
+      return res.status(200).json({ transaction: serialized, baseKey: base.publicKey.toBase58() });
+    }
 
-    // ── CLAIM VESTED TOKENS ───────────────────────────────────────────────────
-    } else if (action === "claim") {
+    if (action === "claim") {
       const { escrow, recipient } = req.body;
-
-      if (!escrow || !recipient) {
-        return res.status(400).json({ error: "Missing required fields: escrow, recipient" });
-      }
+      if (!escrow)    return res.status(400).json({ error: "Missing: escrow" });
+      if (!recipient) return res.status(400).json({ error: "Missing: recipient" });
 
       const tx = await client.claimV2({
         escrow:    new PublicKey(escrow),
@@ -91,46 +92,32 @@ export default async function handler(req, res) {
       ).toString("base64");
 
       return res.status(200).json({ transaction: serialized });
+    }
 
-    // ── FETCH LOCKS FOR WALLET ────────────────────────────────────────────────
-    } else if (action === "accounts") {
+    if (action === "accounts") {
       const { wallet } = req.body;
-      if (!wallet) return res.status(400).json({ error: "Missing wallet" });
+      if (!wallet) return res.status(400).json({ error: "Missing: wallet" });
 
       const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
-
-      // Fetch escrows where wallet is sender (offset 8 = after discriminator)
       const [asSender, asRecipient] = await Promise.all([
-        connection.getProgramAccounts(LOCK_PROGRAM, {
-          filters: [{ memcmp: { offset: 8, bytes: wallet } }],
-        }),
-        connection.getProgramAccounts(LOCK_PROGRAM, {
-          filters: [{ memcmp: { offset: 40, bytes: wallet } }], // recipient field offset
-        }),
+        connection.getProgramAccounts(LOCK_PROGRAM, { filters: [{ memcmp: { offset: 8,  bytes: wallet } }] }),
+        connection.getProgramAccounts(LOCK_PROGRAM, { filters: [{ memcmp: { offset: 40, bytes: wallet } }] }),
       ]);
 
-      const all = [...asSender, ...asRecipient];
       const seen = new Set();
-      const unique = all.filter(a => {
-        const k = a.pubkey.toBase58();
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
+      const unique = [...asSender, ...asRecipient].filter(a => {
+        const k = a.pubkey.toBase58(); if (seen.has(k)) return false; seen.add(k); return true;
       });
 
       return res.status(200).json({
-        accounts: unique.map(a => ({
-          pubkey: a.pubkey.toBase58(),
-          data: Buffer.from(a.account.data).toString("base64"),
-        })),
+        accounts: unique.map(a => ({ pubkey: a.pubkey.toBase58(), lockId: a.pubkey.toBase58() })),
       });
-
-    } else {
-      return res.status(400).json({ error: `Unknown action: ${action}` });
     }
 
+    return res.status(400).json({ error: `Unknown action: ${action}` });
+
   } catch (err) {
-    console.error("[api/lock] error:", err);
-    return res.status(500).json({ error: err?.message || "Lock API error" });
+    console.error("[api/lock]", err);
+    return res.status(500).json({ error: err?.message || "Lock API internal error" });
   }
 }
