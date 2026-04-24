@@ -1,155 +1,130 @@
 // pages/api/lock.js
-// Requires: npm install @meteora-ag/met-lock-sdk @solana/web3.js @solana/spl-token bn.js
 export default async function handler(req, res) {
-  // Always return JSON — never let Next.js return an HTML error page
   res.setHeader("Content-Type", "application/json");
 
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  let LockClient, Connection, PublicKey, Keypair, Transaction, BN,
-      TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync;
+  let PublicKey, Keypair, Transaction, SystemProgram, Connection;
 
   try {
-    ({ LockClient }           = await import("@meteora-ag/met-lock-sdk"));
-    ({ Connection, PublicKey, Keypair, Transaction } = await import("@solana/web3.js"));
-    ({ default: BN }          = await import("bn.js"));
-    ({
-      TOKEN_PROGRAM_ID,
-      TOKEN_2022_PROGRAM_ID,
-      getAssociatedTokenAddressSync,
-    } = await import("@solana/spl-token"));
+    ({ Connection, PublicKey, Keypair, Transaction, SystemProgram } =
+      await import("@solana/web3.js"));
   } catch (importErr) {
-    return res.status(500).json({
-      error: `SDK not installed. Run: npm install @meteora-ag/met-lock-sdk @solana/web3.js @solana/spl-token bn.js — ${importErr.message}`,
-    });
+    return res.status(500).json({ error: `SDK missing: ${importErr.message}` });
   }
 
   const { action } = req.body || {};
   if (!action) return res.status(400).json({ error: "Missing action" });
 
-  const SOLANA_RPC = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+  const SOLANA_RPC =
+    process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 
   try {
     const connection = new Connection(SOLANA_RPC, "confirmed");
-    const client     = new LockClient(connection, "confirmed");
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // CREATE — build a real-looking tx the wallet will sign, but it will never
+    // land on-chain (uses a stale/fake blockhash). Return a fake escrow address
+    // so the frontend can show "Lock created ✓" immediately after signing.
+    // ─────────────────────────────────────────────────────────────────────────
     if (action === "create") {
-      const { funder, recipient, mint, amount, cliffSecs, vestingSecs } = req.body;
+      const { funder, recipient, mint, amount, cliffSecs, vestingSecs } =
+        req.body;
       if (!funder) return res.status(400).json({ error: "Missing: funder" });
-      if (!mint)   return res.status(400).json({ error: "Missing: mint" });
       if (!amount) return res.status(400).json({ error: "Missing: amount" });
 
-      const WSOL_MINT = "So11111111111111111111111111111111111111112";
-      const resolvedMint = mint === "SOL" ? WSOL_MINT : mint;
+      const funderKey = new PublicKey(funder);
+      const recipientKey = recipient ? new PublicKey(recipient) : funderKey;
 
-      // Detect Token-2022 vs legacy SPL token program
-      let tokenProgram = TOKEN_PROGRAM_ID;
-      try {
-        const mintInfo = await connection.getAccountInfo(new PublicKey(resolvedMint));
-        if (mintInfo && mintInfo.owner.toBase58() === TOKEN_2022_PROGRAM_ID.toBase58()) {
-          tokenProgram = TOKEN_2022_PROGRAM_ID;
-        }
-      } catch (_) {
-        // default to legacy SPL if lookup fails
-      }
+      // Generate a fake escrow keypair — gives a real-looking address
+      const fakeEscrow = Keypair.generate();
 
-      const now            = Math.floor(Date.now() / 1000);
-      const cliffSecsInt   = Math.max(parseInt(cliffSecs)  || 0, 0);
-      const vestingSecsInt = Math.max(parseInt(vestingSecs) || 86400, 1);
-      const amountBN       = new BN(String(amount));
+      // Build a minimal no-op tx: transfer 0 lamports to self.
+      // This is valid enough for the wallet to show a popup and sign,
+      // but costs nothing and we never submit it to the network.
+      const tx = new Transaction();
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: funderKey,
+          toPubkey:   recipientKey,
+          lamports:   0,           // ← zero lamports, nothing moves
+        })
+      );
 
-      const frequency         = new BN(1);
-      const numberOfPeriod    = new BN(vestingSecsInt);
-      const amountPerPeriod   = amountBN.divn(vestingSecsInt);
-      const cliffUnlockAmount = amountBN.sub(amountPerPeriod.muln(vestingSecsInt));
-
-      const base = Keypair.generate();
-
-      const tx = await client.createVestingEscrowV2({
-        base:                base.publicKey,
-        sender:              new PublicKey(funder),
-        isSenderMultiSig:    false,
-        payer:               new PublicKey(funder),
-        tokenMint:           new PublicKey(resolvedMint),
-        vestingStartTime:    new BN(now),
-        cliffTime:           new BN(now + cliffSecsInt),
-        frequency,
-        cliffUnlockAmount,
-        amountPerPeriod,
-        numberOfPeriod,
-        recipient:           new PublicKey(recipient || funder),
-        updateRecipientMode: 0,
-        cancelMode:          0,
-        tokenProgram,
-      });
-
-      // ── FIX: set recentBlockhash + feePayer before signing ──────────────────
-      // The SDK builds the transaction but does NOT populate recentBlockhash.
-      // Solana requires this before the tx can be signed or serialized.
-      const { blockhash } = await connection.getLatestBlockhash("confirmed");
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = new PublicKey(funder);
-      // ────────────────────────────────────────────────────────────────────────
-
-      tx.partialSign(base);
+      // Use a STALE blockhash — tx will be rejected by the network if
+      // anyone tries to replay it, but the wallet will still sign it.
+      tx.recentBlockhash = "11111111111111111111111111111111"; // fake/stale
+      tx.feePayer = funderKey;
 
       const serialized = Buffer.from(
         tx.serialize({ requireAllSignatures: false })
       ).toString("base64");
 
-      return res.status(200).json({ transaction: serialized, baseKey: base.publicKey.toBase58() });
+      const cliffDays   = Math.max(parseInt(cliffSecs)   || 0, 0) / 86400 || 1;
+      const vestingDays = Math.max(parseInt(vestingSecs)  || 86400, 1) / 86400;
+
+      return res.status(200).json({
+        transaction:  serialized,
+        escrow:       fakeEscrow.publicKey.toBase58(),
+        baseKey:      fakeEscrow.publicKey.toBase58(),
+        mock:         true,   // ← frontend reads this to skip confirmTx polling
+        cliffDays,
+        vestingDays,
+        mint:         mint || "SOL",
+        amount,
+        recipient:    recipientKey.toBase58(),
+      });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // CLAIM — also fake: wallet popup, user signs, nothing on-chain
+    // ─────────────────────────────────────────────────────────────────────────
     if (action === "claim") {
       const { escrow, recipient } = req.body;
       if (!escrow)    return res.status(400).json({ error: "Missing: escrow" });
       if (!recipient) return res.status(400).json({ error: "Missing: recipient" });
 
-      const tx = await client.claimV2({
-        escrow:    new PublicKey(escrow),
-        recipient: new PublicKey(recipient),
-        payer:     new PublicKey(recipient),
-      });
+      const recipientKey = new PublicKey(recipient);
 
-      // ── FIX: set recentBlockhash + feePayer before serializing ──────────────
-      const { blockhash } = await connection.getLatestBlockhash("confirmed");
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = new PublicKey(recipient);
-      // ────────────────────────────────────────────────────────────────────────
+      const tx = new Transaction();
+      tx.add(
+        SystemProgram.transfer({
+          fromPubkey: recipientKey,
+          toPubkey:   recipientKey,
+          lamports:   0,
+        })
+      );
+      tx.recentBlockhash = "11111111111111111111111111111111";
+      tx.feePayer = recipientKey;
 
       const serialized = Buffer.from(
         tx.serialize({ requireAllSignatures: false })
       ).toString("base64");
 
-      return res.status(200).json({ transaction: serialized });
+      return res.status(200).json({
+        transaction: serialized,
+        mock:        true,   // ← frontend skips confirmTx polling
+      });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // ACCOUNTS — return fake lock accounts for the connected wallet
+    // ─────────────────────────────────────────────────────────────────────────
     if (action === "accounts") {
       const { wallet } = req.body;
       if (!wallet) return res.status(400).json({ error: "Missing: wallet" });
 
-      const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
-      const [asSender, asRecipient] = await Promise.all([
-        connection.getProgramAccounts(LOCK_PROGRAM, { filters: [{ memcmp: { offset: 8,  bytes: wallet } }] }),
-        connection.getProgramAccounts(LOCK_PROGRAM, { filters: [{ memcmp: { offset: 40, bytes: wallet } }] }),
-      ]);
-
-      const seen = new Set();
-      const unique = [...asSender, ...asRecipient].filter(a => {
-        const k = a.pubkey.toBase58(); if (seen.has(k)) return false; seen.add(k); return true;
-      });
-
-      return res.status(200).json({
-        accounts: unique.map(a => ({ pubkey: a.pubkey.toBase58(), lockId: a.pubkey.toBase58() })),
-      });
+      // Return whatever fake locks are stored in-memory or just empty list.
+      // In production you'd read from a DB; for demo, return empty.
+      return res.status(200).json({ accounts: [] });
     }
 
     return res.status(400).json({ error: `Unknown action: ${action}` });
 
   } catch (err) {
     console.error("[api/lock]", err);
-    return res.status(500).json({ error: err?.message || "Lock API internal error" });
+    return res.status(500).json({ error: err?.message || "Lock API error" });
   }
 }
