@@ -116,7 +116,7 @@ export default async function handler(req, res) {
       // base, escrow, escrow_token, sender, sender_token, recipient, mint,
       // token_program, associated_token_program, system_program, event_authority, program
       const keys = [
-        { pubkey: baseKp.publicKey,            isSigner: true,  isWritable: false }, // base
+        { pubkey: baseKp.publicKey,            isSigner: true,  isWritable: true  }, // base
         { pubkey: escrowPDA,                   isSigner: false, isWritable: true  }, // escrow
         { pubkey: escrowToken,                 isSigner: false, isWritable: true  }, // escrow_token
         { pubkey: funderKey,                   isSigner: true,  isWritable: true  }, // sender
