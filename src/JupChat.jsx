@@ -644,6 +644,112 @@ function TokenPicker({ value, onSelect, jupFetch }) {
   );
 }
 
+// ─── Token price chart (GeckoTerminal OHLCV, no API key needed) ──────────────
+function TokenMiniChart({ mint }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [range,   setRange]   = useState("1D");
+  const [err,     setErr]     = useState(false);
+
+  useEffect(() => {
+    if (!mint) return;
+    setLoading(true); setErr(false); setData(null);
+    const cfg = {
+      "1D":  { gran:"hour", agg:1,  lim:24 },
+      "7D":  { gran:"hour", agg:4,  lim:42 },
+      "30D": { gran:"day",  agg:1,  lim:30 },
+    }[range] || { gran:"hour", agg:1, lim:24 };
+    fetch(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/ohlcv/${cfg.gran}?aggregate=${cfg.agg}&limit=${cfg.lim}`)
+      .then(r => r.json())
+      .then(d => {
+        const list = d?.data?.attributes?.ohlcv_list;
+        if (!list?.length) { setErr(true); setLoading(false); return; }
+        setData(list.map(([ts,,,,close]) => ({ t: ts * 1000, p: parseFloat(close) })));
+        setLoading(false);
+      })
+      .catch(() => { setErr(true); setLoading(false); });
+  }, [mint, range]);
+
+  const ranges = ["1D","7D","30D"];
+  const borderColor = "#1e2d3d";
+
+  if (loading) return (
+    <div style={{ padding:"12px 0" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+        <span style={{ fontSize:10, color:"#4d6a7a", letterSpacing:"0.08em", textTransform:"uppercase" }}>Price Chart</span>
+        <div style={{ display:"flex", gap:4 }}>
+          {ranges.map(r => <button key={r} onClick={() => setRange(r)} style={{ padding:"2px 8px", borderRadius:6, fontSize:10, fontWeight:600, background:"none", border:`1px solid ${borderColor}`, color:"#4d6a7a", cursor:"pointer" }}>{r}</button>)}
+        </div>
+      </div>
+      <div style={{ height:72, background:"linear-gradient(90deg,#161e27 25%,#1e2d3d 50%,#161e27 75%)", backgroundSize:"200% 100%", animation:"shimmer 1.4s infinite", borderRadius:8 }}/>
+    </div>
+  );
+
+  if (err || !data?.length) return null;
+
+  const prices = data.map(d => d.p);
+  const min = Math.min(...prices), max = Math.max(...prices);
+  const W = 300, H = 72;
+  const px = (i) => (i / (prices.length - 1)) * W;
+  const py = (p) => H - ((p - min) / ((max - min) || 1)) * (H - 4) - 2;
+  const linePts  = prices.map((p, i) => `${px(i)},${py(p)}`).join(" ");
+  const areaPts  = `0,${H} ${linePts} ${W},${H}`;
+  const isUp     = prices[prices.length - 1] >= prices[0];
+  const color    = isUp ? "#68d391" : "#fc8181";
+  const gradId   = `cg-${mint.slice(0,8)}`;
+
+  const fmtLabel = (ts) => {
+    const d = new Date(ts);
+    if (range === "30D") return d.toLocaleDateString(undefined, { month:"short", day:"numeric" });
+    return d.toLocaleTimeString(undefined, { hour:"2-digit", minute:"2-digit" });
+  };
+  const first = data[0], last = data[data.length - 1];
+  const pct = first.p > 0 ? ((last.p - first.p) / first.p * 100) : 0;
+
+  return (
+    <div style={{ padding:"12px 0 4px" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:10, color:"#4d6a7a", letterSpacing:"0.08em", textTransform:"uppercase" }}>Price Chart</span>
+          <span style={{ fontSize:11, fontWeight:700, color, background: isUp ? "#68d39122" : "#fc818122", borderRadius:6, padding:"1px 7px" }}>
+            {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
+          </span>
+        </div>
+        <div style={{ display:"flex", gap:4 }}>
+          {ranges.map(r => (
+            <button key={r} onClick={() => setRange(r)} style={{
+              padding:"2px 8px", borderRadius:6, fontSize:10, fontWeight:600, cursor:"pointer",
+              background: range === r ? color + "22" : "none",
+              border: `1px solid ${range === r ? color : borderColor}`,
+              color: range === r ? color : "#4d6a7a",
+            }}>{r}</button>
+          ))}
+        </div>
+      </div>
+
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:"100%", height:H, display:"block", overflow:"visible" }}>
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.28"/>
+            <stop offset="100%" stopColor={color} stopOpacity="0"/>
+          </linearGradient>
+        </defs>
+        <polygon points={areaPts} fill={`url(#${gradId})`}/>
+        <polyline points={linePts} fill="none" stroke={color} strokeWidth="1.8"
+          strokeLinejoin="round" strokeLinecap="round"/>
+        {/* End dot */}
+        <circle cx={px(prices.length-1)} cy={py(prices[prices.length-1])} r="3"
+          fill={color} stroke="#0d1117" strokeWidth="1.5"/>
+      </svg>
+
+      <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#4d6a7a", marginTop:3 }}>
+        <span>{fmtLabel(first.t)}</span>
+        <span>{fmtLabel(last.t)}</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function JupChat() {
   const [msgs, setMsgs] = useState([{ id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" }]);
@@ -912,6 +1018,7 @@ export default function JupChat() {
       @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
       @keyframes blink  { 0%,80%,100%{opacity:0.15} 40%{opacity:0.9} }
       @keyframes spin   { to{transform:rotate(360deg)} }
+      @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
       .msg-enter { animation:fadeUp 0.22s ease forwards; }
       ::-webkit-scrollbar { width:5px; height:5px; }
       ::-webkit-scrollbar-track { background:transparent; }
@@ -4923,6 +5030,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                 </div>
 
                 <div style={{ padding:14, display:"flex", flexDirection:"column", gap:12 }}>
+
+                  {/* ── Price Chart ── */}
+                  {mint && (
+                    <div style={{ padding:"4px 12px 8px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:12 }}>
+                      <TokenMiniChart mint={mint} />
+                    </div>
+                  )}
 
                   {/* ── Market Data Grid ── */}
                   <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
