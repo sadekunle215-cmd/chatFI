@@ -1,138 +1,58 @@
 // pages/api/lock.js
-// Real Jupiter Lock transactions using @coral-xyz/anchor + on-chain program
+// Jupiter Lock — NO @coral-xyz/anchor dependency
+// Pure @solana/web3.js + @solana/spl-token + Node.js crypto
 // Program: LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn
-// IDL: https://github.com/jup-ag/jup-lock/blob/main/target/idl/locker.json
+
+import crypto from "crypto";
+
+// Compute Anchor instruction discriminator: sha256("global:<name>")[0..8]
+function disc(name) {
+  return crypto.createHash("sha256").update(`global:${name}`).digest().slice(0, 8);
+}
+
+// Write a u64 as 8-byte little-endian into a Buffer
+function writeU64LE(buf, value, offset) {
+  const big = typeof value === "bigint" ? value : BigInt(value);
+  buf.writeBigUInt64LE(big, offset);
+}
 
 export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  let web3, anchor, splToken;
+  let web3, splToken;
   try {
     web3     = await import("@solana/web3.js");
-    anchor   = await import("@coral-xyz/anchor");
     splToken = await import("@solana/spl-token");
   } catch (e) {
     return res.status(500).json({ error: `SDK missing: ${e.message}` });
   }
 
-  const { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } = web3;
-  const { BN, AnchorProvider, Program, Wallet } = anchor;
-  const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } = splToken;
+  const { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY,
+          Transaction, TransactionInstruction, Keypair } = web3;
+  const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID,
+          createAssociatedTokenAccountInstruction } = splToken;
 
   const { action } = req.body || {};
   if (!action) return res.status(400).json({ error: "Missing action" });
 
-  const SOLANA_RPC     = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
-  const LOCK_PROGRAM   = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
-  const WSOL_MINT      = new PublicKey("So11111111111111111111111111111111111111112");
+  const SOLANA_RPC   = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+  const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
 
-  // Minimal locker IDL — only the instructions we need
-  const LOCKER_IDL = {
-    version: "0.1.0",
-    name: "locker",
-    instructions: [
-      {
-        name: "createVestingEscrow",
-        accounts: [
-          { name: "base",            isMut: false, isSigner: true  },
-          { name: "escrow",          isMut: true,  isSigner: false },
-          { name: "escrowToken",     isMut: true,  isSigner: false },
-          { name: "sender",          isMut: true,  isSigner: true  },
-          { name: "senderToken",     isMut: true,  isSigner: false },
-          { name: "recipient",       isMut: false, isSigner: false },
-          { name: "mint",            isMut: false, isSigner: false },
-          { name: "tokenProgram",    isMut: false, isSigner: false },
-          { name: "systemProgram",   isMut: false, isSigner: false },
-          { name: "rent",            isMut: false, isSigner: false },
-        ],
-        args: [
-          { name: "params", type: {
-            defined: "CreateVestingEscrowParameters"
-          }}
-        ]
-      },
-      {
-        name: "claim",
-        accounts: [
-          { name: "escrow",          isMut: true,  isSigner: false },
-          { name: "escrowToken",     isMut: true,  isSigner: false },
-          { name: "recipient",       isMut: false, isSigner: true  },
-          { name: "recipientToken",  isMut: true,  isSigner: false },
-          { name: "mint",            isMut: false, isSigner: false },
-          { name: "tokenProgram",    isMut: false, isSigner: false },
-          { name: "systemProgram",   isMut: false, isSigner: false },
-        ],
-        args: [
-          { name: "maxAmount", type: "u64" }
-        ]
-      }
-    ],
-    accounts: [
-      {
-        name: "VestingEscrow",
-        type: {
-          kind: "struct",
-          fields: [
-            { name: "base",               type: "publicKey" },
-            { name: "mint",               type: "publicKey" },
-            { name: "sender",             type: "publicKey" },
-            { name: "recipient",          type: "publicKey" },
-            { name: "startTime",          type: "u64" },
-            { name: "frequency",          type: "u64" },
-            { name: "cliffUnlockAmount",  type: "u64" },
-            { name: "amountPerPeriod",    type: "u64" },
-            { name: "numberOfPeriod",     type: "u64" },
-            { name: "totalClaimedAmount", type: "u64" },
-            { name: "cliffTime",          type: "u64" },
-            { name: "updateRecipientMode",type: "u8"  },
-            { name: "padding",            type: { array: ["u8", 7] } },
-          ]
-        }
-      }
-    ],
-    types: [
-      {
-        name: "CreateVestingEscrowParameters",
-        type: {
-          kind: "struct",
-          fields: [
-            { name: "vestingStartTime",  type: "u64" },
-            { name: "cliffTime",         type: "u64" },
-            { name: "frequency",         type: "u64" },
-            { name: "cliffUnlockAmount", type: "u64" },
-            { name: "amountPerPeriod",   type: "u64" },
-            { name: "numberOfPeriod",    type: "u64" },
-            { name: "updateRecipientMode", type: "u8" },
-          ]
-        }
-      }
-    ],
-    errors: []
-  };
+  function deriveEscrow(base) {
+    return PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), base.toBuffer()],
+      LOCK_PROGRAM
+    );
+  }
 
   try {
     const connection = new Connection(SOLANA_RPC, "confirmed");
 
-    // ── Derive escrow PDA ──────────────────────────────────────────────────
-    function deriveEscrow(base, programId) {
-      return PublicKey.findProgramAddressSync(
-        [Buffer.from("escrow"), base.toBuffer()],
-        programId
-      );
-    }
-
-    // ── BUILD ANCHOR PROGRAM (read-only, no wallet needed for tx building) ──
-    function buildProgram(connection) {
-      const dummyKeypair = web3.Keypair.generate();
-      const dummyWallet  = new Wallet(dummyKeypair);
-      const provider     = new AnchorProvider(connection, dummyWallet, { commitment: "confirmed" });
-      return new Program(LOCKER_IDL, LOCK_PROGRAM, provider);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // CREATE — real Jupiter Lock createVestingEscrow tx
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // CREATE — build createVestingEscrow ix without Anchor
+    // ─────────────────────────────────────────────────────────────────────
     if (action === "create") {
       const { funder, recipient, mint, amount, cliffSecs, vestingSecs } = req.body;
       if (!funder) return res.status(400).json({ error: "Missing: funder" });
@@ -140,7 +60,7 @@ export default async function handler(req, res) {
       if (!mint)   return res.status(400).json({ error: "Missing: mint" });
 
       const funderKey    = new PublicKey(funder);
-      const recipientKey = recipient ? new PublicKey(recipient) : funderKey;
+      const recipientKey = recipient?.trim() ? new PublicKey(recipient.trim()) : funderKey;
       const mintKey      = new PublicKey(mint);
 
       const cliff   = Math.max(parseInt(cliffSecs)  || 0, 0);
@@ -148,48 +68,70 @@ export default async function handler(req, res) {
       const periods = Math.max(Math.floor(vesting / 86400), 1);
       const amtBig  = BigInt(amount);
       const perPeriod = amtBig / BigInt(periods);
+      // remainder goes into cliffUnlockAmount so total is exact
+      const remainder = amtBig - (perPeriod * BigInt(periods));
 
-      const now = Math.floor(Date.now() / 1000);
+      const now = BigInt(Math.floor(Date.now() / 1000));
 
-      // Each lock needs a unique base keypair — this is how Jupiter Lock derives escrow PDA
-      const baseKeypair = web3.Keypair.generate();
-      const [escrowPDA] = deriveEscrow(baseKeypair.publicKey, LOCK_PROGRAM);
+      // Unique base keypair for this lock
+      const baseKeypair = Keypair.generate();
+      const [escrowPDA] = deriveEscrow(baseKeypair.publicKey);
 
-      const senderToken    = await getAssociatedTokenAddress(mintKey, funderKey,    false, TOKEN_PROGRAM_ID);
-      const escrowToken    = await getAssociatedTokenAddress(mintKey, escrowPDA,    true,  TOKEN_PROGRAM_ID);
+      const senderToken = await getAssociatedTokenAddress(mintKey, funderKey,  false, TOKEN_PROGRAM_ID);
+      const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA,  true,  TOKEN_PROGRAM_ID);
 
-      const program = buildProgram(connection);
+      // ── Encode instruction data ──────────────────────────────────────────
+      // Layout: 8 discriminator + 7×u64 (56 bytes) + 1×u8 = 65 bytes
+      // Fields: vestingStartTime, cliffTime, frequency, cliffUnlockAmount,
+      //         amountPerPeriod, numberOfPeriod, updateRecipientMode
+      const CREATE_DISC = disc("createVestingEscrow");
+      const params = Buffer.alloc(57); // 8 + 48 + 1
+      let off = 0;
 
-      const ix = await program.methods
-        .createVestingEscrow({
-          vestingStartTime:  new BN(now + cliff),
-          cliffTime:         new BN(cliff),
-          frequency:         new BN(86400),
-          cliffUnlockAmount: new BN(0),
-          amountPerPeriod:   new BN(perPeriod.toString()),
-          numberOfPeriod:    new BN(periods),
-          updateRecipientMode: 0,
-        })
-        .accounts({
-          base:          baseKeypair.publicKey,
-          escrow:        escrowPDA,
-          escrowToken:   escrowToken,
-          sender:        funderKey,
-          senderToken:   senderToken,
-          recipient:     recipientKey,
-          mint:          mintKey,
-          tokenProgram:  TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-          rent:          SYSVAR_RENT_PUBKEY,
-        })
-        .instruction();
+      // discriminator (8 bytes)
+      CREATE_DISC.copy(params, off); off += 8;
+
+      // vestingStartTime: when vesting begins (absolute unix ts)
+      writeU64LE(params, now, off); off += 8;
+      // cliffTime: cliff duration in seconds (relative to vestingStartTime)
+      writeU64LE(params, BigInt(cliff), off); off += 8;
+      // frequency: unlock interval in seconds
+      writeU64LE(params, BigInt(86400), off); off += 8;
+      // cliffUnlockAmount: tokens unlocked at cliff (put remainder here)
+      writeU64LE(params, remainder, off); off += 8;
+      // amountPerPeriod: tokens unlocked each period
+      writeU64LE(params, perPeriod, off); off += 8;
+      // numberOfPeriod: total unlock periods
+      writeU64LE(params, BigInt(periods), off); off += 8;
+      // updateRecipientMode: 0 = recipient cannot change themselves
+      params.writeUInt8(0, off);
+
+      const keys = [
+        { pubkey: baseKeypair.publicKey, isSigner: true,  isWritable: false },
+        { pubkey: escrowPDA,             isSigner: false, isWritable: true  },
+        { pubkey: escrowToken,           isSigner: false, isWritable: true  },
+        { pubkey: funderKey,             isSigner: true,  isWritable: true  },
+        { pubkey: senderToken,           isSigner: false, isWritable: true  },
+        { pubkey: recipientKey,          isSigner: false, isWritable: false },
+        { pubkey: mintKey,               isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID,      isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY,    isSigner: false, isWritable: false },
+      ];
+
+      const createIx = new TransactionInstruction({
+        programId: LOCK_PROGRAM,
+        keys,
+        data: params,
+      });
 
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      const tx = new web3.Transaction();
-      tx.add(ix);
+      const tx = new Transaction();
+      tx.add(createIx);
       tx.recentBlockhash = blockhash;
       tx.feePayer        = funderKey;
-      // base keypair must co-sign — partial sign server-side
+
+      // base keypair must co-sign (server-side partial sign)
       tx.partialSign(baseKeypair);
 
       const serialized = Buffer.from(
@@ -197,22 +139,22 @@ export default async function handler(req, res) {
       ).toString("base64");
 
       return res.status(200).json({
-        transaction:          serialized,
-        escrow:               escrowPDA.toBase58(),
-        baseKey:              baseKeypair.publicKey.toBase58(),
+        transaction:         serialized,
+        escrow:              escrowPDA.toBase58(),
+        baseKey:             baseKeypair.publicKey.toBase58(),
         blockhash,
         lastValidBlockHeight,
-        cliffDays:            cliff   / 86400,
-        vestingDays:          vesting / 86400,
+        cliffDays:           cliff   / 86400,
+        vestingDays:         vesting / 86400,
         mint,
         amount,
-        recipient:            recipientKey.toBase58(),
+        recipient:           recipientKey.toBase58(),
       });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // CLAIM — real claim instruction
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // CLAIM — build claim ix without Anchor (same as doClaimLock client-side)
+    // ─────────────────────────────────────────────────────────────────────
     if (action === "claim") {
       const { escrow, recipient } = req.body;
       if (!escrow)    return res.status(400).json({ error: "Missing: escrow" });
@@ -221,30 +163,42 @@ export default async function handler(req, res) {
       const recipientKey = new PublicKey(recipient);
       const escrowKey    = new PublicKey(escrow);
 
-      // Fetch the escrow account to get the mint
-      const program      = buildProgram(connection);
-      const escrowData   = await program.account.vestingEscrow.fetch(escrowKey);
-      const mintKey      = escrowData.mint;
+      // Fetch escrow account — mint is at offset 40 (8 disc + 32 base)
+      const acctInfo = await connection.getAccountInfo(escrowKey);
+      if (!acctInfo) return res.status(400).json({ error: "Escrow account not found" });
+      const mintKey = new PublicKey(acctInfo.data.slice(40, 72));
 
-      const escrowToken    = await getAssociatedTokenAddress(mintKey, escrowKey,    true,  TOKEN_PROGRAM_ID);
-      const recipientToken = await getAssociatedTokenAddress(mintKey, recipientKey, false, TOKEN_PROGRAM_ID);
+      const escrowATA    = await getAssociatedTokenAddress(mintKey, escrowKey,    true,  TOKEN_PROGRAM_ID);
+      const recipientATA = await getAssociatedTokenAddress(mintKey, recipientKey, false, TOKEN_PROGRAM_ID);
 
-      const ix = await program.methods
-        .claim(new BN("18446744073709551615")) // u64::MAX — claim all available
-        .accounts({
-          escrow:         escrowKey,
-          escrowToken,
-          recipient:      recipientKey,
-          recipientToken,
-          mint:           mintKey,
-          tokenProgram:   TOKEN_PROGRAM_ID,
-          systemProgram:  SystemProgram.programId,
-        })
-        .instruction();
+      // claim discriminator = sha256("global:claim")[0..8]
+      const CLAIM_DISC = disc("claim");
+      const maxAmount  = Buffer.alloc(8);
+      maxAmount.writeBigUInt64LE(BigInt("18446744073709551615"), 0); // u64::MAX
+      const data = Buffer.concat([CLAIM_DISC, maxAmount]);
+
+      const keys = [
+        { pubkey: escrowKey,             isSigner: false, isWritable: true  },
+        { pubkey: escrowATA,             isSigner: false, isWritable: true  },
+        { pubkey: recipientKey,          isSigner: true,  isWritable: false },
+        { pubkey: recipientATA,          isSigner: false, isWritable: true  },
+        { pubkey: mintKey,               isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID,      isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ];
+
+      const claimIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
+
+      // Create recipient ATA ix (no-op if already exists — handled client-side)
+      const createAtaIx = createAssociatedTokenAccountInstruction(
+        recipientKey, recipientATA, recipientKey, mintKey,
+        TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      );
 
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      const tx = new web3.Transaction();
-      tx.add(ix);
+      const tx = new Transaction();
+      tx.add(createAtaIx);
+      tx.add(claimIx);
       tx.recentBlockhash = blockhash;
       tx.feePayer        = recipientKey;
 
@@ -255,29 +209,74 @@ export default async function handler(req, res) {
       return res.status(200).json({ transaction: serialized, blockhash, lastValidBlockHeight });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ACCOUNTS — fetch real on-chain escrows for wallet
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // ACCOUNTS — fetch on-chain escrows for a wallet
+    // ─────────────────────────────────────────────────────────────────────
     if (action === "accounts") {
       const { wallet } = req.body;
       if (!wallet) return res.status(400).json({ error: "Missing: wallet" });
 
-      const program   = buildProgram(connection);
-      const walletPk  = new PublicKey(wallet);
+      const walletPk = new PublicKey(wallet);
 
-      // Filter by sender (offset 72) or recipient (offset 104) — 8 discriminator + 32 base + 32 mint = 72
+      // VestingEscrow: 8 disc + 32 base + 32 mint + 32 sender + 32 recipient = 200 bytes total
+      // sender offset: 72, recipient offset: 104
       const [asSender, asRecipient] = await Promise.all([
-        program.account.vestingEscrow.all([{ memcmp: { offset: 72, bytes: walletPk.toBase58() } }]).catch(() => []),
-        program.account.vestingEscrow.all([{ memcmp: { offset: 104, bytes: walletPk.toBase58() } }]).catch(() => []),
+        connection.getProgramAccounts(LOCK_PROGRAM, {
+          filters: [
+            { dataSize: 200 },
+            { memcmp: { offset: 72, bytes: walletPk.toBase58() } },
+          ],
+        }).catch(() => []),
+        connection.getProgramAccounts(LOCK_PROGRAM, {
+          filters: [
+            { dataSize: 200 },
+            { memcmp: { offset: 104, bytes: walletPk.toBase58() } },
+          ],
+        }).catch(() => []),
       ]);
 
       const seen = new Set();
       const accounts = [];
       for (const item of [...asSender, ...asRecipient]) {
-        const key = item.publicKey.toBase58();
+        const key = item.pubkey.toBase58();
         if (!seen.has(key)) {
           seen.add(key);
-          accounts.push({ pubkey: key, data: item.account });
+          // Decode binary account data
+          const buf = Buffer.from(item.account.data);
+          let off = 8; // skip discriminator
+          const base      = new PublicKey(buf.slice(off, off += 32)).toBase58();
+          const mint      = new PublicKey(buf.slice(off, off += 32)).toBase58();
+          const sender    = new PublicKey(buf.slice(off, off += 32)).toBase58();
+          const recipient = new PublicKey(buf.slice(off, off += 32)).toBase58();
+          const startTime       = Number(buf.readBigUInt64LE(off)); off += 8;
+          const frequency       = Number(buf.readBigUInt64LE(off)); off += 8;
+          const cliffUnlockAmt  = Number(buf.readBigUInt64LE(off)); off += 8;
+          const amountPerPeriod = Number(buf.readBigUInt64LE(off)); off += 8;
+          const numberOfPeriod  = Number(buf.readBigUInt64LE(off)); off += 8;
+          const totalClaimed    = Number(buf.readBigUInt64LE(off)); off += 8;
+          const cliffTime       = Number(buf.readBigUInt64LE(off));
+
+          const now      = Math.floor(Date.now() / 1000);
+          const cliffEnd = startTime + cliffTime;
+          const elapsed  = Math.max(now - cliffEnd, 0);
+          const periodsElapsed = frequency > 0 ? Math.floor(elapsed / frequency) : 0;
+          const totalVested = Math.min(
+            cliffUnlockAmt + amountPerPeriod * periodsElapsed,
+            cliffUnlockAmt + amountPerPeriod * numberOfPeriod
+          );
+          const claimableRaw = Math.max(totalVested - totalClaimed, 0);
+          const totalRaw     = cliffUnlockAmt + amountPerPeriod * numberOfPeriod;
+
+          accounts.push({
+            pubkey: key,
+            mint, sender, recipient,
+            cliffEnd, startTime,
+            totalRaw,
+            totalClaimed,
+            claimableRaw,
+            claimable: claimableRaw > 0 && now >= cliffEnd,
+            vestedPercent: totalRaw > 0 ? ((totalVested / totalRaw) * 100).toFixed(1) : "0",
+          });
         }
       }
 
