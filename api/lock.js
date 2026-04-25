@@ -7,7 +7,7 @@ import crypto from "crypto";
 
 const WSOL_MINT_STR = "So11111111111111111111111111111111111111112";
 
-// Anchor instruction discriminator: sha256("global:<name>")[0..8]
+// Anchor instruction discriminator: sha256("global:<n>")[0..8]
 function disc(name) {
   return crypto.createHash("sha256").update(`global:${name}`).digest().slice(0, 8);
 }
@@ -55,6 +55,12 @@ export default async function handler(req, res) {
       LOCK_PROGRAM
     );
   }
+
+  // Derive the Anchor event authority PDA — required by ALL Jupiter Lock instructions
+  const [eventAuthority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("__event_authority")],
+    LOCK_PROGRAM
+  );
 
   try {
     const connection = new Connection(SOLANA_RPC, "confirmed");
@@ -104,12 +110,6 @@ export default async function handler(req, res) {
       writeU64LE(params, numPeriods, off); off += 8; // numberOfPeriod = 1
       params.writeUInt8(0, off);                     // updateRecipientMode
 
-      // Anchor event CPI accounts — required by Jupiter Lock for on-chain event emission
-      const [eventAuthority] = PublicKey.findProgramAddressSync(
-        [Buffer.from("__event_authority")],
-        LOCK_PROGRAM
-      );
-
       const lockKeys = [
         { pubkey: baseKeypair.publicKey,        isSigner: true,  isWritable: false },
         { pubkey: escrowPDA,                    isSigner: false, isWritable: true  },
@@ -122,6 +122,7 @@ export default async function handler(req, res) {
         { pubkey: SystemProgram.programId,      isSigner: false, isWritable: false },
         { pubkey: SYSVAR_RENT_PUBKEY,           isSigner: false, isWritable: false },
         { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false },
+        // Anchor event CPI accounts — required by Jupiter Lock for on-chain event emission
         { pubkey: eventAuthority,               isSigner: false, isWritable: false },
         { pubkey: LOCK_PROGRAM,                 isSigner: false, isWritable: false },
       ];
@@ -199,6 +200,10 @@ export default async function handler(req, res) {
         { pubkey: mintKey,                 isSigner: false, isWritable: false },
         { pubkey: TOKEN_PROGRAM_ID,        isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        // FIX: Anchor event CPI accounts — REQUIRED by Jupiter Lock claim instruction
+        // Omitting these causes Custom error: 101 (InstructionFallbackNotFound)
+        { pubkey: eventAuthority,          isSigner: false, isWritable: false },
+        { pubkey: LOCK_PROGRAM,            isSigner: false, isWritable: false },
       ];
 
       const claimIx  = new TransactionInstruction({ programId: LOCK_PROGRAM, keys: claimKeys, data });
