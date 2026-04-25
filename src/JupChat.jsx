@@ -3895,7 +3895,12 @@ Order: \`${orderKey.slice(0,20)}…\`
           setShowPortfolio(true);
           setPortfolioData(null);
           const pData = await fetchPortfolioData(addr);
-          setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: pData?.logoMap || {}, mintMap: pData?.mintMap || {}, prices });
+          // Build fallback logoMap from TOKEN_MINTS so known tokens always show logos
+          const fallbackLogoMap = Object.fromEntries(
+            Object.entries(TOKEN_MINTS).map(([sym, mint]) => [sym, `https://img.jup.ag/tokens/${mint}`])
+          );
+          const mergedLogoMap = { ...fallbackLogoMap, ...(pData?.logoMap || {}) };
+          setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices });
           setPortfolioLoading(false);
         }
 
