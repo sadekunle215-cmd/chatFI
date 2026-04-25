@@ -1834,22 +1834,25 @@ export default function JupChat() {
     const decimals  = token === "SOL" ? 9 : (tokenDecimalsRef.current[token.toUpperCase()] ?? 6);
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
 
+    // Generate invite code HERE (client-side) so the link we share is guaranteed
+    // to match the keypair the server derives — no mismatch / "fake code" errors.
+    const inviteCode = generateInviteCode();
+
     setSendStatus("signing");
     setShowSend(false);
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
-      // Step 1–3 handled server-side: /api/send generates the invite keypair,
-      // calls Jupiter /send/v1/craft-send, and partially signs with the invite keypair.
-      // This avoids the Reown adapter crash when it receives a VersionedTransaction
-      // that already has a partial signature slot filled.
+      // Server receives our inviteCode, derives Keypair.fromSeed(SHA-256("invite:"+code)),
+      // calls Jupiter /send/v1/craft-send with that signer pubkey, partially signs,
+      // and returns the partially-signed tx. We already hold the code so no round-trip mismatch.
       const serverRes = await fetch("/api/send", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint }),
+        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint, inviteCode }),
       });
       const serverData = await serverRes.json();
       if (serverData.error) throw new Error(serverData.error);
-      const { partiallySignedTx, inviteCode } = serverData;
+      const { partiallySignedTx } = serverData;
 
       // Step 4: wallet adds its own signature to the already-partially-signed tx.
       // Reown's adapter only sees its own signature slot being filled — no crash.
@@ -5274,19 +5277,29 @@ Order: \`${orderKey.slice(0,20)}…\`
                 Send tokens to anyone — recipient doesn't need a wallet. They claim via the link. You can claw back unclaimed tokens anytime.
               </div>
 
+              {/* Jupiter Send only supports SOL and USDC — other mints are rejected server-side */}
+              <div style={{ fontSize:11, color:"#f6ad55", background:"#2e1f0a", border:"1px solid #f6ad5544", borderRadius:8, padding:"7px 10px", marginBottom:10 }}>
+                ⚠️ Jupiter Send only supports <strong>SOL</strong> and <strong>USDC</strong>. Other tokens will fail at the claim step.
+              </div>
+
               {/* Token + Amount row */}
               <div style={{ display:"flex", gap:8, marginBottom:10 }}>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token</div>
-                  <TokenPicker
+                  <select
                     value={sendCfg.token}
-                    jupFetch={jupFetch}
-                    onSelect={(sym, mint, decimals) => {
+                    onChange={e => {
+                      const sym = e.target.value;
+                      const mint = sym === "SOL" ? TOKEN_MINTS.SOL : TOKEN_MINTS.USDC;
+                      const decimals = sym === "SOL" ? 9 : 6;
                       tokenCacheRef.current[sym] = mint;
                       tokenDecimalsRef.current[sym] = decimals;
                       setSendCfg(c => ({ ...c, token: sym, mint }));
                     }}
-                  />
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, cursor:"pointer" }}>
+                    <option value="SOL">SOL</option>
+                    <option value="USDC">USDC</option>
+                  </select>
                 </div>
                 <div style={{ flex:1 }}>
                   <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount</div>
