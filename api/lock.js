@@ -109,8 +109,19 @@ export default async function handler(req, res) {
       const baseKeypair = Keypair.generate();
       const [escrowPDA] = deriveEscrow(baseKeypair.publicKey);
 
-      const senderToken = await getAssociatedTokenAddress(mintKey, funderKey, false, TOKEN_PROGRAM_ID);
-      const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA,  true,  TOKEN_PROGRAM_ID);
+      // Look up sender's actual token account on-chain rather than deriving it.
+      // Deriving the ATA can fail if the account doesn't exist yet or if the mint
+      // address is slightly different — this guarantees we use the real account.
+      let senderToken;
+      const senderTokenAccounts = await connection.getTokenAccountsByOwner(funderKey, { mint: mintKey });
+      if (senderTokenAccounts.value.length > 0) {
+        // Use the first (largest balance) token account found
+        senderToken = senderTokenAccounts.value[0].pubkey;
+      } else {
+        // Fallback: derive ATA — will be created idempotently before the lock ix
+        senderToken = await getAssociatedTokenAddress(mintKey, funderKey, false, TOKEN_PROGRAM_ID);
+      }
+      const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA, true, TOKEN_PROGRAM_ID);
 
       // ── Encode instruction data ──────────────────────────────────────────────
       // Rust CreateVestingEscrowParameters fields (exact order from source):
@@ -188,6 +199,12 @@ export default async function handler(req, res) {
           lamports:   Number(amtBig),
         }));
         tx.add(createSyncNativeInstruction(senderToken, TOKEN_PROGRAM_ID));
+      } else if (senderTokenAccounts.value.length === 0) {
+        // Fallback: no token account found on-chain, create it idempotently
+        tx.add(createAssociatedTokenAccountInstruction(
+          funderKey, senderToken, funderKey, mintKey,
+          TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+        ));
       }
 
       tx.add(lockIx);
@@ -309,12 +326,12 @@ export default async function handler(req, res) {
         const recipient = new PublicKey(buf.slice(o, o += 32)).toBase58();
 
         // Field order confirmed from process_verify_all_escrow_created.rs assertions:
-        // vesting_start_time, cliff_time, cliff_unlock_amount, frequency,
-        // amount_per_period, number_of_period
+        // Rust struct order: vesting_start_time, cliff_time, frequency, cliff_unlock_amount,
+        // amount_per_period, number_of_period — confirmed from CreateVestingEscrowParameters
         const startTime       = Number(buf.readBigUInt64LE(o)); o += 8; // vesting_start_time
         const cliffTime       = Number(buf.readBigUInt64LE(o)); o += 8; // cliff_time (absolute)
+        const frequency       = Number(buf.readBigUInt64LE(o)); o += 8; // frequency (matches Rust struct order)
         const cliffUnlockAmt  = Number(buf.readBigUInt64LE(o)); o += 8; // cliff_unlock_amount
-        const frequency       = Number(buf.readBigUInt64LE(o)); o += 8; // frequency
         const amountPerPeriod = Number(buf.readBigUInt64LE(o)); o += 8; // amount_per_period
         const numberOfPeriod  = Number(buf.readBigUInt64LE(o)); o += 8; // number_of_period
         const totalClaimed    = Number(buf.readBigUInt64LE(o));          // total_claimed (after)
