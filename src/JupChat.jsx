@@ -1348,6 +1348,65 @@ export default function JupChat() {
             setPortfolio(balances);
           }
         }
+
+        // ── Extract earn positions from portfolio elements ──────────────────
+        // Jupiter portfolio API aggregates earn/vault/yield positions under various labels
+        const earnEls = (portRes.elements || []).filter(el => {
+          const label = (el.label || "").toLowerCase();
+          const pid   = (el.platformId || "").toLowerCase();
+          return label.includes("earn") || label.includes("lend") || label === "vault" ||
+                 label === "yield" || pid.includes("jupiter-lend") || pid.includes("earn");
+        });
+        if (earnEls.length > 0) {
+          results._earnFromPortfolio = earnEls.flatMap(el => {
+            const assets = el.data?.assets || el.data?.positions || [];
+            if (assets.length === 0) {
+              return el.value ? [{
+                _fromPortfolio: true, label: el.label, platformId: el.platformId,
+                symbol: el.name || el.label || "Token", value: el.value,
+                underlyingAssets: el.value, shares: 0,
+              }] : [];
+            }
+            return assets.map(a => ({
+              _fromPortfolio: true, label: el.label, platformId: el.platformId,
+              symbol: a.symbol || a.name || el.name || "Token",
+              value: a.value ?? el.value,
+              underlyingAssets: a.underlyingAssets || a.amount || a.balance || a.depositedAmount || a.value,
+              shares: a.shares || 0,
+              asset: { ...(a.asset || a), decimals: a.decimals ?? a.asset?.decimals ?? 6 },
+            }));
+          }).filter(e => parseFloat(e.value || e.underlyingAssets || 0) > 0);
+        }
+
+        // ── Extract lock/vesting positions from portfolio elements ──────────
+        const lockEls = (portRes.elements || []).filter(el => {
+          const label = (el.label || "").toLowerCase();
+          const pid   = (el.platformId || "").toLowerCase();
+          return label.includes("lock") || label.includes("vest") || label === "vested" ||
+                 pid.includes("jupiter-lock") || pid.includes("lock");
+        });
+        if (lockEls.length > 0) {
+          results._lockFromPortfolio = lockEls.flatMap(el => {
+            const assets = el.data?.assets || el.data?.positions || [];
+            if (assets.length === 0) {
+              return [{
+                _fromPortfolio: true, label: el.label,
+                symbol: el.name || "Token",
+                totalAmount: el.value ? parseFloat(el.value).toFixed(2) : "0",
+                claimableAmount: "0", vestedPercent: "0",
+              }];
+            }
+            return assets.map(a => ({
+              _fromPortfolio: true, label: el.label,
+              symbol: a.symbol || a.name || el.name || "Token",
+              totalAmount: a.amount != null ? parseFloat(a.amount).toFixed(4)
+                         : el.value ? parseFloat(el.value).toFixed(2) : "0",
+              claimableAmount: a.claimableAmount ? parseFloat(a.claimableAmount).toFixed(4) : "0",
+              vestedPercent: "0",
+              cliff: a.cliff || a.cliffTime || null,
+            }));
+          });
+        }
       }
     } catch {}
 
@@ -1405,8 +1464,12 @@ export default function JupChat() {
       if (!Array.isArray(earnArr)) {
         earnArr = Object.values(earn).filter(v => v && typeof v === "object" && !Array.isArray(v));
       }
-      results.earnPositions = earnArr;
+      if (earnArr.length) results.earnPositions = earnArr;
     } catch {}
+    // Fallback: use earn elements found in portfolio API (covers vault/yield/lend positions)
+    if (!results.earnPositions?.length && results._earnFromPortfolio?.length) {
+      results.earnPositions = results._earnFromPortfolio;
+    }
 
     // ── 8. Staked JUP ─────────────────────────────────────────────────────────
     try {
@@ -1487,6 +1550,10 @@ export default function JupChat() {
         });
       }
     } catch {}
+    // Merge any lock/vesting positions found in the portfolio API elements
+    if (results._lockFromPortfolio?.length) {
+      results.lockPositions = [...(results.lockPositions || []), ...results._lockFromPortfolio];
+    }
 
     return results;
   };
@@ -6129,7 +6196,12 @@ Order: \`${orderKey.slice(0,20)}…\`
 
                   {/* ── Earn Positions ── */}
                   {(() => {
-                    const earnPos = (portfolioData.earnPositions||[]).filter(e => parseFloat(e.underlyingAssets||e.underlying_assets||0)>0 || parseFloat(e.shares||0)>0);
+                    const earnPos = (portfolioData.earnPositions||[]).filter(e => {
+                      const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
+                      const sh  = parseFloat(e.shares || 0);
+                      const val = parseFloat(e.value || 0);
+                      return ua > 0 || sh > 0 || val > 0;
+                    });
                     return earnPos.length > 0 ? (
                       <div>
                         <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
@@ -6140,12 +6212,15 @@ Order: \`${orderKey.slice(0,20)}…\`
                         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                           {earnPos.slice(0,5).map((e, i) => {
                             const sym = e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
-                            const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
+                            const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
                             const dec = e.asset?.decimals ?? e.decimals ?? 6;
-                            const amt = ua > 1e6 ? (ua/Math.pow(10,dec)).toFixed(4) : ua.toFixed(4);
+                            const amt = ua > 1e6 ? (ua/Math.pow(10,dec)).toFixed(4)
+                                      : ua > 0   ? ua.toFixed(4)
+                                      : parseFloat(e.value||0).toFixed(2);
+                            const label = e.label ? ` · ${e.label}` : "";
                             return (
                               <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
-                                <span style={{ color:T.text2 }}>{sym} <span style={{ fontSize:10, color:T.text3 }}>Earn</span></span>
+                                <span style={{ color:T.text2 }}>{sym} <span style={{ fontSize:10, color:T.text3 }}>Earn{label}</span></span>
                                 <span style={{ fontWeight:600, color:"#68d391" }}>{amt}</span>
                               </div>
                             );
