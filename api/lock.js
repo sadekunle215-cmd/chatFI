@@ -71,6 +71,13 @@ export default async function handler(req, res) {
       const mintKey      = new PublicKey(mint);
       const isWsol       = mint === WSOL_MINT;
 
+      // Native SOL (wSOL) cannot be locked — the Jupiter Lock program's escrow ATA
+      // creation via CPI fails with IllegalOwner for PDA-owned accounts in JS.
+      // Direct users to use USDC, JUP, or any other SPL token.
+      if (isWsol) {
+        return res.status(400).json({ error: "Native SOL cannot be locked. Please use an SPL token like USDC or JUP instead." });
+      }
+
       const cliff   = Math.max(parseInt(cliffSecs)  || 0, 0);
       const vesting = Math.max(parseInt(vestingSecs) || 86400, 86400);
       const amtBig  = BigInt(amount);
