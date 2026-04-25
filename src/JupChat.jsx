@@ -296,7 +296,7 @@ Available actions:
 - "FETCH_PERPS_POSITIONS" → actionData: {} — show user's open perps positions with close/increase/decrease buttons
 - "SHOW_STUDIO"     → actionData: { "name": "MyToken", "symbol": "MTK", "supply": "1000000", "decimals": "9", "description": "brief token purpose", "website": "", "twitter": "" } — open Jupiter Studio token creation panel (Dynamic Bonding Curve). Pre-fill any fields the user mentioned.
 - "FETCH_STUDIO_FEES" → actionData: {} — check unclaimed DBC creator trading fees for connected wallet
-- "SHOW_LOCK"       → actionData: { "token": "JUP", "amount": "1000", "cliffDays": "90", "vestingDays": "365", "recipient": "" } — lock tokens with cliff+vesting schedule. recipient blank = connected wallet. Pre-fill fields from user message.
+- "SHOW_LOCK"       → actionData: { "token": "JUP", "amount": "1000", "cliffDays": "90", "vestingDays": "365", "recipient": "" } — lock SPL tokens with cliff+vesting schedule. NOTE: Native SOL cannot be locked — if user asks to lock SOL, suggest USDC or JUP instead. recipient blank = connected wallet. Pre-fill fields from user message.
 - "FETCH_LOCKS"     → actionData: {} — view all token locks where user is creator or recipient. Shows claimable amounts.
 - "SHOW_ROUTE"      → actionData: { "from": "SOL", "to": "USDC", "amount": "1" } — show full DEX route breakdown for this swap: AMMs used, split percentages, price impact per hop.
 
@@ -1398,6 +1398,13 @@ export default function JupChat() {
     const { mint, cliffDays, vestingDays, recipient } = lockCfg;
     const amount = lockCfg.amount;
     if (!mint || !amount || parseFloat(amount) <= 0) return;
+    // SOL (native) cannot be locked — the Jupiter Lock program requires an SPL token ATA.
+    // Use USDC, JUP, or any other SPL token instead.
+    if (mint === "So11111111111111111111111111111111111111112") {
+      push("ai", "⚠️ Native SOL cannot be locked directly. Please use an SPL token like **USDC** or **JUP** instead.");
+      setLockStatus(null);
+      return;
+    }
     setLockStatus("signing");
     try {
       const { Transaction, VersionedTransaction, Connection } = await import("@solana/web3.js");
@@ -6156,9 +6163,14 @@ Order: \`${orderKey.slice(0,20)}…\`
                   Lock creation failed. Make sure you have enough SOL for the transaction.
                 </div>
               )}
+              {lockCfg.mint === "So11111111111111111111111111111111111111112" && (
+                <div style={{ padding:"8px 12px", background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:8, fontSize:11, color:"#ef4444", marginBottom:8 }}>
+                  ⚠️ Native SOL cannot be locked. Switch to an SPL token like USDC or JUP.
+                </div>
+              )}
               <div style={{ display:"flex", gap:8 }}>
                 <button onClick={doCreateLock}
-                  disabled={!lockCfg.mint || !lockCfg.amount || parseFloat(lockCfg.amount)<=0 || lockStatus==="signing" || !walletFull}
+                  disabled={!lockCfg.mint || !lockCfg.amount || parseFloat(lockCfg.amount)<=0 || lockStatus==="signing" || !walletFull || lockCfg.mint==="So11111111111111111111111111111111111111112"}
                   className="hov-btn"
                   style={{ flex:1, padding:"10px", background:T.purpleBg, border:`1px solid ${T.purple}`, borderRadius:8, color:T.purple, fontSize:14, fontWeight:600, cursor:"pointer" }}>
                   {lockStatus==="signing" ? "Signing…" : "🔒 Create Lock"}
