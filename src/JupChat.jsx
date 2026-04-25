@@ -1400,7 +1400,7 @@ export default function JupChat() {
     if (!mint || !amount || parseFloat(amount) <= 0) return;
     setLockStatus("signing");
     try {
-      const { Transaction, Connection } = await import("@solana/web3.js");
+      const { Transaction, VersionedTransaction, Connection } = await import("@solana/web3.js");
 
       const cliff   = Math.max(Math.floor(parseFloat(cliffDays   || 0)   * 86400), 0);
       const vesting = Math.max(Math.floor(parseFloat(vestingDays || 1)   * 86400), 86400);
@@ -1428,7 +1428,9 @@ export default function JupChat() {
 
       // Deserialize, user signs, then send
       const txBytes = Uint8Array.from(atob(txB64), c => c.charCodeAt(0));
-      const tx = Transaction.from(txBytes);
+      let tx;
+      try { tx = Transaction.from(Buffer.from(txBytes)); }
+      catch (_) { tx = VersionedTransaction.deserialize(txBytes); }
       const signed = await provider.signTransaction(tx);
 
       const RPC_URL    = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
