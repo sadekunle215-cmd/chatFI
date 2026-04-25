@@ -3609,22 +3609,35 @@ export default function JupChat() {
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
 
-    // Jupiter requires minimum $50 USDC (or equivalent) per DCA order cycle
-    const MIN_ORDER_USD = 50;
+    // Jupiter requires: minimum $50 USD per cycle AND $100 USD total (numberOfOrders * amountPerCycle)
+    // For stablecoins, use price=1 exactly to avoid floating point rejections (e.g. USDC at $0.9998)
+    const MIN_CYCLE_USD  = 50;
+    const MIN_TOTAL_USD  = 100;
     const amtNum = parseFloat(amountPerCycle);
     const fromSymUpper = recurringCfg.from?.toUpperCase() || "USDC";
-    const tokenPriceUSD = prices[fromSymUpper] || (fromSymUpper === "USDC" || fromSymUpper === "USDT" ? 1 : null);
-    const orderValueUSD = tokenPriceUSD ? amtNum * tokenPriceUSD : amtNum; // assume 1:1 if stablecoin unknown
-    if (orderValueUSD < MIN_ORDER_USD) {
+    const isStable = ["USDC","USDT","JUPUSD","DAI","BUSD","USDH","UXD"].includes(fromSymUpper);
+    const tokenPriceUSD = isStable ? 1 : (prices[fromSymUpper] || null);
+    const cycleValueUSD = tokenPriceUSD ? amtNum * tokenPriceUSD : amtNum;
+    const totalValueUSD = cycleValueUSD * parseInt(numberOfOrders || 1);
+    if (cycleValueUSD < MIN_CYCLE_USD) {
       setRecurringStatus("error");
-      push("ai", `Each recurring order must be worth at least **$${MIN_ORDER_USD} USDC**.\n\nYou entered **${amtNum} ${fromSymUpper}** per order (~$${orderValueUSD.toFixed(2)}). Please increase the amount per order to at least $${MIN_ORDER_USD} worth.`);
+      push("ai", `Jupiter requires at least **$${MIN_CYCLE_USD} per order** for recurring orders.\n\nYou entered **${amtNum} ${fromSymUpper}** per order (~$${cycleValueUSD.toFixed(2)}). Please increase to at least $${MIN_CYCLE_USD} worth.`);
+      setRecurringStatus(null);
+      return;
+    }
+    if (totalValueUSD < MIN_TOTAL_USD) {
+      setRecurringStatus("error");
+      push("ai", `Jupiter requires a **minimum $${MIN_TOTAL_USD} total** across all orders.\n\nYour total is ~$${totalValueUSD.toFixed(2)} (${numberOfOrders} orders × $${cycleValueUSD.toFixed(2)}). Add more orders or increase the amount per order.`);
       setRecurringStatus(null);
       return;
     }
 
     setRecurringStatus("signing");
     try {
-      const amountRaw = Math.floor(parseFloat(amountPerCycle) * Math.pow(10, fromDecimals || 6));
+      // Jupiter's inAmount = TOTAL deposit. It divides by numberOfOrders internally for per-cycle amount.
+      const numOrders = parseInt(numberOfOrders);
+      const totalAmount = parseFloat(amountPerCycle) * numOrders;
+      const amountRaw = Math.floor(totalAmount * Math.pow(10, fromDecimals || 6));
       const orderRes = await jupFetch(`${JUP_RECUR_BASE}/createOrder`, {
         method: "POST",
         body: {
@@ -3634,7 +3647,7 @@ export default function JupChat() {
           params: {
             time: {
               inAmount: amountRaw,
-              numberOfOrders: parseInt(numberOfOrders),
+              numberOfOrders: numOrders,
               interval: parseInt(intervalSecs),
             }
           }
