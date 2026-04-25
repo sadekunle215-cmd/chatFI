@@ -155,7 +155,7 @@ const JUP_PERPS_API    = `${JUP_BASE}/perps/v1`;         // positions, orders, m
 const JUP_STUDIO_API   = `${JUP_BASE}/studio/v1`;        // DBC token creation, fee claims
 const JUP_LOCK_API     = `${JUP_BASE}/lock/v1`;          // token vesting / locking
 const JUP_ROUTE_API    = `${JUP_BASE}/swap/v1/quote`;    // raw quote with full route breakdown
-const SOLANA_RPC       = "SOLANA_RPC";
+const SOLANA_RPC       = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const SPL_PROGRAM      = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 // JupUSD mint for prediction market deposits
 const JUPUSD_MINT      = "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD";
@@ -1354,7 +1354,7 @@ export default function JupChat() {
     try {
       const { PublicKey, Connection } = await import("@solana/web3.js");
       const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
-      const RPC_URL      = "https://mainnet.helius-rpc.com/?api-key=public";
+      const RPC_URL      = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
       const connection   = new Connection(RPC_URL, "confirmed");
       const walletPk     = new PublicKey(walletFull);
 
@@ -1400,101 +1400,47 @@ export default function JupChat() {
     if (!mint || !amount || parseFloat(amount) <= 0) return;
     setLockStatus("signing");
     try {
-      const { PublicKey, SystemProgram, Transaction, Keypair: KP,
-              SYSVAR_RENT_PUBKEY, TransactionInstruction } = await import("@solana/web3.js");
-      const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID,
-              ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } = await import("@solana/spl-token");
-
-      const LOCK_PROGRAM   = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
-      const RPC_URL        = "https://mainnet.helius-rpc.com/?api-key=public" ;
-
-      const { Connection }   = await import("@solana/web3.js");
-      const connection       = new Connection(RPC_URL, "confirmed");
+      const { Transaction, Connection } = await import("@solana/web3.js");
 
       const cliff   = Math.max(Math.floor(parseFloat(cliffDays   || 0)   * 86400), 0);
       const vesting = Math.max(Math.floor(parseFloat(vestingDays || 1)   * 86400), 86400);
-      const periods = Math.max(Math.floor(vesting / 86400), 1);
-
       const dec     = tokenDecimalsRef.current[lockCfg.token?.toUpperCase()] || 9;
       const amtRaw  = BigInt(Math.floor(parseFloat(amount) * Math.pow(10, dec)));
-      const perPeriod = amtRaw / BigInt(periods);
 
-      const funderKey    = new PublicKey(walletFull);
-      const recipientKey = recipient?.trim() ? new PublicKey(recipient.trim()) : funderKey;
-      const mintKey      = new PublicKey(mint);
+      // Call the Vercel API route which uses the server-side SOLANA_RPC env var
+      const apiRes = await fetch("/api/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action:     "create",
+          funder:     walletFull,
+          recipient:  recipient?.trim() || "",
+          mint,
+          amount:     amtRaw.toString(),
+          cliffSecs:  cliff,
+          vestingSecs: vesting,
+        }),
+      });
+      const apiData = await apiRes.json();
+      if (apiData.error) throw new Error(apiData.error);
 
-      // Each lock needs a unique base keypair — escrow PDA is derived from it
-      const baseKP     = KP.generate();
-      const [escrowPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from("escrow"), baseKP.publicKey.toBuffer()],
-        LOCK_PROGRAM
-      );
+      const { transaction: txB64, escrow: escrowPDA, blockhash, lastValidBlockHeight } = apiData;
 
-      const senderATA  = await getAssociatedTokenAddress(mintKey, funderKey,  false, TOKEN_PROGRAM_ID);
-      const escrowATA  = await getAssociatedTokenAddress(mintKey, escrowPDA,  true,  TOKEN_PROGRAM_ID);
-
-      // Encode CreateVestingEscrowParameters as Anchor instruction data
-      // Discriminator = sha256("global:create_vesting_escrow")[0..8]
-      const discriminator = Buffer.from([141, 40, 104, 40, 169, 59, 59, 29]);
-      const now           = BigInt(Math.floor(Date.now() / 1000));
-      const vestingStart  = now + BigInt(cliff);
-
-      function writeU64(buf, val, offset) {
-        const b = Buffer.alloc(8);
-        b.writeBigUInt64LE(BigInt(val), 0);
-        b.copy(buf, offset);
-        return offset + 8;
-      }
-
-      const params = Buffer.alloc(8 * 6 + 1); // 6x u64 + 1x u8
-      let off = 0;
-      off = writeU64(params, vestingStart,       off); // vesting_start_time
-      off = writeU64(params, BigInt(cliff),      off); // cliff_time
-      off = writeU64(params, BigInt(86400),      off); // frequency (daily)
-      off = writeU64(params, BigInt(0),          off); // cliff_unlock_amount
-      off = writeU64(params, perPeriod,          off); // amount_per_period
-      off = writeU64(params, BigInt(periods),    off); // number_of_period
-      params.writeUInt8(0, off);                        // update_recipient_mode
-
-      const data = Buffer.concat([discriminator, params]);
-
-      const keys = [
-        { pubkey: baseKP.publicKey, isSigner: true,  isWritable: false }, // base
-        { pubkey: escrowPDA,        isSigner: false, isWritable: true  }, // escrow
-        { pubkey: escrowATA,        isSigner: false, isWritable: true  }, // escrow_token
-        { pubkey: funderKey,        isSigner: true,  isWritable: true  }, // sender
-        { pubkey: senderATA,        isSigner: false, isWritable: true  }, // sender_token
-        { pubkey: recipientKey,     isSigner: false, isWritable: false }, // recipient
-        { pubkey: mintKey,          isSigner: false, isWritable: false }, // mint
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: SYSVAR_RENT_PUBKEY,      isSigner: false, isWritable: false },
-      ];
-
-      const lockIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
-
-      // Create escrow ATA if it doesn't exist yet
-      const createEscrowAtaIx = createAssociatedTokenAccountInstruction(
-        funderKey, escrowATA, escrowPDA, mintKey,
-        TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-      );
-
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      const tx = new Transaction();
-      tx.add(createEscrowAtaIx, lockIx);
-      tx.recentBlockhash = blockhash;
-      tx.feePayer        = funderKey;
-      tx.partialSign(baseKP); // base keypair co-signs server-side
-
+      // Deserialize, user signs, then send
+      const txBytes = Uint8Array.from(atob(txB64), c => c.charCodeAt(0));
+      const tx = Transaction.from(txBytes);
       const signed = await provider.signTransaction(tx);
-      const sig    = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
+
+      const RPC_URL    = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+      const connection = new Connection(RPC_URL, "confirmed");
+      const sig        = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
 
       push("ai", `Confirming lock on-chain… ⏳`);
       await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
 
       setLockStatus("done");
-      setLockResult({ lockId: escrowPDA.toBase58(), txSig: sig });
-      push("ai", `**Lock created ✓**\n\n**${amount} ${lockCfg.token}** locked for **${recipient?.trim() ? `\`${recipient.trim().slice(0,12)}…\`` : "your wallet"}**\n\nCliff: ${cliffDays} days · Vesting: ${vestingDays} days total\nEscrow: \`${escrowPDA.toBase58().slice(0,20)}…\`\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
+      setLockResult({ lockId: escrowPDA, txSig: sig });
+      push("ai", `**Lock created ✓**\n\n**${amount} ${lockCfg.token}** locked for **${recipient?.trim() ? `\`${recipient.trim().slice(0,12)}…\`` : "your wallet"}**\n\nCliff: ${cliffDays} days · Vesting: ${vestingDays} days total\nEscrow: \`${escrowPDA.slice(0,20)}…\`\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
       setShowLock(false);
     } catch (err) {
       setLockStatus("error");
@@ -1516,7 +1462,7 @@ export default function JupChat() {
               ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } = await import("@solana/spl-token");
 
       const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
-      const RPC_URL      = "https://mainnet.helius-rpc.com/?api-key=public";
+      const RPC_URL      = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
       const connection   = new Connection(RPC_URL, "confirmed");
 
       const recipientKey = new PublicKey(walletFull);
