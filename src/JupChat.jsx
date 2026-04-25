@@ -5589,9 +5589,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                           return (
                             <div key={sym} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:"1px solid " + T.border, borderRadius:10 }}>
                               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                                <div style={{ width:30, height:30, borderRadius:"50%", overflow:"hidden", flexShrink:0, background:"linear-gradient(135deg, #1e2d3d, #253545)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:T.text2 }}>
+                                <div style={{ width:30, height:30, borderRadius:"50%", overflow:"hidden", flexShrink:0, background:"linear-gradient(135deg, #1e2d3d, #253545)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:T.text2, position:"relative" }}>
                                   {logoUrl
-                                    ? <img src={logoUrl} alt={sym} style={{ width:"100%", height:"100%", objectFit:"cover" }} onError={e => { e.target.style.display="none"; e.target.parentNode.textContent = sym.slice(0,2); }} />
+                                    ? <>
+                                        <img src={logoUrl} alt={sym} style={{ width:"100%", height:"100%", objectFit:"cover", position:"absolute", top:0, left:0 }}
+                                          onError={e => { e.target.style.display="none"; e.target.nextSibling.style.display="flex"; }} />
+                                        <span style={{ display:"none", width:"100%", height:"100%", alignItems:"center", justifyContent:"center" }}>{sym.slice(0,2)}</span>
+                                      </>
                                     : sym.slice(0,2)
                                   }
                                 </div>
