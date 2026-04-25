@@ -1561,15 +1561,15 @@ export default function JupChat() {
       const RPC_URL      = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
       const connection   = new Connection(RPC_URL, "confirmed");
       const walletPk     = new PublicKey(walletFull);
+      const now          = Math.floor(Date.now() / 1000);
 
       // VestingEscrow layout: 8 disc + 32 base + 32 mint + 32 sender + 32 recipient = sender@72, recipient@104
+      // Do NOT filter by dataSize — different program versions may produce different sizes
       const [asSender, asRecipient] = await Promise.all([
         connection.getProgramAccounts(LOCK_PROGRAM, { filters: [
-          { dataSize: 281 },
           { memcmp: { offset: 72, bytes: walletPk.toBase58() } }
         ]}).catch(() => []),
         connection.getProgramAccounts(LOCK_PROGRAM, { filters: [
-          { dataSize: 281 },
           { memcmp: { offset: 104, bytes: walletPk.toBase58() } }
         ]}).catch(() => []),
       ]);
@@ -1578,9 +1578,60 @@ export default function JupChat() {
       const accounts = [];
       for (const item of [...asSender, ...asRecipient]) {
         const key = item.pubkey.toBase58();
-        if (!seen.has(key)) {
-          seen.add(key);
-          accounts.push({ pubkey: key, lockId: key, data: item.account.data });
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        try {
+          const buf = Buffer.from(item.account.data);
+          // Parse VestingEscrow fields
+          // Layout: 8 disc | 32 base | 32 mint | 32 sender | 32 recipient |
+          //         u64 vesting_start_time | u64 cliff_time | u64 frequency |
+          //         u64 cliff_unlock_amount | u64 amount_per_period | u64 number_of_period |
+          //         u64 total_claimed_amount | u8 update_recipient_mode | u8 bump | u8 cancel_mode
+          let o = 8;
+          const mintBytes      = buf.slice(o, o + 32); o += 32;
+          const senderBytes    = buf.slice(o, o + 32); o += 32;
+          const recipientBytes = buf.slice(o, o + 32); o += 32;
+
+          const vestingStart    = Number(buf.readBigUInt64LE(o)); o += 8;
+          const cliffTime       = Number(buf.readBigUInt64LE(o)); o += 8; // absolute timestamp
+          const frequency       = Number(buf.readBigUInt64LE(o)); o += 8;
+          const cliffUnlockAmt  = Number(buf.readBigUInt64LE(o)); o += 8;
+          const amountPerPeriod = Number(buf.readBigUInt64LE(o)); o += 8;
+          const numberOfPeriod  = Number(buf.readBigUInt64LE(o)); o += 8;
+          const totalClaimed    = Number(buf.readBigUInt64LE(o)); o += 8;
+
+          const mint      = new PublicKey(mintBytes).toBase58();
+          const sender    = new PublicKey(senderBytes).toBase58();
+          const recipient = new PublicKey(recipientBytes).toBase58();
+
+          const totalRaw     = cliffUnlockAmt + amountPerPeriod * numberOfPeriod;
+          // cliff_time is absolute — tokens unlock once now >= cliffTime
+          const claimableRaw = now >= cliffTime ? Math.max(totalRaw - totalClaimed, 0) : 0;
+          const isClaimable  = claimableRaw > 0;
+
+          // Resolve decimals for display (default 6 for USDC/JUP, etc.)
+          const dec = tokenDecimalsRef.current[mint] || 6;
+          const fmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec > 6 ? 4 : 2);
+
+          accounts.push({
+            pubkey:          key,
+            lockId:          key,
+            mint,
+            sender,
+            recipient,
+            cliffEnd:        cliffTime,
+            vestingStart,
+            totalRaw,
+            totalClaimed,
+            claimableRaw,
+            claimable:       isClaimable,
+            claimableAmount: fmt(claimableRaw),
+            totalAmount:     fmt(totalRaw),
+            vestedPercent:   totalRaw > 0 ? ((claimableRaw / totalRaw) * 100).toFixed(1) : "0",
+          });
+        } catch (_) {
+          // Skip malformed accounts
         }
       }
       setLockList(accounts);
