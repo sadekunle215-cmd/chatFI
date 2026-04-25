@@ -32,7 +32,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `SDK missing: ${e.message}` });
   }
 
-  const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction, Keypair } = web3;
+  const { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY, Transaction, TransactionInstruction, Keypair } = web3;
   const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
           createAssociatedTokenAccountInstruction,
           createAssociatedTokenAccountIdempotentInstruction,
@@ -111,8 +111,10 @@ export default async function handler(req, res) {
         { pubkey: senderToken,             isSigner: false, isWritable: true  }, // sender_token
         { pubkey: eventAuthority,          isSigner: false, isWritable: false }, // event_authority
         { pubkey: LOCK_PROGRAM,            isSigner: false, isWritable: false }, // program
-        { pubkey: TOKEN_PROGRAM_ID,        isSigner: false, isWritable: false }, // token_program
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+        { pubkey: TOKEN_PROGRAM_ID,             isSigner: false, isWritable: false }, // token_program
+        { pubkey: SystemProgram.programId,      isSigner: false, isWritable: false }, // system_program
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false }, // associated_token_program
+        { pubkey: SYSVAR_RENT_PUBKEY,           isSigner: false, isWritable: false }, // rent
       ];
 
       const lockIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
@@ -121,13 +123,6 @@ export default async function handler(req, res) {
       const tx = new Transaction();
       tx.recentBlockhash = blockhash;
       tx.feePayer        = funderKey;
-
-      // Pre-create escrow ATA using the Idempotent variant (instruction 1).
-      // Standard createAssociatedTokenAccountInstruction (instruction 0) rejects PDA owners in JS.
-      // The Idempotent variant allows PDA owners AND is a no-op if the ATA already exists.
-      tx.add(createAssociatedTokenAccountIdempotentInstruction(
-        funderKey, escrowToken, escrowPDA, mintKey, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-      ));
 
       // wSOL: wrap native SOL into sender ATA first
       if (isWsol) {
