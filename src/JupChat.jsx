@@ -1181,7 +1181,7 @@ export default function JupChat() {
           const uiAmt = rawBals["SOL"].uiAmount || 0;
           balances["SOL"] = uiAmt;
           mintMap["SOL"]  = "So11111111111111111111111111111111111111112";
-          logoMap["SOL"]  = "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png";
+          logoMap["SOL"]  = "https://img.jup.ag/tokens/So11111111111111111111111111111111111111112";
         }
 
         // All other keys are mint addresses
@@ -1216,7 +1216,7 @@ export default function JupChat() {
           if (sym) {
             balances[sym] = uiAmt;
             mintMap[sym]  = mint;
-            logoMap[sym]  = "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/" + mint + "/logo.png";
+            logoMap[sym]  = "https://img.jup.ag/tokens/" + mint;
             if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
           } else {
             unknownMints.push({ mint, uiAmt });
@@ -5619,8 +5619,8 @@ Order: \`${orderKey.slice(0,20)}…\`
                           const trigPrice = o.triggerPriceUsd ? `$${parseFloat(o.triggerPriceUsd).toFixed(4)}` : null;
                           const tpPrice   = o.tpPriceUsd  ? `TP $${parseFloat(o.tpPriceUsd).toFixed(4)}`  : null;
                           const slPrice   = o.slPriceUsd  ? `SL $${parseFloat(o.slPriceUsd).toFixed(4)}`  : null;
-                          const inLogo  = o.inputMint  ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${o.inputMint}/logo.png`  : null;
-                          const outLogo = o.outputMint ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${o.outputMint}/logo.png` : null;
+                          const inLogo  = o.inputMint  ? "https://img.jup.ag/tokens/" + o.inputMint  : null;
+                          const outLogo = o.outputMint ? "https://img.jup.ag/tokens/" + o.outputMint : null;
                           return (
                             <div key={o.id||i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.purpleBg}`, borderRadius:10, fontSize:12 }}>
                               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
