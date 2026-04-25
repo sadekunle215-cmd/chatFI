@@ -1435,10 +1435,16 @@ export default function JupChat() {
 
       const RPC_URL    = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
       const connection = new Connection(RPC_URL, "confirmed");
-      const sig        = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
+      const sig        = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, preflightCommitment: "confirmed" });
 
       push("ai", `Confirming lock on-chain… ⏳`);
       await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+
+      // Check if the tx actually succeeded on-chain (confirmed ≠ succeeded)
+      const txResult = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+      if (txResult?.meta?.err) {
+        throw new Error(`Transaction failed on-chain: ${JSON.stringify(txResult.meta.err)}`);
+      }
 
       setLockStatus("done");
       setLockResult({ lockId: escrowPDA, txSig: sig });
