@@ -753,7 +753,7 @@ export default function JupChat() {
 
   // ── Jupiter Studio state ─────────────────────────────────────────────────────
   const [showStudio, setShowStudio]         = useState(false);
-  const [studioCfg, setStudioCfg]           = useState({ name:"", symbol:"", description:"", website:"", twitter:"", preset:"meme" });
+  const [studioCfg, setStudioCfg]           = useState({ name:"", symbol:"", description:"", website:"", twitter:"", telegram:"", discord:"", github:"", preset:"meme", useCustomVesting:false, vestingPct:"10", cliffDays:"0", vestingDays:"365", antiSniping:true, feeBps:"100" });
   const [studioImage, setStudioImage]       = useState(null); // { file, dataUrl, type }
   const [studioStatus, setStudioStatus]     = useState(null); // null|"signing"|"done"|"error"
   const [studioResult, setStudioResult]     = useState(null); // { mintAddress, txSig, poolAddress }
@@ -1219,47 +1219,70 @@ export default function JupChat() {
   const doCreateToken = async () => {
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet not connected."); return; }
-    const { name, symbol, description, website, twitter, preset } = studioCfg;
+    const { name, symbol, description, website, twitter, telegram, discord, github, preset, useCustomVesting, vestingPct, cliffDays, vestingDays, antiSniping, feeBps } = studioCfg;
     if (!name.trim() || !symbol.trim()) return;
     if (!studioImage) { push("ai", "Please upload a token image before launching."); return; }
     setStudioStatus("signing");
+    // Note: do NOT clear status in a finally block — it would wipe the "done" state before the user sees it.
     try {
-      // ── Preset configs per Jupiter Studio docs ──
       const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-      const presets = {
-        meme: {
-          buildCurveByMarketCapParam: {
-            quoteMint: USDC, initialMarketCap: 16000, migrationMarketCap: 69000, tokenQuoteDecimal: 6,
-            lockedVestingParam: { totalLockedVestingAmount:0, cliffUnlockAmount:0, numberOfVestingPeriod:0, totalVestingDuration:0, cliffDurationFromMigrationTime:0 },
-          },
-          antiSniping: false, fee:{ feeBps:100 }, isLpLocked: true,
-        },
-        indie: {
-          buildCurveByMarketCapParam: {
-            quoteMint: USDC, initialMarketCap: 32000, migrationMarketCap: 240000, tokenQuoteDecimal: 6,
-            lockedVestingParam: { totalLockedVestingAmount:100000000, cliffUnlockAmount:0, numberOfVestingPeriod:365, totalVestingDuration:31536000, cliffDurationFromMigrationTime:0 },
-          },
-          antiSniping: true, fee:{ feeBps:100 }, isLpLocked: true,
-        },
+      const TOTAL_SUPPLY = 1_000_000_000; // 1B standard supply
+
+      // ── Build lockedVestingParam ──
+      // Custom vesting: user sets % of supply, cliff days, vesting days
+      // Preset "indie" default: 10% supply, 0-day cliff, 365-day vest
+      // Preset "meme": no vesting
+      let lockedVestingParam;
+      if (useCustomVesting) {
+        const pct = Math.min(80, Math.max(0, parseFloat(vestingPct) || 0));
+        const vestingAmount = Math.floor((pct / 100) * TOTAL_SUPPLY * 1_000_000); // 6 decimals
+        const cliffSecs = Math.floor((parseFloat(cliffDays) || 0) * 86400);
+        const vestSecs  = Math.max(86400, Math.floor((parseFloat(vestingDays) || 365) * 86400));
+        const periods   = Math.max(1, Math.floor(vestSecs / 86400)); // daily vesting periods
+        lockedVestingParam = {
+          totalLockedVestingAmount: vestingAmount,
+          cliffUnlockAmount: 0,
+          numberOfVestingPeriod: vestingAmount > 0 ? periods : 0,
+          totalVestingDuration: vestingAmount > 0 ? vestSecs : 0,
+          cliffDurationFromMigrationTime: cliffSecs,
+        };
+      } else if (preset === "indie") {
+        lockedVestingParam = { totalLockedVestingAmount:100000000, cliffUnlockAmount:0, numberOfVestingPeriod:365, totalVestingDuration:31536000, cliffDurationFromMigrationTime:0 };
+      } else {
+        lockedVestingParam = { totalLockedVestingAmount:0, cliffUnlockAmount:0, numberOfVestingPeriod:0, totalVestingDuration:0, cliffDurationFromMigrationTime:0 };
+      }
+
+      const mcPresets = {
+        meme:  { initialMarketCap: 16000, migrationMarketCap: 69000 },
+        indie: { initialMarketCap: 32000, migrationMarketCap: 240000 },
       };
-      const presetCfg = presets[preset] || presets.meme;
+      const mc = mcPresets[preset] || mcPresets.meme;
+
+      const createPayload = {
+        buildCurveByMarketCapParam: {
+          quoteMint: USDC,
+          initialMarketCap: mc.initialMarketCap,
+          migrationMarketCap: mc.migrationMarketCap,
+          tokenQuoteDecimal: 6,
+          lockedVestingParam,
+        },
+        antiSniping: useCustomVesting ? (antiSniping === true || antiSniping === "true") : (preset === "indie"),
+        fee: { feeBps: parseInt(feeBps) || 100 },
+        isLpLocked: true,
+        tokenName: name.trim(),
+        tokenSymbol: symbol.trim().toUpperCase(),
+        tokenImageContentType: studioImage.type || "image/jpeg",
+        creator: walletFull,
+      };
+
       const imageType = studioImage.type || "image/jpeg";
 
       // ── Step 1: Get transaction + presigned URLs ──
-      // Try proxy first; if proxy returns an error fall back to direct fetch (needs CORS support from Jupiter)
-      const createPayload = {
-        ...presetCfg,
-        tokenName: name.trim(),
-        tokenSymbol: symbol.trim().toUpperCase(),
-        tokenImageContentType: imageType,
-        creator: walletFull,
-      };
       let createData;
       try {
         createData = await jupFetch(`${JUP_STUDIO_API}/dbc-pool/create-tx`, { method: "POST", body: createPayload });
         if (typeof createData !== "object" || createData === null) throw new Error("Bad proxy response");
       } catch (proxyErr) {
-        // Proxy failed — try direct (works if Jupiter adds CORS headers in future)
         console.warn("Studio proxy failed, trying direct:", proxyErr.message);
         const directRes = await fetch(`${JUP_STUDIO_API}/dbc-pool/create-tx`, {
           method: "POST",
@@ -1281,17 +1304,21 @@ export default function JupChat() {
       });
 
       // ── Step 3: Upload token metadata to presigned URL ──
+      const metadata = {
+        name: name.trim(),
+        symbol: symbol.trim().toUpperCase(),
+        description: description || "",
+        image: imageUrl,
+      };
+      if (website)  metadata.website  = website;
+      if (twitter)  metadata.twitter  = twitter;
+      if (telegram) metadata.telegram = telegram;
+      if (discord)  metadata.discord  = discord;
+      if (github)   metadata.github   = github;
       await fetch(metadataPresignedUrl, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          symbol: symbol.trim().toUpperCase(),
-          description: description || "",
-          image: imageUrl,
-          website: website || "",
-          twitter: twitter || "",
-        }),
+        body: JSON.stringify(metadata),
       });
 
       // ── Step 4: Sign transaction ──
@@ -1301,16 +1328,11 @@ export default function JupChat() {
       const signedB64 = bytesToB64(signed.serialize());
 
       // ── Step 5: Submit signed tx via multipart/form-data ──
-      // headerImage is optional (Studio page banner only, not on-chain).
-      // We build the FormData and POST directly — Jupiter's submit endpoint
-      // does support CORS for the submit call (unlike create-tx).
       const formData = new FormData();
       formData.append("transaction", signedB64);
       formData.append("owner", walletFull);
       formData.append("content", description || "");
-      // headerImage optional — skip to keep request simple and avoid proxy issues
 
-      // Try direct first (submit supports CORS), fall back to proxy route
       let submitData;
       try {
         const submitRes = await fetch("https://api.jup.ag/studio/v1/dbc-pool/submit", {
@@ -1321,7 +1343,6 @@ export default function JupChat() {
         try { submitData = JSON.parse(submitText); }
         catch { throw new Error(`Jupiter submit error (${submitRes.status}): ${submitText.slice(0, 300)}`); }
       } catch (directErr) {
-        // Fallback: try via proxy route if direct fails
         console.warn("Direct submit failed, trying proxy:", directErr.message);
         const submitRes2 = await fetch("/api/studio-submit", {
           method: "POST",
@@ -1333,15 +1354,16 @@ export default function JupChat() {
       }
       if (submitData.error) throw new Error(submitData.error?.message || JSON.stringify(submitData.error));
 
+      // ── SUCCESS — set result first, then status. Do NOT close panel automatically. ──
+      setStudioResult({ mintAddress: mint, poolAddress: submitData.poolAddress || submitData.pool });
       setStudioStatus("done");
-      setStudioResult({ mintAddress: mint, poolAddress: submitData.poolAddress });
-      push("ai", `**Token created ✓**\n\n**${name.trim()} (${symbol.trim().toUpperCase()})** is live on Jupiter Studio!\n\nMint: \`${(mint||"").slice(0,20)}…\`\n\nView on: [jup.ag/studio](https://jup.ag/studio) · [Solscan](https://solscan.io/token/${mint})\n\nCreator fees will accrue as people trade your DBC pool.`);
-      setShowStudio(false);
+      push("ai", `**Token created ✓**\n\n**${name.trim()} (${symbol.trim().toUpperCase()})** is live on Jupiter Studio!\n\nMint: \`${mint}\`\n\nView on: [jup.ag/studio/${mint}](https://jup.ag/studio/${mint}) · [Solscan](https://solscan.io/token/${mint})\n\nCreator fees will accrue as people trade your DBC pool.`);
+      // Panel stays open showing success screen — user can close manually.
     } catch (err) {
-      setStudioStatus("error");
+      // Only set error status if we didn't already succeed
+      setStudioStatus(prev => prev === "done" ? "done" : "error");
       push("ai", `Token creation failed: ${err?.message}\n\nTip: Make sure your wallet has enough SOL for pool creation (~0.05–0.1 SOL).`);
     }
-    setStudioStatus(null);
   };
 
   // ── Lock: fetch existing locks for wallet ────────────────────────────────────
@@ -5952,126 +5974,238 @@ Order: \`${orderKey.slice(0,20)}…\`
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgPalette size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Jupiter Studio — Create Token</span></div>
-                <button onClick={() => setShowStudio(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
-              </div>
-              <div style={{ fontSize:11, color:T.text3, marginBottom:14, lineHeight:1.5 }}>
-                Launch a token with a Dynamic Bonding Curve — tradeable on Jupiter from day 1. Earn creator fees on every trade.
+                <button onClick={() => { setShowStudio(false); setStudioStatus(null); setStudioResult(null); }} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
               </div>
 
-              {/* Preset selector */}
-              <div style={{ marginBottom:12 }}>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Launch Preset</div>
-                <div style={{ display:"flex", gap:8 }}>
-                  {[
-                    { id:"meme", label:"🐸 Meme", desc:"16K→69K MC, raises ~18K USDC" },
-                    { id:"indie", label:"🚀 Indie", desc:"32K→240K MC, raises ~58K USDC + vesting" },
-                  ].map(p => (
-                    <button key={p.id} onClick={() => setStudioCfg(c=>({...c,preset:p.id}))}
-                      style={{ flex:1, padding:"8px 10px", borderRadius:8, border:`1px solid ${studioCfg.preset===p.id ? T.accent : T.border}`, background: studioCfg.preset===p.id ? T.accentBg : T.bg, color: studioCfg.preset===p.id ? T.accent : T.text2, fontSize:12, cursor:"pointer", textAlign:"left" }}>
-                      <div style={{ fontWeight:600 }}>{p.label}</div>
-                      <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{p.desc}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Name + Symbol */}
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+              {/* ── SUCCESS SCREEN ── */}
+              {studioStatus === "done" && studioResult ? (
                 <div>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token Name *</div>
-                  <input value={studioCfg.name} onChange={e => setStudioCfg(c=>({...c,name:e.target.value}))}
-                    placeholder="e.g. My Token"
-                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
-                </div>
-                <div>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Symbol *</div>
-                  <input value={studioCfg.symbol} onChange={e => setStudioCfg(c=>({...c,symbol:e.target.value.toUpperCase()}))}
-                    placeholder="e.g. MTK"
-                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
-                </div>
-              </div>
-
-              {/* Token Image upload */}
-              <div style={{ marginBottom:12 }}>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token Image * <span style={{ color:T.text3 }}>(JPG/PNG/GIF, shown on jup.ag)</span></div>
-                <label style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 12px", border:`1px dashed ${studioImage ? T.accent : T.border}`, borderRadius:8, cursor:"pointer", background:T.bg }}>
-                  {studioImage ? (
-                    <>
-                      <img src={studioImage.dataUrl} alt="token" style={{ width:40, height:40, borderRadius:8, objectFit:"cover" }}/>
-                      <div style={{ flex:1 }}>
-                        <div style={{ fontSize:12, color:T.text1 }}>{studioImage.file.name}</div>
-                        <div style={{ fontSize:10, color:T.text3 }}>Click to change</div>
+                  <div style={{ padding:"16px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:10, marginBottom:16, textAlign:"center" }}>
+                    <div style={{ fontSize:28, marginBottom:8 }}>🎉</div>
+                    <div style={{ fontSize:15, fontWeight:700, color:T.green, marginBottom:4 }}>Token Launched Successfully!</div>
+                    <div style={{ fontSize:12, color:T.text2, marginBottom:12 }}>{studioCfg.name} ({studioCfg.symbol.toUpperCase()}) is now live on Jupiter</div>
+                    <div style={{ background:T.bg, borderRadius:8, padding:"8px 12px", marginBottom:10, fontSize:11, color:T.text3, wordBreak:"break-all", textAlign:"left" }}>
+                      <div style={{ color:T.text3, marginBottom:2 }}>Mint Address</div>
+                      <div style={{ color:T.text1, fontFamily:"monospace", fontSize:12 }}>{studioResult.mintAddress}</div>
+                    </div>
+                    {studioResult.poolAddress && (
+                      <div style={{ background:T.bg, borderRadius:8, padding:"8px 12px", marginBottom:12, fontSize:11, color:T.text3, wordBreak:"break-all", textAlign:"left" }}>
+                        <div style={{ color:T.text3, marginBottom:2 }}>Pool Address</div>
+                        <div style={{ color:T.text1, fontFamily:"monospace", fontSize:12 }}>{studioResult.poolAddress}</div>
                       </div>
-                    </>
-                  ) : (
-                    <div style={{ fontSize:12, color:T.text3, display:"flex", alignItems:"center", gap:6 }}><SvgUpload size={14} color={T.text3}/> Click to upload token image</div>
+                    )}
+                    <div style={{ display:"flex", gap:8, justifyContent:"center" }}>
+                      <a href={`https://jup.ag/studio/${studioResult.mintAddress}`} target="_blank" rel="noreferrer"
+                        style={{ padding:"8px 14px", background:T.accent, borderRadius:8, color:"#0d1117", fontSize:12, fontWeight:700, textDecoration:"none" }}>
+                        View on Jupiter →
+                      </a>
+                      <a href={`https://solscan.io/token/${studioResult.mintAddress}`} target="_blank" rel="noreferrer"
+                        style={{ padding:"8px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, textDecoration:"none" }}>
+                        Solscan
+                      </a>
+                    </div>
+                  </div>
+                  <button onClick={() => { setShowStudio(false); setStudioStatus(null); setStudioResult(null); setStudioImage(null); setStudioCfg(c=>({...c,name:"",symbol:"",description:"",website:"",twitter:"",telegram:"",discord:"",github:""})); }}
+                    style={{ width:"100%", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                    Close
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:14, lineHeight:1.5 }}>
+                    Launch a token with a Dynamic Bonding Curve — tradeable on Jupiter from day 1. Earn creator fees on every trade.
+                  </div>
+
+                  {/* Preset selector */}
+                  <div style={{ marginBottom:12 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Launch Preset</div>
+                    <div style={{ display:"flex", gap:8 }}>
+                      {[
+                        { id:"meme",  label:"🐸 Meme",  desc:"16K→69K MC, raises ~18K USDC, no vesting" },
+                        { id:"indie", label:"🚀 Indie",  desc:"32K→240K MC, raises ~58K USDC + 10% vesting" },
+                        { id:"custom",label:"⚙️ Custom", desc:"Set your own market cap & vesting" },
+                      ].map(p => (
+                        <button key={p.id} onClick={() => setStudioCfg(c=>({...c,preset:p.id,useCustomVesting:p.id==="custom"}))}
+                          style={{ flex:1, padding:"8px 10px", borderRadius:8, border:`1px solid ${studioCfg.preset===p.id ? T.accent : T.border}`, background: studioCfg.preset===p.id ? T.accentBg : T.bg, color: studioCfg.preset===p.id ? T.accent : T.text2, fontSize:11, cursor:"pointer", textAlign:"left" }}>
+                          <div style={{ fontWeight:600 }}>{p.label}</div>
+                          <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{p.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Name + Symbol */}
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+                    <div>
+                      <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token Name *</div>
+                      <input value={studioCfg.name} onChange={e => setStudioCfg(c=>({...c,name:e.target.value}))}
+                        placeholder="e.g. My Token"
+                        style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                    </div>
+                    <div>
+                      <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Symbol *</div>
+                      <input value={studioCfg.symbol} onChange={e => setStudioCfg(c=>({...c,symbol:e.target.value.toUpperCase()}))}
+                        placeholder="e.g. MTK"
+                        style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
+                    </div>
+                  </div>
+
+                  {/* Token Image upload */}
+                  <div style={{ marginBottom:12 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token Image * <span style={{ color:T.text3 }}>(JPG/PNG/GIF, shown on jup.ag)</span></div>
+                    <label style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 12px", border:`1px dashed ${studioImage ? T.accent : T.border}`, borderRadius:8, cursor:"pointer", background:T.bg }}>
+                      {studioImage ? (
+                        <>
+                          <img src={studioImage.dataUrl} alt="token" style={{ width:40, height:40, borderRadius:8, objectFit:"cover" }}/>
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontSize:12, color:T.text1 }}>{studioImage.file.name}</div>
+                            <div style={{ fontSize:10, color:T.text3 }}>Click to change</div>
+                          </div>
+                        </>
+                      ) : (
+                        <div style={{ fontSize:12, color:T.text3, display:"flex", alignItems:"center", gap:6 }}><SvgUpload size={14} color={T.text3}/> Click to upload token image</div>
+                      )}
+                      <input type="file" accept="image/*" style={{ display:"none" }}
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const reader = new FileReader();
+                          reader.onload = ev => setStudioImage({ file, dataUrl: ev.target.result, type: file.type || "image/jpeg" });
+                          reader.readAsDataURL(file);
+                        }}/>
+                    </label>
+                  </div>
+
+                  {/* Description */}
+                  <div style={{ marginBottom:10 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Description</div>
+                    <textarea value={studioCfg.description} onChange={e => setStudioCfg(c=>({...c,description:e.target.value}))}
+                      placeholder="Brief description of your token (optional)"
+                      rows={2}
+                      style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, resize:"none" }}/>
+                  </div>
+
+                  {/* Social Links */}
+                  <div style={{ marginBottom:12 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Social Links <span style={{ fontWeight:400 }}>(optional)</span></div>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                      <div>
+                        <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Website</div>
+                        <input value={studioCfg.website} onChange={e => setStudioCfg(c=>({...c,website:e.target.value}))}
+                          placeholder="https://..."
+                          style={{ width:"100%", padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:12 }}/>
+                      </div>
+                      <div>
+                        <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Twitter / X</div>
+                        <input value={studioCfg.twitter} onChange={e => setStudioCfg(c=>({...c,twitter:e.target.value}))}
+                          placeholder="@handle"
+                          style={{ width:"100%", padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:12 }}/>
+                      </div>
+                      <div>
+                        <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Telegram</div>
+                        <input value={studioCfg.telegram} onChange={e => setStudioCfg(c=>({...c,telegram:e.target.value}))}
+                          placeholder="https://t.me/..."
+                          style={{ width:"100%", padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:12 }}/>
+                      </div>
+                      <div>
+                        <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Discord</div>
+                        <input value={studioCfg.discord} onChange={e => setStudioCfg(c=>({...c,discord:e.target.value}))}
+                          placeholder="https://discord.gg/..."
+                          style={{ width:"100%", padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:12 }}/>
+                      </div>
+                      <div style={{ gridColumn:"1/-1" }}>
+                        <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>GitHub</div>
+                        <input value={studioCfg.github} onChange={e => setStudioCfg(c=>({...c,github:e.target.value}))}
+                          placeholder="https://github.com/..."
+                          style={{ width:"100%", padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:12 }}/>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Custom Vesting — shown for Custom preset or Indie */}
+                  {(studioCfg.preset === "custom" || studioCfg.preset === "indie") && (
+                    <div style={{ marginBottom:12, padding:"12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>
+                      <div style={{ fontSize:11, color:T.text2, fontWeight:600, marginBottom:10, display:"flex", alignItems:"center", gap:6 }}><SvgLock size={12} color={T.accent}/> Token Vesting (up to 80% of supply)</div>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8 }}>
+                        <div>
+                          <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Vest % of Supply</div>
+                          <input type="number" min="0" max="80" value={studioCfg.vestingPct} onChange={e => setStudioCfg(c=>({...c,vestingPct:e.target.value}))}
+                            placeholder="10"
+                            style={{ width:"100%", padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.surface, color:T.text1, fontSize:12 }}/>
+                        </div>
+                        <div>
+                          <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Cliff (days)</div>
+                          <input type="number" min="0" value={studioCfg.cliffDays} onChange={e => setStudioCfg(c=>({...c,cliffDays:e.target.value}))}
+                            placeholder="0"
+                            style={{ width:"100%", padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.surface, color:T.text1, fontSize:12 }}/>
+                        </div>
+                        <div>
+                          <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Vest Duration (days)</div>
+                          <input type="number" min="1" value={studioCfg.vestingDays} onChange={e => setStudioCfg(c=>({...c,vestingDays:e.target.value}))}
+                            placeholder="365"
+                            style={{ width:"100%", padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.surface, color:T.text1, fontSize:12 }}/>
+                        </div>
+                      </div>
+                      <div style={{ fontSize:10, color:T.text3, marginTop:8 }}>
+                        Tokens vest daily after the cliff. Cliff starts at migration. Max 80% of supply.
+                      </div>
+                    </div>
                   )}
-                  <input type="file" accept="image/*" style={{ display:"none" }}
-                    onChange={e => {
-                      const file = e.target.files?.[0];
-                      if (!file) return;
-                      const reader = new FileReader();
-                      reader.onload = ev => setStudioImage({ file, dataUrl: ev.target.result, type: file.type || "image/jpeg" });
-                      reader.readAsDataURL(file);
-                    }}/>
-                </label>
-              </div>
 
-              {/* Description */}
-              <div style={{ marginBottom:10 }}>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Description</div>
-                <textarea value={studioCfg.description} onChange={e => setStudioCfg(c=>({...c,description:e.target.value}))}
-                  placeholder="Brief description of your token (optional)"
-                  rows={2}
-                  style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, resize:"none" }}/>
-              </div>
+                  {/* Advanced Settings — Custom only */}
+                  {studioCfg.preset === "custom" && (
+                    <div style={{ marginBottom:12, padding:"12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>
+                      <div style={{ fontSize:11, color:T.text2, fontWeight:600, marginBottom:10 }}>⚙️ Advanced Settings</div>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                        <div>
+                          <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Creator Fee (bps)</div>
+                          <input type="number" min="0" max="500" value={studioCfg.feeBps} onChange={e => setStudioCfg(c=>({...c,feeBps:e.target.value}))}
+                            placeholder="100"
+                            style={{ width:"100%", padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.surface, color:T.text1, fontSize:12 }}/>
+                          <div style={{ fontSize:10, color:T.text3, marginTop:3 }}>100 bps = 1% per swap</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Anti-Sniper Protection</div>
+                          <div style={{ display:"flex", gap:6, marginTop:4 }}>
+                            {[{v:true,l:"On ✓"},{v:false,l:"Off"}].map(({v,l}) => (
+                              <button key={String(v)} onClick={() => setStudioCfg(c=>({...c,antiSniping:v}))}
+                                style={{ flex:1, padding:"7px 6px", borderRadius:8, border:`1px solid ${studioCfg.antiSniping===v ? T.accent : T.border}`, background:studioCfg.antiSniping===v ? T.accentBg : T.bg, color:studioCfg.antiSniping===v ? T.accent : T.text2, fontSize:11, cursor:"pointer" }}>
+                                {l}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
-              {/* Website + Twitter */}
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
-                <div>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Website</div>
-                  <input value={studioCfg.website} onChange={e => setStudioCfg(c=>({...c,website:e.target.value}))}
-                    placeholder="https://..."
-                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
-                </div>
-                <div>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Twitter / X</div>
-                  <input value={studioCfg.twitter} onChange={e => setStudioCfg(c=>({...c,twitter:e.target.value}))}
-                    placeholder="@handle"
-                    style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}/>
-                </div>
-              </div>
+                  {/* Status banners */}
+                  {studioStatus === "signing" && (
+                    <div style={{ padding:"10px 12px", background:T.accentBg, border:`1px solid ${T.accent}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.accent, display:"flex", alignItems:"center", gap:8 }}>
+                      <span className="spinner" style={{ width:12, height:12, borderWidth:2, display:"inline-block" }}/> Uploading metadata &amp; signing transaction…
+                    </div>
+                  )}
+                  {studioStatus === "error" && (
+                    <div style={{ padding:"10px 12px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.red }}>
+                      ✗ Creation failed. Check your wallet has enough SOL (~0.05–0.1 SOL for pool creation) and try again.
+                    </div>
+                  )}
 
-              {/* Status banners */}
-              {studioStatus === "signing" && (
-                <div style={{ padding:"10px 12px", background:T.accentBg, border:`1px solid ${T.accent}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.accent }}>
-                  ⏳ Uploading metadata &amp; signing transaction…
-                </div>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={doCreateToken}
+                      disabled={!studioCfg.name.trim() || !studioCfg.symbol.trim() || !studioImage || studioStatus==="signing" || !walletFull}
+                      className="hov-btn"
+                      style={{ flex:1, padding:"10px", background: (!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accentBg, border:`1px solid ${(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accent}`, borderRadius:8, color:(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.text3:T.accent, fontSize:14, fontWeight:600, cursor:"pointer" }}>
+                      {studioStatus==="signing" ? "Launching…" : "🚀 Launch Token"}
+                    </button>
+                    <button onClick={() => { setShowStudio(false); setStudioStatus(null); }}
+                      style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
+                      Cancel
+                    </button>
+                  </div>
+                  {!walletFull && <div style={{ fontSize:11, color:T.red, marginTop:8, textAlign:"center" }}>Connect your wallet to create a token</div>}
+                </>
               )}
-              {studioStatus === "done" && studioResult && (
-                <div style={{ padding:"10px 12px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.green }}>
-                  ✓ Token created! Mint: <code>{(studioResult.mintAddress||"").slice(0,20)}…</code>
-                </div>
-              )}
-              {studioStatus === "error" && (
-                <div style={{ padding:"10px 12px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.red }}>
-                  Creation failed. Check wallet has enough SOL (~0.05–0.1 SOL for pool creation).
-                </div>
-              )}
-
-              <div style={{ display:"flex", gap:8 }}>
-                <button onClick={doCreateToken}
-                  disabled={!studioCfg.name.trim() || !studioCfg.symbol.trim() || !studioImage || studioStatus==="signing" || !walletFull}
-                  className="hov-btn"
-                  style={{ flex:1, padding:"10px", background: (!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accentBg, border:`1px solid ${(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accent}`, borderRadius:8, color:(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.text3:T.accent, fontSize:14, fontWeight:600, cursor:"pointer" }}>
-                  {studioStatus==="signing" ? "Launching…" : "🚀 Launch Token"}
-                </button>
-                <button onClick={() => setShowStudio(false)}
-                  style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
-                  Cancel
-                </button>
-              </div>
-              {!walletFull && <div style={{ fontSize:11, color:T.red, marginTop:8, textAlign:"center" }}>Connect your wallet to create a token</div>}
             </div>
           )}
 
