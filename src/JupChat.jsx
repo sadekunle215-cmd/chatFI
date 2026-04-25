@@ -1324,7 +1324,7 @@ export default function JupChat() {
       }
     } catch {}
 
-    // ── 3. Trigger v2 active orders ───────────────────────────────────────────
+    // ── 3. Trigger orders — v2 (JWT) or v1 public fallback ───────────────────
     if (trigJwtRef.current) {
       try {
         const trigRes = await fetch("/api/jupiter", {
@@ -1338,6 +1338,15 @@ export default function JupChat() {
         });
         const trigData = await trigRes.json();
         results.triggerOrders = Array.isArray(trigData?.orders) ? trigData.orders : [];
+      } catch {}
+    }
+    // Public v1 fallback — no JWT needed
+    if (!results.triggerOrders?.length) {
+      try {
+        const trigV1 = await jupFetch(`${JUP_TRIGGER_BASE}/getTriggerOrders?wallet=${walletAddress}&status=open`);
+        const orders = Array.isArray(trigV1?.orders) ? trigV1.orders
+                     : Array.isArray(trigV1) ? trigV1 : [];
+        if (orders.length) results.triggerOrders = orders;
       } catch {}
     }
 
@@ -5636,33 +5645,49 @@ Order: \`${orderKey.slice(0,20)}…\`
                         <span style={{ fontSize:11, fontWeight:700, color:T.purple, letterSpacing:"0.08em", textTransform:"uppercase" }}>Limit / Trigger Orders</span>
                         <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.triggerOrders.length}</span>
                       </div>
-                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                         {portfolioData.triggerOrders.map((o, i) => {
                           const typeLabel = o.orderType === "oco" ? "OCO" : o.orderType === "otoco" ? "OTOCO" : "Limit";
-                          const inSym  = o.inputMint  ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.inputMint)?.[0]  || o.inputMint.slice(0,4))  : "—";
-                          const outSym = o.outputMint ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.outputMint)?.[0] || o.outputMint.slice(0,4)) : "—";
-                          const trigPrice = o.triggerPriceUsd ? `$${parseFloat(o.triggerPriceUsd).toFixed(4)}` : null;
-                          const tpPrice   = o.tpPriceUsd  ? `TP $${parseFloat(o.tpPriceUsd).toFixed(4)}`  : null;
-                          const slPrice   = o.slPriceUsd  ? `SL $${parseFloat(o.slPriceUsd).toFixed(4)}`  : null;
-                          const inLogo  = o.inputMint  ? "https://img.jup.ag/tokens/" + o.inputMint  : null;
-                          const outLogo = o.outputMint ? "https://img.jup.ag/tokens/" + o.outputMint : null;
+                          const inSym  = o.inputMint  ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.inputMint)?.[0]  || o.inputMint.slice(0,6))  : "—";
+                          const outSym = o.outputMint ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.outputMint)?.[0] || o.outputMint.slice(0,6)) : "—";
+                          const trigPrice = o.triggerPriceUsd ? `$${parseFloat(o.triggerPriceUsd).toFixed(4)}` : (o.price ? `$${parseFloat(o.price).toFixed(4)}` : null);
+                          const tpPrice   = o.tpPriceUsd  ? `TP $${parseFloat(o.tpPriceUsd).toFixed(4)}`   : null;
+                          const slPrice   = o.slPriceUsd  ? `SL $${parseFloat(o.slPriceUsd).toFixed(4)}`   : null;
+                          const inAmt     = o.inAmount || o.makingAmount ? ((parseInt(o.inAmount||o.makingAmount||0)) / 1e6).toFixed(2) : null;
+                          const expiry    = o.expiredAt ? new Date(o.expiredAt * 1000).toLocaleDateString() : null;
+                          const orderId   = o.id || o.orderKey || o.publicKey;
+                          // Use TOKEN_LOGO_URLS for known tokens, fall back to img.jup.ag for unknowns
+                          const inLogo  = TOKEN_LOGO_URLS[inSym]  || (o.inputMint  ? `https://img.jup.ag/tokens/${o.inputMint}`  : null);
+                          const outLogo = TOKEN_LOGO_URLS[outSym] || (o.outputMint ? `https://img.jup.ag/tokens/${o.outputMint}` : null);
                           return (
-                            <div key={o.id||i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.purpleBg}`, borderRadius:10, fontSize:12 }}>
-                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                            <div key={orderId||i} style={{ padding:"12px", background:T.bg, border:`1px solid #2d1f4d`, borderRadius:12, fontSize:12 }}>
+                              {/* Header row */}
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
                                 <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                                  {inLogo  && <img src={inLogo}  onError={e=>e.target.style.display="none"} style={{width:16,height:16,borderRadius:"50%",objectFit:"cover"}} />}
-                                  <span style={{ color:T.text1, fontWeight:600 }}>{inSym}</span>
-                                  <span style={{ color:T.text3 }}>→</span>
-                                  {outLogo && <img src={outLogo} onError={e=>e.target.style.display="none"} style={{width:16,height:16,borderRadius:"50%",objectFit:"cover"}} />}
-                                  <span style={{ color:T.text1, fontWeight:600 }}>{outSym}</span>
+                                  {inLogo  && <img src={inLogo}  onError={e=>e.target.style.display="none"} style={{width:18,height:18,borderRadius:"50%",objectFit:"cover"}} />}
+                                  <span style={{ color:T.text1, fontWeight:700 }}>{inSym}</span>
+                                  <span style={{ color:T.text3, fontSize:10 }}>→</span>
+                                  {outLogo && <img src={outLogo} onError={e=>e.target.style.display="none"} style={{width:18,height:18,borderRadius:"50%",objectFit:"cover"}} />}
+                                  <span style={{ color:T.text1, fontWeight:700 }}>{outSym}</span>
                                 </div>
-                                <span style={{ fontSize:10, padding:"2px 7px", background:T.purpleBg, borderRadius:6, color:T.purple, fontWeight:700 }}>{typeLabel}</span>
+                                <span style={{ fontSize:10, padding:"2px 8px", background:T.purpleBg, borderRadius:6, color:T.purple, fontWeight:700 }}>{typeLabel}</span>
                               </div>
-                              <div style={{ color:T.text3, fontSize:11 }}>
-                                {trigPrice && <span>Trigger: {trigPrice}  </span>}
-                                {tpPrice   && <span>{tpPrice}  </span>}
-                                {slPrice   && <span>{slPrice}</span>}
+                              {/* Details */}
+                              <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 12px", color:T.text3, fontSize:11, marginBottom:8 }}>
+                                {inAmt     && <span>Amount: <span style={{color:T.text2}}>{inAmt} {inSym}</span></span>}
+                                {trigPrice && <span>Trigger: <span style={{color:T.accent}}>{trigPrice}</span></span>}
+                                {tpPrice   && <span style={{color:T.green}}>{tpPrice}</span>}
+                                {slPrice   && <span style={{color:T.red}}>{slPrice}</span>}
+                                {expiry    && <span>Expires: {expiry}</span>}
+                                {orderId   && <span style={{fontFamily:T.mono, fontSize:10}}>#{String(orderId).slice(0,8)}…</span>}
                               </div>
+                              {/* Cancel button */}
+                              {orderId && (
+                                <button onClick={() => cancelTrigV2Order(orderId)} className="hov-btn"
+                                  style={{ width:"100%", padding:"6px", background:"transparent", border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:11, fontWeight:600, cursor:"pointer", transition:"all 0.15s" }}>
+                                  Cancel Order
+                                </button>
+                              )}
                             </div>
                           );
                         })}
@@ -5678,16 +5703,35 @@ Order: \`${orderKey.slice(0,20)}…\`
                         <span style={{ fontSize:11, fontWeight:700, color:T.teal, letterSpacing:"0.08em", textTransform:"uppercase" }}>Recurring / DCA</span>
                         <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.recurringOrders.length}</span>
                       </div>
-                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                      <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
                         {portfolioData.recurringOrders.map((o, i) => {
-                          const inSym  = o.inputMint  ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.inputMint)?.[0]  || o.inputMint.slice(0,4))  : "—";
-                          const outSym = o.outputMint ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.outputMint)?.[0] || o.outputMint.slice(0,4)) : "—";
-                          const cycleAmt = o.inAmountPerCycle ? (parseInt(o.inAmountPerCycle) / 1e6).toFixed(2) : "?";
+                          const inSym  = o.inputMint  ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.inputMint)?.[0]  || o.inputMint.slice(0,6))  : "—";
+                          const outSym = o.outputMint ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.outputMint)?.[0] || o.outputMint.slice(0,6)) : "—";
+                          const cycleAmt   = o.inAmountPerCycle ? (parseInt(o.inAmountPerCycle) / 1e6).toFixed(2) : "?";
                           const cycleLabel = o.cycleFrequency ? (o.cycleFrequency >= 2592000 ? "monthly" : o.cycleFrequency >= 604800 ? "weekly" : "daily") : "";
+                          const filled     = o.numberOfFilled != null && o.numberOfOrders != null ? `${o.numberOfFilled}/${o.numberOfOrders} filled` : null;
+                          const inLogo  = TOKEN_LOGO_URLS[inSym]  || (o.inputMint  ? `https://img.jup.ag/tokens/${o.inputMint}`  : null);
+                          const outLogo = TOKEN_LOGO_URLS[outSym] || (o.outputMint ? `https://img.jup.ag/tokens/${o.outputMint}` : null);
+                          const orderKey = o.orderKey || o.id;
                           return (
-                            <div key={o.id||i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 12px", background:T.bg, border:`1px solid ${T.tealBg}`, borderRadius:10, fontSize:12 }}>
-                              <span style={{ color:T.text1, fontWeight:600 }}>{inSym} → {outSym}</span>
-                              <span style={{ color:T.teal, fontWeight:600 }}>${cycleAmt} {cycleLabel}</span>
+                            <div key={orderKey||i} style={{ padding:"12px", background:T.bg, border:`1px solid #0f3333`, borderRadius:12, fontSize:12 }}>
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                  {inLogo  && <img src={inLogo}  onError={e=>e.target.style.display="none"} style={{width:18,height:18,borderRadius:"50%",objectFit:"cover"}} />}
+                                  <span style={{ color:T.text1, fontWeight:700 }}>{inSym}</span>
+                                  <span style={{ color:T.text3, fontSize:10 }}>→</span>
+                                  {outLogo && <img src={outLogo} onError={e=>e.target.style.display="none"} style={{width:18,height:18,borderRadius:"50%",objectFit:"cover"}} />}
+                                  <span style={{ color:T.text1, fontWeight:700 }}>{outSym}</span>
+                                </div>
+                                <span style={{ color:T.teal, fontWeight:700 }}>${cycleAmt} {cycleLabel}</span>
+                              </div>
+                              {filled && <div style={{ color:T.text3, fontSize:11, marginBottom:8 }}>{filled}</div>}
+                              {orderKey && (
+                                <button onClick={() => cancelRecurringOrder(orderKey)} className="hov-btn"
+                                  style={{ width:"100%", padding:"6px", background:"transparent", border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:11, fontWeight:600, cursor:"pointer", transition:"all 0.15s" }}>
+                                  Cancel DCA
+                                </button>
+                              )}
                             </div>
                           );
                         })}
