@@ -122,7 +122,6 @@ export default async function handler(req, res) {
         { pubkey: funderKey,                   isSigner: true,  isWritable: true  }, // sender
         { pubkey: senderToken,                 isSigner: false, isWritable: true  }, // sender_token
         { pubkey: recipientKey,                isSigner: false, isWritable: false }, // recipient
-        { pubkey: mintKey,                     isSigner: false, isWritable: false }, // mint
         { pubkey: TOKEN_PROGRAM_ID,            isSigner: false, isWritable: false }, // token_program
         { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // associated_token_program
         { pubkey: SystemProgram.programId,     isSigner: false, isWritable: false }, // system_program
