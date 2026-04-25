@@ -1,18 +1,22 @@
 // pages/api/lock.js
-// Jupiter Lock — raw instruction encoding, verified against official Rust CLI source
+// Jupiter Lock — verified against jup-lock-starter + fuzzing repo source
 // Program: LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn
-// Anchor version: 0.28+ (camelCase discriminators)
-// Account order: verified from process_initialize_lock_escrow_from_file.rs
+// Anchor 0.28+ → camelCase discriminators: sha256("global:createVestingEscrow")[0..8]
+//
+// Jupiter UI lock pattern (from lock.jup.ag):
+//   cliff_unlock_amount = full amount  (all tokens unlock at cliff date)
+//   amount_per_period   = 0            (no additional linear vesting)
+//   number_of_period    = 1
+//   frequency           = vesting duration in seconds
+//   cliff_time          = vesting_start_time + cliff_seconds (MUST be >= vesting_start_time)
+//
+// Constraint from Rust source: cliff_time >= vesting_start_time, frequency != 0
 
 import crypto from "crypto";
 
-const WSOL_MINT = "So11111111111111111111111111111111111111112";
-
-// Anchor 0.28+: discriminator = sha256("global:" + camelCaseName)[0..8]
 function disc(name) {
   return crypto.createHash("sha256").update("global:" + name).digest().slice(0, 8);
 }
-
 function u64LE(buf, val, off) {
   buf.writeBigUInt64LE(typeof val === "bigint" ? val : BigInt(val), off);
 }
@@ -32,14 +36,14 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `SDK missing: ${e.message}` });
   }
 
-  const { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY, Transaction, TransactionInstruction, Keypair } = web3;
+  const { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY,
+          Transaction, TransactionInstruction, Keypair } = web3;
   const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
-          createAssociatedTokenAccountInstruction,
-          createAssociatedTokenAccountIdempotentInstruction,
-          createSyncNativeInstruction } = splToken;
+          createAssociatedTokenAccountIdempotentInstruction } = splToken;
 
   const SOLANA_RPC   = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
   const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
+  const WSOL_MINT    = "So11111111111111111111111111111111111111112";
 
   const [eventAuthority] = PublicKey.findProgramAddressSync(
     [Buffer.from("__event_authority")], LOCK_PROGRAM
@@ -50,78 +54,66 @@ export default async function handler(req, res) {
 
     // -----------------------------------------------------------------------
     // CREATE
-    // Verified account order from CreateVestingEscrowCtx in Rust source:
-    //   base, escrow, escrow_token, recipient, sender, sender_token,
-    //   event_authority, program, token_program, system_program
-    //
-    // Params (CreateVestingEscrowParameters, borsh serialized):
-    //   vesting_start_time u64, cliff_time u64, frequency u64,
-    //   cliff_unlock_amount u64, amount_per_period u64, number_of_period u64,
-    //   update_recipient_mode u8, cancel_mode u8
-    //   = 48 + 2 = 50 bytes params, 8 disc = 58 bytes total
+    // Rust constraint: cliff_time >= vesting_start_time AND frequency != 0
     // -----------------------------------------------------------------------
     if (action === "create") {
       const { funder, recipient, mint, amount, cliffSecs, vestingSecs } = req.body;
       if (!funder) return res.status(400).json({ error: "Missing: funder" });
       if (!amount) return res.status(400).json({ error: "Missing: amount" });
       if (!mint)   return res.status(400).json({ error: "Missing: mint" });
+      if (mint === WSOL_MINT) return res.status(400).json({ error: "Native SOL cannot be locked. Use USDC or JUP instead." });
 
       const funderKey    = new PublicKey(funder);
       const recipientKey = (recipient && recipient.trim()) ? new PublicKey(recipient.trim()) : funderKey;
       const mintKey      = new PublicKey(mint);
-      const isWsol       = mint === WSOL_MINT;
 
-      // Native SOL (wSOL) cannot be locked — the Jupiter Lock program's escrow ATA
-      // creation via CPI fails with IllegalOwner for PDA-owned accounts in JS.
-      // Direct users to use USDC, JUP, or any other SPL token.
-      if (isWsol) {
-        return res.status(400).json({ error: "Native SOL cannot be locked. Please use an SPL token like USDC or JUP instead." });
-      }
+      const cliff      = Math.max(parseInt(cliffSecs)  || 0, 0);
+      // frequency must be > 0, minimum 60 seconds
+      const frequency  = Math.max(parseInt(vestingSecs) || 86400, 60);
+      const amtBig     = BigInt(amount);
+      const now        = BigInt(Math.floor(Date.now() / 1000));
 
-      const cliff   = Math.max(parseInt(cliffSecs)  || 0, 0);
-      const vesting = Math.max(parseInt(vestingSecs) || 86400, 86400);
-      const amtBig  = BigInt(amount);
-      const now     = BigInt(Math.floor(Date.now() / 1000));
-
+      // cliff_time MUST be >= vesting_start_time
       const vestingStart = now;
-      const cliffTime    = now + BigInt(cliff);   // absolute timestamp
-      const frequency    = BigInt(vesting);
-      const numPeriods   = 1n;
-      const perPeriod    = amtBig;
+      const cliffTime    = now + BigInt(cliff); // >= vestingStart always ✓
 
       const baseKp      = Keypair.generate();
       const [escrowPDA] = PublicKey.findProgramAddressSync(
         [Buffer.from("escrow"), baseKp.publicKey.toBuffer()], LOCK_PROGRAM
       );
-      const senderToken = await getAssociatedTokenAddress(mintKey, funderKey,  false, TOKEN_PROGRAM_ID);
+      const senderToken = await getAssociatedTokenAddress(mintKey, funderKey, false, TOKEN_PROGRAM_ID);
       const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA,  true,  TOKEN_PROGRAM_ID);
 
-      // Encode: 8 disc + 6×u64 + 2×u8 = 58 bytes
+      // Encode instruction data: 8 disc + 6×u64 + 2×u8 = 58 bytes
+      // Jupiter UI pattern: all tokens unlock at cliff (cliff_unlock_amount = full amount)
       const data = Buffer.alloc(58);
       let o = 0;
-      disc("createVestingEscrow").copy(data, o); o += 8;
-      u64LE(data, vestingStart, o); o += 8;
-      u64LE(data, cliffTime,    o); o += 8;
-      u64LE(data, frequency,    o); o += 8;
-      u64LE(data, 0n,           o); o += 8; // cliff_unlock_amount
-      u64LE(data, perPeriod,    o); o += 8;
-      u64LE(data, numPeriods,   o); o += 8;
-      data.writeUInt8(0, o); o++;           // update_recipient_mode
-      data.writeUInt8(0, o);                // cancel_mode
+      disc("create_vesting_escrow").copy(data, o); o += 8;
+      u64LE(data, vestingStart, o); o += 8; // vesting_start_time
+      u64LE(data, cliffTime,    o); o += 8; // cliff_time (>= vesting_start_time)
+      u64LE(data, frequency,    o); o += 8; // frequency (must be > 0)
+      u64LE(data, amtBig,       o); o += 8; // cliff_unlock_amount = FULL amount
+      u64LE(data, 0n,           o); o += 8; // amount_per_period = 0
+      u64LE(data, 1n,           o); o += 8; // number_of_period = 1
+      data.writeUInt8(0, o); o++;            // update_recipient_mode = 0
+      data.writeUInt8(0, o);                 // cancel_mode = 0
 
+      // Account order from CreateVestingEscrowCtx (verified from jup-lock source):
+      // base, escrow, escrow_token, recipient, sender, sender_token,
+      // event_authority, program, token_program, system_program
       const keys = [
-        { pubkey: baseKp.publicKey,        isSigner: true,  isWritable: false }, // base
-        { pubkey: escrowPDA,               isSigner: false, isWritable: true  }, // escrow
-        { pubkey: escrowToken,             isSigner: false, isWritable: true  }, // escrow_token
-        { pubkey: recipientKey,            isSigner: false, isWritable: false }, // recipient
-        { pubkey: funderKey,               isSigner: true,  isWritable: true  }, // sender
-        { pubkey: senderToken,             isSigner: false, isWritable: true  }, // sender_token
-        { pubkey: eventAuthority,          isSigner: false, isWritable: false }, // event_authority
-        { pubkey: LOCK_PROGRAM,            isSigner: false, isWritable: false }, // program
-        { pubkey: TOKEN_PROGRAM_ID,             isSigner: false, isWritable: false }, // token_program
-        { pubkey: SystemProgram.programId,      isSigner: false, isWritable: false }, // system_program
-        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false }, // associated_token_program
-        { pubkey: SYSVAR_RENT_PUBKEY,           isSigner: false, isWritable: false }, // rent
+        { pubkey: baseKp.publicKey,        isSigner: true,  isWritable: false },
+        { pubkey: escrowPDA,               isSigner: false, isWritable: true  },
+        { pubkey: escrowToken,             isSigner: false, isWritable: true  },
+        { pubkey: recipientKey,            isSigner: false, isWritable: false },
+        { pubkey: funderKey,               isSigner: true,  isWritable: true  },
+        { pubkey: senderToken,             isSigner: false, isWritable: true  },
+        { pubkey: eventAuthority,          isSigner: false, isWritable: false },
+        { pubkey: LOCK_PROGRAM,            isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID,        isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY,      isSigner: false, isWritable: false },
       ];
 
       const lockIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
@@ -129,17 +121,11 @@ export default async function handler(req, res) {
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
       const tx = new Transaction();
       tx.recentBlockhash = blockhash;
-      tx.feePayer        = funderKey;
-
-      // wSOL: wrap native SOL into sender ATA first
-      if (isWsol) {
-        tx.add(createAssociatedTokenAccountInstruction(
-          funderKey, senderToken, funderKey, mintKey, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-        ));
-        tx.add(SystemProgram.transfer({ fromPubkey: funderKey, toPubkey: senderToken, lamports: Number(amtBig) }));
-        tx.add(createSyncNativeInstruction(senderToken, TOKEN_PROGRAM_ID));
-      }
-
+      tx.feePayer = funderKey;
+      // Pre-create escrow ATA with idempotent instruction (allows PDA owners)
+      tx.add(createAssociatedTokenAccountIdempotentInstruction(
+        funderKey, escrowToken, escrowPDA, mintKey, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      ));
       tx.add(lockIx);
       tx.partialSign(baseKp);
 
@@ -147,8 +133,8 @@ export default async function handler(req, res) {
       return res.status(200).json({
         transaction: serialized, escrow: escrowPDA.toBase58(),
         baseKey: baseKp.publicKey.toBase58(), blockhash, lastValidBlockHeight,
-        cliffDays: cliff / 86400, vestingDays: vesting / 86400,
-        mint, amount, recipient: recipientKey.toBase58(), wrappedSol: isWsol,
+        cliffDays: cliff / 86400, vestingDays: frequency / 86400,
+        mint, amount, recipient: recipientKey.toBase58(),
       });
     }
 
@@ -162,8 +148,7 @@ export default async function handler(req, res) {
 
       const recipientKey = new PublicKey(recipient);
       const escrowKey    = new PublicKey(escrow);
-
-      const acctInfo = await connection.getAccountInfo(escrowKey);
+      const acctInfo     = await connection.getAccountInfo(escrowKey);
       if (!acctInfo) return res.status(400).json({ error: "Escrow account not found" });
 
       const mintKey      = new PublicKey(acctInfo.data.slice(40, 72));
@@ -172,7 +157,7 @@ export default async function handler(req, res) {
 
       const claimData = Buffer.alloc(16);
       disc("claim").copy(claimData, 0);
-      claimData.writeBigUInt64LE(BigInt("18446744073709551615"), 8); // u64::MAX
+      claimData.writeBigUInt64LE(BigInt("18446744073709551615"), 8);
 
       const keys = [
         { pubkey: escrowKey,               isSigner: false, isWritable: true  },
@@ -186,15 +171,14 @@ export default async function handler(req, res) {
         { pubkey: LOCK_PROGRAM,            isSigner: false, isWritable: false },
       ];
 
-      const claimIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data: claimData });
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
       const tx = new Transaction();
-      tx.add(createAssociatedTokenAccountInstruction(
+      tx.add(createAssociatedTokenAccountIdempotentInstruction(
         recipientKey, recipientATA, recipientKey, mintKey, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
       ));
-      tx.add(claimIx);
+      tx.add(new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data: claimData }));
       tx.recentBlockhash = blockhash;
-      tx.feePayer        = recipientKey;
+      tx.feePayer = recipientKey;
 
       const serialized = Buffer.from(tx.serialize({ requireAllSignatures: false })).toString("base64");
       return res.status(200).json({ transaction: serialized, blockhash, lastValidBlockHeight });
@@ -229,10 +213,9 @@ export default async function handler(req, res) {
 
         const buf = Buffer.from(item.account.data);
         let o = 8;
-        const base      = new PublicKey(buf.slice(o, o += 32)).toBase58();
-        const mint      = new PublicKey(buf.slice(o, o += 32)).toBase58();
-        const sender    = new PublicKey(buf.slice(o, o += 32)).toBase58();
-        const recipient = new PublicKey(buf.slice(o, o += 32)).toBase58();
+        const mint      = new PublicKey(buf.slice(o += 32, o += 32)).toBase58();
+        const sender    = new PublicKey(buf.slice(o,       o += 32)).toBase58();
+        const recipient = new PublicKey(buf.slice(o,       o += 32)).toBase58();
 
         const startTime       = Number(buf.readBigUInt64LE(o)); o += 8;
         const frequency       = Number(buf.readBigUInt64LE(o)); o += 8;
@@ -242,21 +225,15 @@ export default async function handler(req, res) {
         const totalClaimed    = Number(buf.readBigUInt64LE(o)); o += 8;
         const cliffTime       = Number(buf.readBigUInt64LE(o));
 
-        const cliffEnd       = startTime + cliffTime;
-        const elapsed        = Math.max(now - cliffEnd, 0);
-        const periodsElapsed = frequency > 0 ? Math.floor(elapsed / frequency) : 0;
-        const totalVested    = Math.min(
-          cliffUnlockAmt + amountPerPeriod * periodsElapsed,
-          cliffUnlockAmt + amountPerPeriod * numberOfPeriod
-        );
-        const claimableRaw = Math.max(totalVested - totalClaimed, 0);
+        const cliffEnd     = startTime + cliffTime;
         const totalRaw     = cliffUnlockAmt + amountPerPeriod * numberOfPeriod;
+        const claimableRaw = now >= cliffEnd ? Math.max(totalRaw - totalClaimed, 0) : 0;
 
         accounts.push({
-          pubkey: key, mint, sender, recipient, cliffEnd, startTime,
-          totalRaw, totalClaimed, claimableRaw,
-          claimable:     claimableRaw > 0 && now >= cliffEnd,
-          vestedPercent: totalRaw > 0 ? ((totalVested / totalRaw) * 100).toFixed(1) : "0",
+          pubkey: key, mint, sender, recipient,
+          cliffEnd, startTime, totalRaw, totalClaimed, claimableRaw,
+          claimable: claimableRaw > 0,
+          vestedPercent: totalRaw > 0 ? ((totalRaw - totalClaimed) / totalRaw * 100).toFixed(1) : "0",
         });
       }
 
