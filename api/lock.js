@@ -225,19 +225,20 @@ export default async function handler(req, res) {
 
         const buf = Buffer.from(item.account.data);
         let o = 8;
-        const mint      = new PublicKey(buf.slice(o += 32, o += 32)).toBase58();
-        const sender    = new PublicKey(buf.slice(o,       o += 32)).toBase58();
-        const recipient = new PublicKey(buf.slice(o,       o += 32)).toBase58();
+        const mint      = new PublicKey(buf.slice(o, o + 32)).toBase58(); o += 32;
+        const sender    = new PublicKey(buf.slice(o, o + 32)).toBase58(); o += 32;
+        const recipient = new PublicKey(buf.slice(o, o + 32)).toBase58(); o += 32;
 
-        const startTime       = Number(buf.readBigUInt64LE(o)); o += 8;
+        const startTime       = Number(buf.readBigUInt64LE(o)); o += 8; // vesting_start_time
+        const cliffTime       = Number(buf.readBigUInt64LE(o)); o += 8; // cliff_time (ABSOLUTE timestamp)
         const frequency       = Number(buf.readBigUInt64LE(o)); o += 8;
         const cliffUnlockAmt  = Number(buf.readBigUInt64LE(o)); o += 8;
         const amountPerPeriod = Number(buf.readBigUInt64LE(o)); o += 8;
         const numberOfPeriod  = Number(buf.readBigUInt64LE(o)); o += 8;
         const totalClaimed    = Number(buf.readBigUInt64LE(o)); o += 8;
-        const cliffTime       = Number(buf.readBigUInt64LE(o));
 
-        const cliffEnd     = startTime + cliffTime;
+        // cliff_time is an absolute unix timestamp — tokens unlock once now >= cliffTime
+        const cliffEnd     = cliffTime;
         const totalRaw     = cliffUnlockAmt + amountPerPeriod * numberOfPeriod;
         const claimableRaw = now >= cliffEnd ? Math.max(totalRaw - totalClaimed, 0) : 0;
 
