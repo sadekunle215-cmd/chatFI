@@ -1342,7 +1342,8 @@ export default function JupChat() {
       succeeded = true;
       setStudioResult({ mintAddress: mint, poolAddress: submitData.poolAddress || null });
       setStudioStatus("done");
-      push("ai", `**Token created ✓**\n\n**${name.trim()} (${symbol.trim().toUpperCase()})** is live on Jupiter Studio!\n\nMint: \`${mint}\`\n\nView on: [jup.ag/studio/${mint}](https://jup.ag/studio/${mint}) · [Solscan](https://solscan.io/token/${mint})\n\nCreator fees will accrue as people trade your DBC pool.`);
+      const mintShort = `${mint.slice(0,8)}…${mint.slice(-6)}`;
+      push("ai", `**Token created ✓**\n\n**${name.trim()} (${symbol.trim().toUpperCase()})** is live on Jupiter Studio!\n\nMint: \`${mintShort}\`\n\nView on: [Jupiter Studio](https://jup.ag/studio/${mint}) · [Solscan](https://solscan.io/token/${mint})\n\nCreator fees will accrue as people trade your DBC pool.`);
     } catch (err) {
       if (!succeeded) {
         setStudioStatus("error");
