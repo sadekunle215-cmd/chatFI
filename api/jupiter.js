@@ -6,7 +6,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { url, method = "GET", body } = req.body;
+  const { url, method = "GET", body, triggerJwt } = req.body;
 
   if (!url) return res.status(400).json({ error: "Missing url" });
 
@@ -20,7 +20,8 @@ export default async function handler(req, res) {
   // This ensures Jupiter sees Vercel's US server IP, not the user's Nigerian IP.
   const headers = {
     "Content-Type": "application/json",
-    ...(API_KEY ? { "x-api-key": API_KEY } : {}),
+    ...(API_KEY    ? { "x-api-key": API_KEY }              : {}),
+    ...(triggerJwt ? { "Authorization": `Bearer ${triggerJwt}` } : {}),
   };
 
   try {
