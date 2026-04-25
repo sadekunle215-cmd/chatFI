@@ -105,16 +105,17 @@ export default async function handler(req, res) {
       params.writeUInt8(0, off);                     // updateRecipientMode
 
       const lockKeys = [
-        { pubkey: baseKeypair.publicKey,    isSigner: true,  isWritable: false },
-        { pubkey: escrowPDA,                isSigner: false, isWritable: true  },
-        { pubkey: escrowToken,              isSigner: false, isWritable: true  },
-        { pubkey: funderKey,                isSigner: true,  isWritable: true  },
-        { pubkey: senderToken,              isSigner: false, isWritable: true  },
-        { pubkey: recipientKey,             isSigner: false, isWritable: false },
-        { pubkey: mintKey,                  isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID,         isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId,  isSigner: false, isWritable: false },
-        { pubkey: SYSVAR_RENT_PUBKEY,       isSigner: false, isWritable: false },
+        { pubkey: baseKeypair.publicKey,        isSigner: true,  isWritable: false },
+        { pubkey: escrowPDA,                    isSigner: false, isWritable: true  },
+        { pubkey: escrowToken,                  isSigner: false, isWritable: true  },
+        { pubkey: funderKey,                    isSigner: true,  isWritable: true  },
+        { pubkey: senderToken,                  isSigner: false, isWritable: true  },
+        { pubkey: recipientKey,                 isSigner: false, isWritable: false },
+        { pubkey: mintKey,                      isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID,             isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId,      isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY,           isSigner: false, isWritable: false },
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false },
       ];
 
       const lockIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys: lockKeys, data: params });
