@@ -120,10 +120,10 @@ export default async function handler(req, res) {
       tx.recentBlockhash = blockhash;
       tx.feePayer        = funderKey;
 
-      // Pre-create escrow ATA (matches Rust CLI pattern exactly)
-      tx.add(createAssociatedTokenAccountInstruction(
-        funderKey, escrowToken, escrowPDA, mintKey, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-      ));
+      // NOTE: Do NOT pre-create the escrow ATA here.
+      // The lock program creates it internally via CPI (using Anchor's spl crate which
+      // allows PDA owners). Pre-creating it with JS @solana/spl-token fails with
+      // IllegalOwner because the JS library rejects PDA accounts as ATA owners.
 
       // wSOL: wrap native SOL into sender ATA first
       if (isWsol) {
