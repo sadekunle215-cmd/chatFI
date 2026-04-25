@@ -1159,100 +1159,160 @@ export default function JupChat() {
   };
 
   // ── Portfolio — full on-demand, always fresh ─────────────────────────────────
-  // Fetches: wallet balances + token logos + trigger orders + recurring orders +
-  // DeFi positions + earn positions + prediction positions/orders + airdrops
+  // Uses Jupiter Ultra balances API + Portfolio positions API for complete data
   const fetchPortfolioData = async (walletAddress) => {
     if (!walletAddress) return null;
     const results = {};
 
-    // ── 1. Fresh wallet balances + mint addresses (for logos) ──────────────────
+    // ── 1. Jupiter Ultra balances API — returns ALL tokens keyed by mint ───────
+    // https://lite-api.jup.ag/ultra/v1/balances/{wallet}
+    // Response: { "SOL": { uiAmount, amount, slot }, "MINT_ADDR": { uiAmount, amount }, ... }
     try {
-      // Comprehensive known-mints map — never skip a token just because it's unknown
-      const KNOWN_MINTS = {
-        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
-        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
-        "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
-        "So11111111111111111111111111111111111111112":   "SOL",
-        "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
-        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
-        "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
-        "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R": "RAY",
-        "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3": "PYTH",
-        "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
-        "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
-        "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1": "BSOL",
-        "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU": "SAMO",
-        "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE": "ORCA",
-        "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr": "POPCAT",
-        "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN": "TRUMP",
-      };
-      const [solJson, splJson] = await Promise.all([
-        jupFetch(SOLANA_RPC, { method:"POST", body:{ jsonrpc:"2.0", id:1, method:"getBalance", params:[walletAddress,{commitment:"confirmed"}] } }),
-        jupFetch(SOLANA_RPC, { method:"POST", body:{ jsonrpc:"2.0", id:2, method:"getTokenAccountsByOwner", params:[walletAddress,{programId:SPL_PROGRAM},{encoding:"jsonParsed",commitment:"confirmed"}] } }),
-      ]);
-      const sol = (solJson.result?.value || 0) / 1e9;
-      const balances = { SOL: sol };
-      const mintMap  = { SOL: "So11111111111111111111111111111111111111112" }; // sym → mint
-      const mintToSym = {}; // reverse lookup used below for logo resolution
+      const rawBals = await fetch("https://lite-api.jup.ag/ultra/v1/balances/" + walletAddress)
+        .then(r => r.json());
 
-      // Collect all SPL accounts with non-zero balance — NEVER skip unknown mints
-      const unknownMints = [];
-      for (const acc of (splJson.result?.value || [])) {
-        const info = acc.account.data.parsed.info;
-        const uiAmt = info.tokenAmount.uiAmount;
-        if (!uiAmt || uiAmt <= 0) continue; // skip zero-balance dust
-        const mint = info.mint;
-        // Resolve symbol: cache → TOKEN_MINTS reverse → KNOWN_MINTS → fallback to short mint
-        const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
-                 || KNOWN_MINTS[mint]
-                 || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0];
-        if (sym) {
-          balances[sym] = uiAmt;
-          mintMap[sym]  = mint;
-          mintToSym[mint] = sym;
-          // Update cache so future operations know this mint
-          if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
-        } else {
-          // Unknown token — store with mint as key and batch-resolve metadata later
-          unknownMints.push({ mint, uiAmt });
+      if (rawBals && !rawBals.error) {
+        const balances = {};  // sym → uiAmount
+        const mintMap  = {};  // sym → mint address
+        const logoMap  = {};  // sym → logo url
+
+        // SOL is keyed as "SOL" directly
+        if (rawBals["SOL"]) {
+          const uiAmt = rawBals["SOL"].uiAmount || 0;
+          balances["SOL"] = uiAmt;
+          mintMap["SOL"]  = "So11111111111111111111111111111111111111112";
+          logoMap["SOL"]  = "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png";
         }
-      }
 
-      // Batch-resolve unknown mints via Jupiter token API (parallel, up to 10)
-      if (unknownMints.length > 0) {
-        const resolved = await Promise.allSettled(
-          unknownMints.slice(0, 10).map(({ mint, uiAmt }) =>
-            jupFetch(`${JUP_TOKENS_API}/${mint}`)
-              .then(meta => ({ mint, uiAmt, sym: meta?.symbol || mint.slice(0,6) + "…", name: meta?.name }))
-              .catch(() => ({ mint, uiAmt, sym: mint.slice(0,6) + "…" }))
-          )
-        );
-        for (const r of resolved) {
-          if (r.status === "fulfilled") {
-            const { mint, uiAmt, sym } = r.value;
-            // Deduplicate: if symbol already taken, use mint prefix
-            const finalSym = balances[sym] !== undefined ? mint.slice(0,8) : sym;
-            balances[finalSym] = uiAmt;
-            mintMap[finalSym]  = mint;
+        // All other keys are mint addresses
+        const MINT_TO_SYM = {
+          "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+          "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+          "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
+          "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
+          "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+          "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
+          "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R": "RAY",
+          "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3": "PYTH",
+          "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
+          "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
+          "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1": "BSOL",
+          "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU": "SAMO",
+          "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE": "ORCA",
+          "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr": "POPCAT",
+          "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN": "TRUMP",
+        };
+
+        const unknownMints = [];
+        for (const [key, val] of Object.entries(rawBals)) {
+          if (key === "SOL") continue;
+          const uiAmt = val?.uiAmount || 0;
+          if (uiAmt <= 0) continue; // skip dust
+          const mint = key; // key IS the mint address
+          // Resolve symbol: tokenCache → TOKEN_MINTS reverse → MINT_TO_SYM → unknown
+          const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
+                   || MINT_TO_SYM[mint]
+                   || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0];
+          if (sym) {
+            balances[sym] = uiAmt;
+            mintMap[sym]  = mint;
+            logoMap[sym]  = "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/" + mint + "/logo.png";
             if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
+          } else {
+            unknownMints.push({ mint, uiAmt });
+          }
+        }
+
+        // Batch-resolve unknown mints via Jupiter token metadata API
+        if (unknownMints.length > 0) {
+          const resolved = await Promise.allSettled(
+            unknownMints.slice(0, 15).map(({ mint, uiAmt }) =>
+              fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint)
+                .then(r => r.json())
+                .then(meta => ({ mint, uiAmt, sym: meta?.symbol || mint.slice(0,6), logo: meta?.logoURI }))
+                .catch(() => ({ mint, uiAmt, sym: mint.slice(0,6), logo: null }))
+            )
+          );
+          for (const r of resolved) {
+            if (r.status === "fulfilled") {
+              const { mint, uiAmt, sym, logo } = r.value;
+              const finalSym = balances[sym] !== undefined ? mint.slice(0,8) : sym;
+              balances[finalSym] = uiAmt;
+              mintMap[finalSym]  = mint;
+              if (logo) logoMap[finalSym] = logo;
+              if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
+            }
+          }
+        }
+
+        results.walletBalances = balances;
+        results.mintMap        = mintMap;
+        results.logoMap        = logoMap;
+        setPortfolio(balances);
+      }
+    } catch {}
+
+    // ── 2. Jupiter Portfolio positions API — wallet + all DeFi positions ───────
+    // https://api.jup.ag/portfolio/v1/positions/{wallet}
+    // Returns: { elements: [{type, label, platformId, value, data}], tokenInfo, fetcherReports }
+    // label="Wallet" → token balances with USD values
+    // label="LimitOrder","DCA","Staked","LiquidityPool","Leverage" → DeFi positions
+    try {
+      const portRes = await fetch("https://api.jup.ag/portfolio/v1/positions/" + walletAddress)
+        .then(r => r.json());
+
+      if (portRes && !portRes.error) {
+        results.portfolioElements = portRes.elements || [];
+        results.portfolioTokenInfo = portRes.tokenInfo || {};
+
+        // Extract logos from tokenInfo for any tokens we still don't have logos for
+        const tokenInfoSolana = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
+        for (const [mint, info] of Object.entries(tokenInfoSolana)) {
+          if (info?.logoURI && results.logoMap) {
+            // Find sym for this mint and update logoMap
+            const sym = Object.entries(results.mintMap || {}).find(([, m]) => m === mint)?.[0];
+            if (sym && !results.logoMap[sym]) results.logoMap[sym] = info.logoURI;
+          }
+        }
+
+        // If Ultra balances failed, try to build balances from wallet elements
+        if (!results.walletBalances) {
+          const walletEl = (portRes.elements || []).filter(e => e.label === "Wallet");
+          const balances = {};
+          const mintMap  = {};
+          const logoMap  = {};
+          for (const el of walletEl) {
+            const assets = el.data?.assets || el.data?.positions || [];
+            for (const asset of assets) {
+              const sym   = asset.symbol || asset.name || "?";
+              const uiAmt = asset.balance || asset.amount || 0;
+              const mint  = asset.mint || asset.address || "";
+              const logo  = asset.logoURI || asset.logo || "";
+              if (uiAmt > 0) {
+                balances[sym] = uiAmt;
+                if (mint) mintMap[sym] = mint;
+                if (logo) logoMap[sym] = logo;
+              }
+            }
+          }
+          if (Object.keys(balances).length > 0) {
+            results.walletBalances = balances;
+            results.mintMap = mintMap;
+            results.logoMap = logoMap;
+            setPortfolio(balances);
           }
         }
       }
-
-      results.walletBalances = balances;
-      results.mintMap        = mintMap;
-      // Keep global portfolio state in sync
-      setPortfolio(balances);
     } catch {}
 
-    // ── 2. Trigger v2 active orders (uses JWT from ref — no extra wallet sign needed) ──
+    // ── 3. Trigger v2 active orders ───────────────────────────────────────────
     if (trigJwtRef.current) {
       try {
         const trigRes = await fetch("/api/jupiter", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            url: `${JUP_TV2}/orders/history?state=active&limit=50&offset=0`,
+            url: JUP_TV2 + "/orders/history?state=active&limit=50&offset=0",
             method: "GET",
             triggerJwt: trigJwtRef.current,
           }),
@@ -1262,31 +1322,28 @@ export default function JupChat() {
       } catch {}
     }
 
-    // ── 3. Recurring / DCA orders ──────────────────────────────────────────────
+    // ── 4. Recurring / DCA orders ─────────────────────────────────────────────
     try {
-      const recur = await jupFetch(`${JUP_RECUR_BASE}/getRecurringOrders?wallets=${walletAddress}&status=active`);
+      const recur = await jupFetch(JUP_RECUR_BASE + "/getRecurringOrders?wallets=" + walletAddress + "&status=active");
       results.recurringOrders = Array.isArray(recur?.recurringOrders) ? recur.recurringOrders
                               : Array.isArray(recur) ? recur : [];
     } catch {}
 
-    // ── 4. Jupiter DeFi positions (perps, etc.) ───────────────────────────────
-    try { results.defi = await jupFetch(`${JUP_PORTFOLIO}/positions/${walletAddress}`); } catch {}
-
     // ── 5. Prediction positions ───────────────────────────────────────────────
     try {
-      const pred = await predFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletAddress}`);
+      const pred = await predFetch(JUP_PRED_API + "/positions?ownerPubkey=" + walletAddress);
       results.predPositions = Array.isArray(pred) ? pred : (pred?.data || []);
     } catch {}
 
     // ── 6. Prediction orders ──────────────────────────────────────────────────
     try {
-      const orders = await predFetch(`${JUP_PRED_API}/orders?ownerPubkey=${walletAddress}`);
+      const orders = await predFetch(JUP_PRED_API + "/orders?ownerPubkey=" + walletAddress);
       results.predOrders = Array.isArray(orders) ? orders : (orders?.data || []);
     } catch {}
 
     // ── 7. Earn positions ─────────────────────────────────────────────────────
     try {
-      const earn = await jupFetch(`${JUP_EARN_API}/positions?wallets=${walletAddress}`);
+      const earn = await jupFetch(JUP_EARN_API + "/positions?wallets=" + walletAddress);
       if (!earn || earn.error) throw new Error("empty");
       let earnArr = Array.isArray(earn) ? earn
         : earn.data || earn.positions || earn.earnPositions || earn.result || earn.items || earn.balances || [];
@@ -1296,16 +1353,12 @@ export default function JupChat() {
       results.earnPositions = earnArr;
     } catch {}
 
-    // ── 8. Jupiter Portfolio API — airdrops (claimed + unclaimed) ─────────────
+    // ── 8. Staked JUP ─────────────────────────────────────────────────────────
     try {
-      const airdropRes = await jupFetch(`${JUP_PORTFOLIO}/airdrops/${walletAddress}`);
-      // API returns array or { airdrops: [...] }
-      const airdropArr = Array.isArray(airdropRes) ? airdropRes
-        : Array.isArray(airdropRes?.airdrops) ? airdropRes.airdrops
-        : Array.isArray(airdropRes?.data) ? airdropRes.data
-        : [];
-      results.airdrops = airdropArr;
-    } catch { results.airdrops = []; }
+      const stakedRes = await fetch("https://api.jup.ag/portfolio/v1/staked-jup/" + walletAddress)
+        .then(r => r.json());
+      if (stakedRes && !stakedRes.error) results.stakedJup = stakedRes;
+    } catch {}
 
     return results;
   };
@@ -3842,7 +3895,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           setShowPortfolio(true);
           setPortfolioData(null);
           const pData = await fetchPortfolioData(addr);
-          setPortfolioData({ ...pData, wallet: addr, solBalance: pData?.walletBalances || portfolio, prices });
+          setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: pData?.logoMap || {}, mintMap: pData?.mintMap || {}, prices });
           setPortfolioLoading(false);
         }
 
@@ -5522,27 +5575,26 @@ Order: \`${orderKey.slice(0,20)}…\`
                       <span style={{ fontSize:11, fontWeight:700, color:T.accent, letterSpacing:"0.08em", textTransform:"uppercase" }}>Token Balances</span>
                     </div>
                     <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                      {Object.entries(portfolioData.solBalance || {}).length === 0 ? (
+                      {Object.entries(portfolioData.walletBalances || portfolioData.solBalance || {}).length === 0 ? (
                         <div style={{ fontSize:12, color:T.text3 }}>No balances found.</div>
                       ) : (
-                        Object.entries(portfolioData.solBalance || {}).map(([sym, bal]) => {
+                        Object.entries(portfolioData.walletBalances || portfolioData.solBalance || {}).map(([sym, bal]) => {
                           const usdVal  = portfolioData.prices?.[sym] ? (bal * portfolioData.prices[sym]) : null;
-                          const mint    = portfolioData.mintMap?.[sym];
-                          const logoUrl = mint ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mint}/logo.png` : null;
+                          const logoUrl = portfolioData.logoMap?.[sym] || null;
                           return (
-                            <div key={sym} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
+                            <div key={sym} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:"1px solid " + T.border, borderRadius:10 }}>
                               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                                <div style={{ width:30, height:30, borderRadius:"50%", overflow:"hidden", flexShrink:0, background:`linear-gradient(135deg, ${T.border}, ${T.surface})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:T.text2 }}>
+                                <div style={{ width:30, height:30, borderRadius:"50%", overflow:"hidden", flexShrink:0, background:"linear-gradient(135deg, #1e2d3d, #253545)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:T.text2 }}>
                                   {logoUrl
-                                    ? <img src={logoUrl} alt={sym} style={{ width:"100%", height:"100%", objectFit:"cover" }} onError={e => { e.target.style.display="none"; }} />
+                                    ? <img src={logoUrl} alt={sym} style={{ width:"100%", height:"100%", objectFit:"cover" }} onError={e => { e.target.style.display="none"; e.target.parentNode.textContent = sym.slice(0,2); }} />
                                     : sym.slice(0,2)
                                   }
                                 </div>
                                 <span style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{sym}</span>
                               </div>
                               <div style={{ textAlign:"right" }}>
-                                <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{bal < 1 ? bal.toFixed(6) : bal.toFixed(4)}</div>
-                                {usdVal != null && <div style={{ fontSize:11, color:T.text3, marginTop:1 }}>${usdVal.toFixed(2)}</div>}
+                                <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{typeof bal === "number" ? (bal < 1 ? bal.toFixed(6) : bal.toFixed(4)) : String(bal)}</div>
+                                {usdVal != null && <div style={{ fontSize:11, color:T.text3, marginTop:1 }}>{"$" + usdVal.toFixed(2)}</div>}
                               </div>
                             </div>
                           );
