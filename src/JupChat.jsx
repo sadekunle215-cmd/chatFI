@@ -1484,6 +1484,13 @@ export default function JupChat() {
       const escrowATA    = await getAssociatedTokenAddress(mintKey, escrowKey,    true,  TOKEN_PROGRAM_ID);
       const recipientATA = await getAssociatedTokenAddress(mintKey, recipientKey, false, TOKEN_PROGRAM_ID);
 
+      // Anchor event authority PDA — required by ALL Jupiter Lock instructions
+      // Omitting this causes Custom error: 101 (InstructionFallbackNotFound)
+      const [eventAuthority] = PublicKey.findProgramAddressSync(
+        [Buffer.from("__event_authority")],
+        LOCK_PROGRAM
+      );
+
       // Discriminator for claim = sha256("global:claim")[0..8]
       const discriminator = Buffer.from([62, 198, 214, 193, 213, 159, 108, 210]);
       // max_amount = u64::MAX (claim all available)
@@ -1492,13 +1499,17 @@ export default function JupChat() {
       const data = Buffer.concat([discriminator, maxAmount]);
 
       const keys = [
-        { pubkey: escrowKey,        isSigner: false, isWritable: true  },
-        { pubkey: escrowATA,        isSigner: false, isWritable: true  },
-        { pubkey: recipientKey,     isSigner: true,  isWritable: false },
-        { pubkey: recipientATA,     isSigner: false, isWritable: true  },
-        { pubkey: mintKey,          isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: escrowKey,               isSigner: false, isWritable: true  },
+        { pubkey: escrowATA,               isSigner: false, isWritable: true  },
+        { pubkey: recipientKey,            isSigner: true,  isWritable: false },
+        { pubkey: recipientATA,            isSigner: false, isWritable: true  },
+        { pubkey: mintKey,                 isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID,        isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        // FIX: Anchor event CPI accounts — REQUIRED by Jupiter Lock claim
+        // Without these, Anchor can't emit the ClaimEvent and rejects with error 101
+        { pubkey: eventAuthority,          isSigner: false, isWritable: false },
+        { pubkey: LOCK_PROGRAM,            isSigner: false, isWritable: false },
       ];
 
       const claimIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
