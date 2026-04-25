@@ -22,7 +22,9 @@ function generateInviteCode() {
 }
 
 async function inviteCodeToKeypair(code) {
-  const data = new TextEncoder().encode(code);
+  // Jupiter spec: keypair seed = SHA-256("invite:" + code)
+  // Must match client-side derivation exactly
+  const data = new TextEncoder().encode("invite:" + code);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   return Keypair.fromSeed(new Uint8Array(hashBuffer));
 }
@@ -89,8 +91,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing required fields: sender, amount, mint" });
     }
 
-    const newInviteCode = generateInviteCode();
-    const inviteKeypair = await inviteCodeToKeypair(newInviteCode);
+    // Use the invite code the client generated (so the link it holds matches the tx signer).
+    // Fall back to generating one server-side only if the client didn't send one.
+    const codeToUse   = inviteCode || generateInviteCode();
+    const inviteKeypair = await inviteCodeToKeypair(codeToUse);
     const inviteSigner  = inviteKeypair.publicKey.toBase58();
 
     const craftRes  = await fetch(`${JUP_SEND_API}/craft-send`, {
@@ -107,7 +111,7 @@ export default async function handler(req, res) {
     partialSignWithInviteKeypair(tx, inviteKeypair);
     return res.status(200).json({
       partiallySignedTx: bytesToB64(tx.serialize()),
-      inviteCode: newInviteCode,
+      inviteCode: codeToUse,
     });
 
   } catch (err) {
