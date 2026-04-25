@@ -5692,9 +5692,6 @@ Order: \`${orderKey.slice(0,20)}…\`
                       </div>
                     </div>
                   )}
-                </div>
-              )}
-
                   {/* ── Airdrops (claimed + unclaimed) ── */}
                   {(portfolioData.airdrops||[]).length > 0 && (
                     <div>
@@ -5711,29 +5708,29 @@ Order: \`${orderKey.slice(0,20)}…\`
                         {(portfolioData.airdrops).filter(a => !a.claimed && !a.isClaimed).map((a, i) => {
                           const name     = a.name || a.tokenSymbol || a.symbol || (a.mint ? a.mint.slice(0,8) : "Airdrop");
                           const amount   = a.amount || a.claimableAmount || a.totalAmount || "";
-                          const amtFmt   = amount ? " \u00b7 " + parseFloat(amount).toLocaleString(undefined, {maximumFractionDigits:2}) : "";
+                          const amtFmt   = amount ? " - " + parseFloat(amount).toFixed(2) : "";
                           const claimUrl = a.claimUrl || a.url || "https://jup.ag/portfolio";
                           const expiry   = a.expiresAt || a.expiry;
                           return (
                             <div key={i} style={{ padding:"10px 12px", background:T.bg, border:"1.5px solid #c7f284", borderRadius:10, fontSize:12 }}>
                               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
-                                <span style={{ fontWeight:700, color:"#c7f284" }}>{"🪂 " + name + amtFmt}</span>
+                                <span style={{ fontWeight:700, color:"#c7f284" }}>{"Airdrop: " + name + amtFmt}</span>
                                 <a href={claimUrl} target="_blank" rel="noopener noreferrer"
-                                  style={{ fontSize:11, fontWeight:700, color:"#0d1117", background:"#c7f284", borderRadius:6, padding:"2px 9px", textDecoration:"none" }}>{"Claim \u2192"}</a>
+                                  style={{ fontSize:11, fontWeight:700, color:"#0d1117", background:"#c7f284", borderRadius:6, padding:"2px 9px", textDecoration:"none" }}>Claim</a>
                               </div>
-                              {expiry && <div style={{ color:T.text3, fontSize:11 }}>{"Expires: " + new Date(expiry).toLocaleDateString()}</div>}
+                              {expiry ? <div style={{ color:T.text3, fontSize:11 }}>{"Expires: " + new Date(expiry).toLocaleDateString()}</div> : null}
                             </div>
                           );
                         })}
                         {(portfolioData.airdrops).filter(a => a.claimed || a.isClaimed).slice(0,3).map((a, i) => {
                           const name   = a.name || a.tokenSymbol || a.symbol || (a.mint ? a.mint.slice(0,8) : "Airdrop");
                           const amount = a.amount || a.claimableAmount || a.totalAmount || "";
-                          const amtFmt = amount ? " \u00b7 " + parseFloat(amount).toLocaleString(undefined, {maximumFractionDigits:2}) : "";
+                          const amtFmt = amount ? " - " + parseFloat(amount).toFixed(2) : "";
                           return (
                             <div key={i} style={{ padding:"9px 12px", background:T.bg, border:"1px solid " + T.border, borderRadius:10, fontSize:12, opacity:0.6 }}>
                               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                                <span style={{ color:T.text2 }}>{"✅ " + name + amtFmt}</span>
-                                <span style={{ fontSize:10, color:T.text3 }}>Claimed</span>
+                                <span style={{ color:T.text2 }}>{"Claimed: " + name + amtFmt}</span>
+                                <span style={{ fontSize:10, color:T.text3 }}>Done</span>
                               </div>
                             </div>
                           );
