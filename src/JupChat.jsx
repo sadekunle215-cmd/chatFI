@@ -650,8 +650,9 @@ export default function JupChat() {
   const wcQrRef                   = useRef(null);
   const [input, setInput]         = useState("");
   const [typing, setTyping]       = useState(false);
-  const [wallet, setWallet]       = useState(null);
-  const [walletFull, setWalletFull] = useState(null);
+  const [wallet, setWallet]               = useState(null);
+  const [walletFull, setWalletFull]       = useState(null);
+  const [connectedWalletName, setConnectedWalletName] = useState(null); // e.g. "Phantom", "Jupiter"
   const [prices, setPrices]       = useState({});
   const [portfolio, setPortfolio] = useState({});
 
@@ -1563,16 +1564,38 @@ export default function JupChat() {
       const walletPk     = new PublicKey(walletFull);
       const now          = Math.floor(Date.now() / 1000);
 
-      // VestingEscrow layout: 8 disc + 32 base + 32 mint + 32 sender + 32 recipient = sender@72, recipient@104
-      // Do NOT filter by dataSize — different program versions may produce different sizes
+      // VestingEscrow on-chain layout (verified against jup-lock IDL + lock.js):
+      // Offset 0:   8 bytes  — Anchor discriminator
+      // Offset 8:   32 bytes — base key
+      // Offset 40:  32 bytes — mint
+      // Offset 72:  32 bytes — sender  ← filter asSender here
+      // Offset 104: 32 bytes — recipient ← filter asRecipient here
+      // BUT: our data parsing skips base key first, so field order in buf is:
+      //   o=8: base(32) → mint(32) → sender(32) → recipient(32) → u64s…
+      // memcmp offsets must match the RAW on-chain byte positions (no skipping).
       const [asSender, asRecipient] = await Promise.all([
         connection.getProgramAccounts(LOCK_PROGRAM, { filters: [
-          { memcmp: { offset: 72, bytes: walletPk.toBase58() } }
+          { dataSize: 200 },
+          { memcmp: { offset: 72, bytes: walletPk.toBase58() } }  // sender at byte 8+32+32=72
         ]}).catch(() => []),
         connection.getProgramAccounts(LOCK_PROGRAM, { filters: [
-          { memcmp: { offset: 104, bytes: walletPk.toBase58() } }
+          { dataSize: 200 },
+          { memcmp: { offset: 104, bytes: walletPk.toBase58() } } // recipient at byte 8+32+32+32=104
         ]}).catch(() => []),
       ]);
+
+      // Known mint → symbol map for display
+      const KNOWN_MINT_SYMS = {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+        "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":  "JUP",
+        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+        "So11111111111111111111111111111111111111112":   "SOL",
+        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+        "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
+        "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R":  "RAY",
+        "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn":  "JITOSOL",
+        "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
+      };
 
       const seen = new Set();
       const accounts = [];
@@ -1583,20 +1606,18 @@ export default function JupChat() {
 
         try {
           const buf = Buffer.from(item.account.data);
-          // Parse VestingEscrow fields
-          // Layout: 8 disc | 32 base | 32 mint | 32 sender | 32 recipient |
-          //         u64 vesting_start_time | u64 cliff_time | u64 frequency |
-          //         u64 cliff_unlock_amount | u64 amount_per_period | u64 number_of_period |
-          //         u64 total_claimed_amount | u8 update_recipient_mode | u8 bump | u8 cancel_mode
+          // Parse VestingEscrow fields — skip discriminator (8), then base key (32)
+          // Layout after disc: base(32) | mint(32) | sender(32) | recipient(32) | u64×7 | u8×3
           let o = 8;
-          const mintBytes      = buf.slice(o, o + 32); o += 32;
-          const senderBytes    = buf.slice(o, o + 32); o += 32;
-          const recipientBytes = buf.slice(o, o + 32); o += 32;
+          o += 32; // skip base key — not needed for display
+          const mintBytes      = buf.slice(o, o + 32); o += 32; // mint
+          const senderBytes    = buf.slice(o, o + 32); o += 32; // sender
+          const recipientBytes = buf.slice(o, o + 32); o += 32; // recipient
 
-          const vestingStart    = Number(buf.readBigUInt64LE(o)); o += 8;
-          const cliffTime       = Number(buf.readBigUInt64LE(o)); o += 8; // absolute timestamp
+          const vestingStart    = Number(buf.readBigUInt64LE(o)); o += 8; // vesting_start_time
+          const cliffTime       = Number(buf.readBigUInt64LE(o)); o += 8; // cliff_time (absolute unix ts)
           const frequency       = Number(buf.readBigUInt64LE(o)); o += 8;
-          const cliffUnlockAmt  = Number(buf.readBigUInt64LE(o)); o += 8;
+          const cliffUnlockAmt  = Number(buf.readBigUInt64LE(o)); o += 8; // cliff_unlock_amount
           const amountPerPeriod = Number(buf.readBigUInt64LE(o)); o += 8;
           const numberOfPeriod  = Number(buf.readBigUInt64LE(o)); o += 8;
           const totalClaimed    = Number(buf.readBigUInt64LE(o)); o += 8;
@@ -1605,19 +1626,26 @@ export default function JupChat() {
           const sender    = new PublicKey(senderBytes).toBase58();
           const recipient = new PublicKey(recipientBytes).toBase58();
 
+          // Resolve human-readable symbol from token cache, known mints map, or mint prefix
+          const mintSym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
+            || KNOWN_MINT_SYMS[mint]
+            || `${mint.slice(0, 6)}…`;
+
           const totalRaw     = cliffUnlockAmt + amountPerPeriod * numberOfPeriod;
-          // cliff_time is absolute — tokens unlock once now >= cliffTime
+          // cliff_time is an absolute unix timestamp — tokens unlock once now >= cliffTime
           const claimableRaw = now >= cliffTime ? Math.max(totalRaw - totalClaimed, 0) : 0;
           const isClaimable  = claimableRaw > 0;
 
-          // Resolve decimals for display (default 6 for USDC/JUP, etc.)
-          const dec = tokenDecimalsRef.current[mint] || 6;
-          const fmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec > 6 ? 4 : 2);
+          // Resolve decimals: check token cache, then known common ones, then default 6
+          const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6, RAY:6, JITOSOL:9, JUPUSD:6 };
+          const dec = tokenDecimalsRef.current[mintSym] || KNOWN_DECIMALS[mintSym] || 6;
+          const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
 
           accounts.push({
             pubkey:          key,
             lockId:          key,
             mint,
+            symbol:          mintSym,  // ← resolved symbol for display
             sender,
             recipient,
             cliffEnd:        cliffTime,
@@ -1626,12 +1654,12 @@ export default function JupChat() {
             totalClaimed,
             claimableRaw,
             claimable:       isClaimable,
-            claimableAmount: fmt(claimableRaw),
-            totalAmount:     fmt(totalRaw),
+            claimableAmount: fmtAmt(claimableRaw),
+            totalAmount:     fmtAmt(totalRaw),
             vestedPercent:   totalRaw > 0 ? ((claimableRaw / totalRaw) * 100).toFixed(1) : "0",
           });
         } catch (_) {
-          // Skip malformed accounts
+          // Skip malformed or incompatible accounts silently
         }
       }
       setLockList(accounts);
@@ -3026,6 +3054,7 @@ export default function JupChat() {
       const display = `${address.slice(0,4)}…${address.slice(-4)}`;
       setWallet(display);
       setWalletFull(address);
+      setConnectedWalletName(preferredWallet || "WalletConnect");
       const balances = await fetchSolanaBalances(address);
       setPortfolio(balances);
       const live = await fetchPrices();
@@ -3817,6 +3846,9 @@ Order: \`${orderKey.slice(0,20)}…\`
       setWallet(display);
       setWalletFull(reownAddress);
       if (reownProvider) connectedProviderRef.current = reownProvider;
+      // Capture connected wallet name for logo display in header
+      const wName = reownProvider?.walletInfo?.name || reownProvider?.name || reownProvider?.walletName || null;
+      setConnectedWalletName(wName);
       fetchSolanaBalances(reownAddress).then(balances => {
         setPortfolio(balances);
         if (justConnected) {
@@ -3838,6 +3870,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       connectedProviderRef.current = null;
       setWallet(null);
       setWalletFull(null);
+      setConnectedWalletName(null);
       setPortfolio({});
       push("ai", "👋 Wallet disconnected. Connect again anytime to access your portfolio and trading features.");
     }
@@ -4577,16 +4610,39 @@ Order: \`${orderKey.slice(0,20)}…\`
                     )}
                   </div>
 
-                  {/* Connect Wallet */}
+                  {/* Connected Wallet — logo + address pill with ✕ to disconnect */}
                   {wallet ? (
-                    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                      <div style={{ fontSize:11, color:T.green, fontWeight:600, background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:20, padding:"4px 10px", maxWidth:100, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                        ● {wallet}
-                      </div>
-                      <button onClick={disconnectWallet} className="hov-btn"
-                        style={{ padding:"5px 10px", background:"none", border:`1px solid ${T.border}88`, borderRadius:20, color:T.red, fontSize:11, cursor:"pointer" }}>
-                        Out
-                      </button>
+                    <div
+                      style={{ display:"flex", alignItems:"center", gap:5, fontSize:11, color:T.green, fontWeight:600,
+                        background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:20,
+                        padding:"4px 8px 4px 5px", maxWidth:145, overflow:"hidden", whiteSpace:"nowrap",
+                        cursor:"default",
+                      }}
+                    >
+                      {/* Wallet logo — show if we have a logo for the connected wallet */}
+                      {connectedWalletName && WALLET_LOGOS[connectedWalletName] ? (
+                        <img
+                          src={WALLET_LOGOS[connectedWalletName]}
+                          alt={connectedWalletName}
+                          title={connectedWalletName}
+                          style={{ width:16, height:16, borderRadius:4, flexShrink:0, objectFit:"cover" }}
+                          onError={e => { e.currentTarget.style.display = "none"; }}
+                        />
+                      ) : (
+                        /* fallback green dot */
+                        <span style={{ width:7, height:7, borderRadius:"50%", background:T.green, flexShrink:0, display:"inline-block" }}/>
+                      )}
+                      {/* Truncated address */}
+                      <span style={{ overflow:"hidden", textOverflow:"ellipsis", flex:1 }}>{wallet}</span>
+                      {/* ✕ disconnect — replaces the separate "Out" button */}
+                      <button
+                        onClick={disconnectWallet}
+                        title="Disconnect wallet"
+                        className="hov-btn"
+                        style={{ marginLeft:3, background:"none", border:"none", color:T.text3,
+                          fontSize:12, lineHeight:1, cursor:"pointer", padding:"0 1px",
+                          flexShrink:0, display:"flex", alignItems:"center" }}
+                      >✕</button>
                     </div>
                   ) : (
                     <button onClick={() => connectWallet(null)} className="hov-btn"
