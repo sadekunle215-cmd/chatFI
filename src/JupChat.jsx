@@ -1158,40 +1158,96 @@ export default function JupChat() {
     }).join("\n");
   };
 
-  // ── Portfolio — full on-demand: wallet balances + DeFi positions + prediction + earn ─
+  // ── Portfolio — full on-demand, always fresh ─────────────────────────────────
+  // Fetches: wallet balances + token logos + trigger orders + recurring orders +
+  // DeFi positions + earn positions + prediction positions/orders
   const fetchPortfolioData = async (walletAddress) => {
     if (!walletAddress) return null;
     const results = {};
-    // 1. Jupiter portfolio (DeFi positions — perps, etc.)
+
+    // ── 1. Fresh wallet balances + mint addresses (for logos) ──────────────────
+    try {
+      const KNOWN_MINTS = {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+        "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
+        "So11111111111111111111111111111111111111112":   "SOL",
+        "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
+        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+      };
+      const [solJson, splJson] = await Promise.all([
+        jupFetch(SOLANA_RPC, { method:"POST", body:{ jsonrpc:"2.0", id:1, method:"getBalance", params:[walletAddress,{commitment:"confirmed"}] } }),
+        jupFetch(SOLANA_RPC, { method:"POST", body:{ jsonrpc:"2.0", id:2, method:"getTokenAccountsByOwner", params:[walletAddress,{programId:SPL_PROGRAM},{encoding:"jsonParsed",commitment:"confirmed"}] } }),
+      ]);
+      const sol = (solJson.result?.value || 0) / 1e9;
+      const balances = { SOL: sol };
+      const mintMap  = { SOL: "So11111111111111111111111111111111111111112" }; // sym → mint
+      for (const acc of (splJson.result?.value || [])) {
+        const info = acc.account.data.parsed.info;
+        const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === info.mint)?.[0]
+                 || KNOWN_MINTS[info.mint];
+        if (sym && info.tokenAmount.uiAmount > 0) {
+          balances[sym] = info.tokenAmount.uiAmount;
+          mintMap[sym]  = info.mint;
+        }
+      }
+      results.walletBalances = balances;
+      results.mintMap        = mintMap;
+      // Keep global portfolio state in sync
+      setPortfolio(balances);
+    } catch {}
+
+    // ── 2. Trigger v2 active orders (uses JWT from ref — no extra wallet sign needed) ──
+    if (trigJwtRef.current) {
+      try {
+        const trigRes = await fetch("/api/jupiter", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: `${JUP_TV2}/orders/history?state=active&limit=50&offset=0`,
+            method: "GET",
+            triggerJwt: trigJwtRef.current,
+          }),
+        });
+        const trigData = await trigRes.json();
+        results.triggerOrders = Array.isArray(trigData?.orders) ? trigData.orders : [];
+      } catch {}
+    }
+
+    // ── 3. Recurring / DCA orders ──────────────────────────────────────────────
+    try {
+      const recur = await jupFetch(`${JUP_RECUR_BASE}/getRecurringOrders?wallets=${walletAddress}&status=active`);
+      results.recurringOrders = Array.isArray(recur?.recurringOrders) ? recur.recurringOrders
+                              : Array.isArray(recur) ? recur : [];
+    } catch {}
+
+    // ── 4. Jupiter DeFi positions (perps, etc.) ───────────────────────────────
     try { results.defi = await jupFetch(`${JUP_PORTFOLIO}/positions/${walletAddress}`); } catch {}
-    // 2. Prediction market open positions
+
+    // ── 5. Prediction positions ───────────────────────────────────────────────
     try {
       const pred = await predFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletAddress}`);
       results.predPositions = Array.isArray(pred) ? pred : (pred?.data || []);
     } catch {}
-    // 3. Prediction market open orders
+
+    // ── 6. Prediction orders ──────────────────────────────────────────────────
     try {
       const orders = await predFetch(`${JUP_PRED_API}/orders?ownerPubkey=${walletAddress}`);
       results.predOrders = Array.isArray(orders) ? orders : (orders?.data || []);
     } catch {}
-    // 4. Earn (lend) positions
+
+    // ── 7. Earn positions ─────────────────────────────────────────────────────
     try {
-      // Jupiter Lend Earn positions: GET /lend/v1/earn/positions?wallets=<address>
       const earn = await jupFetch(`${JUP_EARN_API}/positions?wallets=${walletAddress}`);
-      if (!earn || earn.error) throw new Error("earn positions empty");
-      let earnArr = [];
-      if (Array.isArray(earn)) {
-        earnArr = earn;
-      } else if (earn && typeof earn === "object") {
-        earnArr = earn.data || earn.positions || earn.earnPositions
-               || earn.result || earn.items || earn.balances || [];
-        if (!Array.isArray(earnArr)) {
-          const vals = Object.values(earn).filter(v => v && typeof v === "object" && !Array.isArray(v));
-          earnArr = vals.length > 0 ? vals : [];
-        }
+      if (!earn || earn.error) throw new Error("empty");
+      let earnArr = Array.isArray(earn) ? earn
+        : earn.data || earn.positions || earn.earnPositions || earn.result || earn.items || earn.balances || [];
+      if (!Array.isArray(earnArr)) {
+        earnArr = Object.values(earn).filter(v => v && typeof v === "object" && !Array.isArray(v));
       }
       results.earnPositions = earnArr;
     } catch {}
+
     return results;
   };
 
@@ -3727,7 +3783,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           setShowPortfolio(true);
           setPortfolioData(null);
           const pData = await fetchPortfolioData(addr);
-          setPortfolioData({ ...pData, wallet: addr, solBalance: portfolio, prices });
+          setPortfolioData({ ...pData, wallet: addr, solBalance: pData?.walletBalances || portfolio, prices });
           setPortfolioLoading(false);
         }
 
@@ -5400,7 +5456,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               ) : (
                 <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
 
-                  {/* Token balances */}
+                  {/* ── Token Balances with real logos ── */}
                   <div>
                     <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
                       <SvgCoin size={13} color={T.accent}/>
@@ -5411,16 +5467,23 @@ Order: \`${orderKey.slice(0,20)}…\`
                         <div style={{ fontSize:12, color:T.text3 }}>No balances found.</div>
                       ) : (
                         Object.entries(portfolioData.solBalance || {}).map(([sym, bal]) => {
-                          const usdVal = portfolioData.prices?.[sym] ? (bal * portfolioData.prices[sym]) : null;
+                          const usdVal  = portfolioData.prices?.[sym] ? (bal * portfolioData.prices[sym]) : null;
+                          const mint    = portfolioData.mintMap?.[sym];
+                          const logoUrl = mint ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mint}/logo.png` : null;
                           return (
                             <div key={sym} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
                               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                                <div style={{ width:28, height:28, borderRadius:8, background:`linear-gradient(135deg, ${T.border}, ${T.surface})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:T.text2 }}>{sym.slice(0,2)}</div>
+                                <div style={{ width:30, height:30, borderRadius:"50%", overflow:"hidden", flexShrink:0, background:`linear-gradient(135deg, ${T.border}, ${T.surface})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:T.text2 }}>
+                                  {logoUrl
+                                    ? <img src={logoUrl} alt={sym} style={{ width:"100%", height:"100%", objectFit:"cover" }} onError={e => { e.target.style.display="none"; }} />
+                                    : sym.slice(0,2)
+                                  }
+                                </div>
                                 <span style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{sym}</span>
                               </div>
                               <div style={{ textAlign:"right" }}>
                                 <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{bal < 1 ? bal.toFixed(6) : bal.toFixed(4)}</div>
-                                {usdVal && <div style={{ fontSize:11, color:T.text3, marginTop:1 }}>${usdVal.toFixed(2)}</div>}
+                                {usdVal != null && <div style={{ fontSize:11, color:T.text3, marginTop:1 }}>${usdVal.toFixed(2)}</div>}
                               </div>
                             </div>
                           );
@@ -5429,7 +5492,74 @@ Order: \`${orderKey.slice(0,20)}…\`
                     </div>
                   </div>
 
-                  {/* DeFi positions */}
+                  {/* ── Active Trigger / Limit Orders ── */}
+                  {(portfolioData.triggerOrders||[]).length > 0 && (
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                        <SvgZap size={13} color={T.purple}/>
+                        <span style={{ fontSize:11, fontWeight:700, color:T.purple, letterSpacing:"0.08em", textTransform:"uppercase" }}>Limit / Trigger Orders</span>
+                        <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.triggerOrders.length}</span>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {portfolioData.triggerOrders.map((o, i) => {
+                          const typeLabel = o.orderType === "oco" ? "OCO" : o.orderType === "otoco" ? "OTOCO" : "Limit";
+                          const inSym  = o.inputMint  ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.inputMint)?.[0]  || o.inputMint.slice(0,4))  : "—";
+                          const outSym = o.outputMint ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.outputMint)?.[0] || o.outputMint.slice(0,4)) : "—";
+                          const trigPrice = o.triggerPriceUsd ? `$${parseFloat(o.triggerPriceUsd).toFixed(4)}` : null;
+                          const tpPrice   = o.tpPriceUsd  ? `TP $${parseFloat(o.tpPriceUsd).toFixed(4)}`  : null;
+                          const slPrice   = o.slPriceUsd  ? `SL $${parseFloat(o.slPriceUsd).toFixed(4)}`  : null;
+                          const inLogo  = o.inputMint  ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${o.inputMint}/logo.png`  : null;
+                          const outLogo = o.outputMint ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${o.outputMint}/logo.png` : null;
+                          return (
+                            <div key={o.id||i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.purpleBg}`, borderRadius:10, fontSize:12 }}>
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                                  {inLogo  && <img src={inLogo}  onError={e=>e.target.style.display="none"} style={{width:16,height:16,borderRadius:"50%",objectFit:"cover"}} />}
+                                  <span style={{ color:T.text1, fontWeight:600 }}>{inSym}</span>
+                                  <span style={{ color:T.text3 }}>→</span>
+                                  {outLogo && <img src={outLogo} onError={e=>e.target.style.display="none"} style={{width:16,height:16,borderRadius:"50%",objectFit:"cover"}} />}
+                                  <span style={{ color:T.text1, fontWeight:600 }}>{outSym}</span>
+                                </div>
+                                <span style={{ fontSize:10, padding:"2px 7px", background:T.purpleBg, borderRadius:6, color:T.purple, fontWeight:700 }}>{typeLabel}</span>
+                              </div>
+                              <div style={{ color:T.text3, fontSize:11 }}>
+                                {trigPrice && <span>Trigger: {trigPrice}  </span>}
+                                {tpPrice   && <span>{tpPrice}  </span>}
+                                {slPrice   && <span>{slPrice}</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Recurring / DCA Orders ── */}
+                  {(portfolioData.recurringOrders||[]).length > 0 && (
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                        <SvgArrowReturn size={13} color={T.teal}/>
+                        <span style={{ fontSize:11, fontWeight:700, color:T.teal, letterSpacing:"0.08em", textTransform:"uppercase" }}>Recurring / DCA</span>
+                        <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.recurringOrders.length}</span>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {portfolioData.recurringOrders.map((o, i) => {
+                          const inSym  = o.inputMint  ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.inputMint)?.[0]  || o.inputMint.slice(0,4))  : "—";
+                          const outSym = o.outputMint ? (Object.entries(TOKEN_MINTS).find(([,v])=>v===o.outputMint)?.[0] || o.outputMint.slice(0,4)) : "—";
+                          const cycleAmt = o.inAmountPerCycle ? (parseInt(o.inAmountPerCycle) / 1e6).toFixed(2) : "?";
+                          const cycleLabel = o.cycleFrequency ? (o.cycleFrequency >= 2592000 ? "monthly" : o.cycleFrequency >= 604800 ? "weekly" : "daily") : "";
+                          return (
+                            <div key={o.id||i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 12px", background:T.bg, border:`1px solid ${T.tealBg}`, borderRadius:10, fontSize:12 }}>
+                              <span style={{ color:T.text1, fontWeight:600 }}>{inSym} → {outSym}</span>
+                              <span style={{ color:T.teal, fontWeight:600 }}>${cycleAmt} {cycleLabel}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── DeFi Positions ── */}
                   {portfolioData.defi?.positions?.length > 0 && (
                     <div>
                       <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
@@ -5448,7 +5578,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                     </div>
                   )}
 
-                  {/* Earn positions */}
+                  {/* ── Earn Positions ── */}
                   {(() => {
                     const earnPos = (portfolioData.earnPositions||[]).filter(e => parseFloat(e.underlyingAssets||e.underlying_assets||0)>0 || parseFloat(e.shares||0)>0);
                     return earnPos.length > 0 ? (
@@ -5476,7 +5606,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                     ) : null;
                   })()}
 
-                  {/* Prediction positions */}
+                  {/* ── Prediction Positions ── */}
                   {(portfolioData.predPositions||[]).length > 0 && (
                     <div>
                       <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
