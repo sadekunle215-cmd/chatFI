@@ -7,12 +7,19 @@
 //       added missing cancel_mode u8 (params 58 bytes not 57),
 //       create escrow ATA as separate pre-instruction (matches Rust CLI pattern),
 //       event_authority + LOCK_PROGRAM appended to BOTH create and claim keys.
+//  v4 — FIX: discriminator was camelCase "createVestingEscrow"; Anchor requires
+//       snake_case "create_vesting_escrow" — confirmed from Rust CLI source:
+//       locker::instruction::CreateVestingEscrow { ... }.data() produces
+//       sha256("global:create_vesting_escrow")[0..8], NOT camelCase.
+//       Account order, params layout, and pre-ix pattern all confirmed correct
+//       against process_initialize_lock_escrow_from_file.rs source.
 
 import crypto from "crypto";
 
 const WSOL_MINT_STR = "So11111111111111111111111111111111111111112";
 
-// Anchor instruction discriminator: sha256("global:<name>")[0..8]
+// Anchor instruction discriminator: sha256("global:<snake_case_name>")[0..8]
+// IMPORTANT: Anchor ALWAYS uses snake_case function names, never camelCase.
 function disc(name) {
   return crypto.createHash("sha256").update(`global:${name}`).digest().slice(0, 8);
 }
@@ -54,12 +61,14 @@ export default async function handler(req, res) {
   const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
 
   // Anchor event authority PDA — required by ALL Jupiter Lock instructions.
-  // Omitting causes Custom error: 101 (InstructionFallbackNotFound).
+  // Seeds: ["__event_authority"], program: LOCK_PROGRAM
   const [eventAuthority] = PublicKey.findProgramAddressSync(
     [Buffer.from("__event_authority")],
     LOCK_PROGRAM
   );
 
+  // Escrow PDA: seeds = ["escrow", base_pubkey], program: LOCK_PROGRAM
+  // Confirmed from Rust: Pubkey::find_program_address(&[b"escrow", base_kp.pubkey().as_ref()], &locker::ID)
   function deriveEscrow(base) {
     return PublicKey.findProgramAddressSync(
       [Buffer.from("escrow"), base.toBuffer()],
@@ -72,6 +81,7 @@ export default async function handler(req, res) {
 
     // -------------------------------------------------------------------------
     // CREATE
+    // Follows: process_initialize_lock_escrow_from_file.rs → create_lock_escrow_for_an_user()
     // -------------------------------------------------------------------------
     if (action === "create") {
       const { funder, recipient, mint, amount, cliffSecs, vestingSecs } = req.body;
@@ -89,48 +99,51 @@ export default async function handler(req, res) {
       const amtBig  = BigInt(amount);
       const now     = BigInt(Math.floor(Date.now() / 1000));
 
-      // Single-period vesting: all tokens unlock at vestingStart + cliff + vesting
-      const cliffTime  = now + BigInt(cliff);  // absolute timestamp
+      // Single-period vesting: all tokens unlock at vestingStart + cliffSecs + vestingSecs
+      const cliffTime  = now + BigInt(cliff);  // absolute unix timestamp
       const frequency  = BigInt(vesting);       // one period = full duration
       const perPeriod  = amtBig;                // all tokens in one period
       const numPeriods = 1n;
 
+      // base is a fresh keypair each lock — escrow PDA derived from it
       const baseKeypair = Keypair.generate();
       const [escrowPDA] = deriveEscrow(baseKeypair.publicKey);
 
       const senderToken = await getAssociatedTokenAddress(mintKey, funderKey, false, TOKEN_PROGRAM_ID);
-      const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA,  true, TOKEN_PROGRAM_ID);
+      const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA,  true,  TOKEN_PROGRAM_ID);
 
       // ── Encode instruction data ──────────────────────────────────────────────
-      // Rust CreateVestingEscrowParameters fields (in order):
+      // Rust CreateVestingEscrowParameters fields (exact order from source):
       //   vesting_start_time   : u64  — 8 bytes
-      //   cliff_time           : u64  — 8 bytes  (absolute timestamp)
+      //   cliff_time           : u64  — 8 bytes
       //   frequency            : u64  — 8 bytes
       //   cliff_unlock_amount  : u64  — 8 bytes
       //   amount_per_period    : u64  — 8 bytes
       //   number_of_period     : u64  — 8 bytes
       //   update_recipient_mode: u8   — 1 byte
-      //   cancel_mode          : u8   — 1 byte  ← WAS MISSING (caused error 101)
-      // Total: 8 disc + 48 + 2 = 58 bytes
-      const CREATE_DISC = disc("createVestingEscrow");
+      //   cancel_mode          : u8   — 1 byte
+      // Total: 8 (disc) + 48 + 2 = 58 bytes
+      //
+      // v4 FIX: discriminator must be snake_case "create_vesting_escrow"
+      // Rust uses locker::instruction::CreateVestingEscrow{}.data()
+      // which hashes "global:create_vesting_escrow" — NOT camelCase.
+      const CREATE_DISC = disc("create_vesting_escrow"); // ← v4 FIX (was "createVestingEscrow")
       const params = Buffer.alloc(58);
       let off = 0;
       CREATE_DISC.copy(params, off); off += 8;
-      writeU64LE(params, now,        off); off += 8;
-      writeU64LE(params, cliffTime,  off); off += 8;
-      writeU64LE(params, frequency,  off); off += 8;
+      writeU64LE(params, now,        off); off += 8; // vesting_start_time
+      writeU64LE(params, cliffTime,  off); off += 8; // cliff_time (absolute)
+      writeU64LE(params, frequency,  off); off += 8; // frequency
       writeU64LE(params, 0n,         off); off += 8; // cliff_unlock_amount = 0
-      writeU64LE(params, perPeriod,  off); off += 8;
-      writeU64LE(params, numPeriods, off); off += 8;
+      writeU64LE(params, perPeriod,  off); off += 8; // amount_per_period
+      writeU64LE(params, numPeriods, off); off += 8; // number_of_period
       params.writeUInt8(0, off); off += 1;            // update_recipient_mode = 0
       params.writeUInt8(0, off);                      // cancel_mode = 0
 
-      // ── Account keys — matches Rust CreateVestingEscrowCtx exactly ───────────
-      // Rust order: base, escrow, escrow_token, recipient, sender, sender_token,
-      //             event_authority, program, token_program, system_program
-      //
-      // Previous version had: wrong position for recipient/sender, and incorrectly
-      // included mint, RENT, ASSOCIATED_TOKEN_PROGRAM_ID which are NOT in the ctx.
+      // ── Account keys ─────────────────────────────────────────────────────────
+      // Exact order from Rust CreateVestingEscrowCtx (process_initialize_lock_escrow_from_file.rs):
+      //   base, escrow, escrow_token, recipient, sender, sender_token,
+      //   event_authority, program, token_program, system_program
       const lockKeys = [
         { pubkey: baseKeypair.publicKey,   isSigner: true,  isWritable: false }, // base
         { pubkey: escrowPDA,               isSigner: false, isWritable: true  }, // escrow
@@ -155,7 +168,9 @@ export default async function handler(req, res) {
       tx.recentBlockhash = blockhash;
       tx.feePayer        = funderKey;
 
-      // Pre-create the escrow token ATA (separate ix, matches Rust CLI pattern)
+      // Pre-ix: create escrow token ATA before calling the lock program
+      // Confirmed from Rust: spl_associated_token_account::instruction::create_associated_token_account(
+      //   &keypair.pubkey(), &escrow, &token_mint, &token::ID)  — pushed BEFORE the lock ix
       tx.add(createAssociatedTokenAccountInstruction(
         funderKey, escrowToken, escrowPDA, mintKey,
         TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
@@ -176,7 +191,7 @@ export default async function handler(req, res) {
       }
 
       tx.add(lockIx);
-      tx.partialSign(baseKeypair); // base keypair must co-sign
+      tx.partialSign(baseKeypair); // base keypair co-signs (confirmed from Rust: &[&keypair, &base_kp])
 
       const serialized = Buffer.from(tx.serialize({ requireAllSignatures: false })).toString("base64");
 
@@ -209,12 +224,15 @@ export default async function handler(req, res) {
       const acctInfo = await connection.getAccountInfo(escrowKey);
       if (!acctInfo) return res.status(400).json({ error: "Escrow account not found" });
 
-      // mint at offset 40: 8 disc + 32 base = 40
+      // VestingEscrow layout (confirmed from process_verify_all_escrow_created.rs):
+      // 8 disc | 32 base | 32 mint | 32 sender | 32 recipient | ...
+      // mint starts at offset 40 (8 disc + 32 base)
       const mintKey = new PublicKey(acctInfo.data.slice(40, 72));
 
       const escrowATA    = await getAssociatedTokenAddress(mintKey, escrowKey,    true,  TOKEN_PROGRAM_ID);
       const recipientATA = await getAssociatedTokenAddress(mintKey, recipientKey, false, TOKEN_PROGRAM_ID);
 
+      // "claim" is already snake_case — discriminator is correct as-is
       const CLAIM_DISC = disc("claim");
       const maxAmt = Buffer.alloc(8);
       maxAmt.writeBigUInt64LE(BigInt("18446744073709551615"), 0); // u64::MAX = claim all
@@ -228,13 +246,12 @@ export default async function handler(req, res) {
         { pubkey: mintKey,                 isSigner: false, isWritable: false },
         { pubkey: TOKEN_PROGRAM_ID,        isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: eventAuthority,          isSigner: false, isWritable: false }, // required
-        { pubkey: LOCK_PROGRAM,            isSigner: false, isWritable: false }, // required
+        { pubkey: eventAuthority,          isSigner: false, isWritable: false },
+        { pubkey: LOCK_PROGRAM,            isSigner: false, isWritable: false },
       ];
 
       const claimIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys: claimKeys, data });
 
-      // Create recipient ATA if it doesn't exist (no-op on-chain if already exists)
       const createAta = createAssociatedTokenAccountInstruction(
         recipientKey, recipientATA, recipientKey, mintKey,
         TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
@@ -253,6 +270,9 @@ export default async function handler(req, res) {
 
     // -------------------------------------------------------------------------
     // ACCOUNTS — fetch + decode on-chain escrows for a wallet
+    // VestingEscrow field layout confirmed from process_verify_all_escrow_created.rs:
+    //   recipient, vesting_start_time, cliff_time, cliff_unlock_amount,
+    //   frequency, amount_per_period, number_of_period, update_recipient_mode, cancel_mode
     // -------------------------------------------------------------------------
     if (action === "accounts") {
       const { wallet } = req.body;
@@ -261,7 +281,9 @@ export default async function handler(req, res) {
       const walletPk = new PublicKey(wallet);
       const now      = Math.floor(Date.now() / 1000);
 
-      // VestingEscrow on-chain size: 200 bytes. sender @ 72, recipient @ 104.
+      // VestingEscrow on-chain layout:
+      // 8 disc | 32 base | 32 mint | 32 sender | 32 recipient | ...
+      // sender @ offset 72, recipient @ offset 104
       const [asSender, asRecipient] = await Promise.all([
         connection.getProgramAccounts(LOCK_PROGRAM, {
           filters: [{ dataSize: 200 }, { memcmp: { offset: 72,  bytes: walletPk.toBase58() } }],
@@ -286,15 +308,19 @@ export default async function handler(req, res) {
         const sender    = new PublicKey(buf.slice(o, o += 32)).toBase58();
         const recipient = new PublicKey(buf.slice(o, o += 32)).toBase58();
 
-        const startTime       = Number(buf.readBigUInt64LE(o)); o += 8;
-        const frequency       = Number(buf.readBigUInt64LE(o)); o += 8;
-        const cliffUnlockAmt  = Number(buf.readBigUInt64LE(o)); o += 8;
-        const amountPerPeriod = Number(buf.readBigUInt64LE(o)); o += 8;
-        const numberOfPeriod  = Number(buf.readBigUInt64LE(o)); o += 8;
-        const totalClaimed    = Number(buf.readBigUInt64LE(o)); o += 8;
-        const cliffTime       = Number(buf.readBigUInt64LE(o));
+        // Field order confirmed from process_verify_all_escrow_created.rs assertions:
+        // vesting_start_time, cliff_time, cliff_unlock_amount, frequency,
+        // amount_per_period, number_of_period
+        const startTime       = Number(buf.readBigUInt64LE(o)); o += 8; // vesting_start_time
+        const cliffTime       = Number(buf.readBigUInt64LE(o)); o += 8; // cliff_time (absolute)
+        const cliffUnlockAmt  = Number(buf.readBigUInt64LE(o)); o += 8; // cliff_unlock_amount
+        const frequency       = Number(buf.readBigUInt64LE(o)); o += 8; // frequency
+        const amountPerPeriod = Number(buf.readBigUInt64LE(o)); o += 8; // amount_per_period
+        const numberOfPeriod  = Number(buf.readBigUInt64LE(o)); o += 8; // number_of_period
+        const totalClaimed    = Number(buf.readBigUInt64LE(o));          // total_claimed (after)
 
-        const cliffEnd       = startTime + cliffTime;
+        // cliff_time is absolute — cliffEnd IS cliff_time
+        const cliffEnd       = cliffTime;
         const elapsed        = Math.max(now - cliffEnd, 0);
         const periodsElapsed = frequency > 0 ? Math.floor(elapsed / frequency) : 0;
         const totalVested    = Math.min(
