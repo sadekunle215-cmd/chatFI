@@ -3224,13 +3224,15 @@ export default function JupChat() {
     return verRes.token;
   };
 
-  // Ensure we have a valid JWT — re-authenticate if missing
-  const getOrRefreshTrigJwt = async () => {
-    if (trigJwtRef.current) return trigJwtRef.current;
+  // Ensure we have a valid JWT — re-authenticate if missing or forced
+  const getOrRefreshTrigJwt = async (force = false) => {
+    if (!force && trigJwtRef.current) return trigJwtRef.current;
+    trigJwtRef.current = null; // clear stale token before re-auth
     return trigV2Authenticate();
   };
 
   // jupFetch wrapper that injects JWT Bearer header
+  // If Jupiter returns 401/Unauthorized, clears the token and retries once with fresh auth
   const trigV2Fetch = async (url, opts = {}) => {
     const jwt = await getOrRefreshTrigJwt();
     const payload = { url, method: (opts.method || "GET").toUpperCase(), triggerJwt: jwt };
@@ -3240,15 +3242,27 @@ export default function JupChat() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    return res.json();
+    const data = await res.json();
+    // If unauthorized, clear JWT and retry once with fresh auth
+    if (data?.error === "Unauthorized" || res.status === 401) {
+      const freshJwt = await getOrRefreshTrigJwt(true);
+      payload.triggerJwt = freshJwt;
+      const retry = await fetch("/api/jupiter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      return retry.json();
+    }
+    return data;
   };
 
   // ── Trigger v2: get or register vault ────────────────────────────────────────
   const trigV2GetVault = async () => {
     let v = await trigV2Fetch(`${JUP_TV2}/vault`);
     if (v?.vaultPubkey) return v;
-    // First-time — register
-    v = await trigV2Fetch(`${JUP_TV2}/vault/register`);
+    // First-time — register (POST, not GET)
+    v = await trigV2Fetch(`${JUP_TV2}/vault/register`, { method: "POST" });
     if (!v?.vaultPubkey) throw new Error("Could not register vault: " + JSON.stringify(v));
     return v;
   };
