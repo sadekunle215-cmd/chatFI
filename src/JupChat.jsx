@@ -455,23 +455,32 @@ const fmt = (text = "") => {
 
       html += `<div style="display:flex;flex-direction:column;gap:5px;margin:10px 0">`;
       for (const item of items) {
+        // Extract optional leading [img:URL] logo tag before matching
+        const imgMatch = item.content.match(/^\[img:([^\]]+)\]/);
+        const logoSrc  = imgMatch ? imgMatch[1] : null;
+        const content  = imgMatch ? item.content.slice(imgMatch[0].length) : item.content;
+
         // Parse "**SYMBOL** — Name ✓ $price (+x%) · score N" or "SYMBOL — Name ✓ $price (+x%) · score N"
-        const tokenMatch = item.content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+-]+)\s+\(([^)]+)\)(?:\s+[·•]\s+score\s+(\d+))?/);
+        const tokenMatch = content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+-]+)\s+\(([^)]+)\)(?:\s+[·•]\s+score\s+(\d+))?/);
         if (tokenMatch) {
           const [, sym, name, price, change, score] = tokenMatch;
           const isUp = change.startsWith("+");
-          const isVerified = item.content.includes("✓");
+          const isVerified = content.includes("✓");
           const changeColor = isUp ? "#68d391" : "#fc8181";
           const changeBg = isUp ? "rgba(104,211,145,0.1)" : "rgba(252,129,129,0.1)";
           const scoreNum = score ? parseInt(score) : null;
           const scoreColor = scoreNum >= 90 ? "#c7f284" : scoreNum >= 70 ? "#68d391" : "#8fa8b8";
           const rankNum = parseInt(item.num);
           const rankColor = rankNum === 1 ? "#f6d860" : rankNum === 2 ? "#c0c0c0" : rankNum === 3 ? "#cd7f32" : "#2d4a5a";
+          const logoHtml = logoSrc
+            ? `<img src="${logoSrc}" alt="${sym}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid #1e2d3d;" onerror="this.style.display='none'">`
+            : `<div style="width:28px;height:28px;border-radius:50%;background:#1e2d3d;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#4d6a7a">${sym.slice(0,2)}</div>`;
 
           html += `<div style="display:flex;align-items:center;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;">
             <div style="width:3px;align-self:stretch;background:${rankNum<=3 ? rankColor : "#1e2d3d"};flex-shrink:0"></div>
             <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;flex:1;min-width:0">
               <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;flex-shrink:0">${item.num}</span>
+              ${logoHtml}
               <div style="flex:1;min-width:0;overflow:hidden">
                 <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
                   <span style="font-size:13px;font-weight:700;color:#e8f4f0;letter-spacing:-0.2px">${sym.replace(/✓/g,"").trim()}</span>
@@ -494,7 +503,7 @@ const fmt = (text = "") => {
             <div style="width:3px;align-self:stretch;background:${rankNum<=3 ? rankColor : "#1e2d3d"};flex-shrink:0"></div>
             <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;flex:1">
               <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;padding-top:2px;flex-shrink:0">${item.num}</span>
-              <span style="font-size:13px;color:#e8f4f0;line-height:1.5">${inlineMd(item.content)}</span>
+              <span style="font-size:13px;color:#e8f4f0;line-height:1.5">${inlineMd(content)}</span>
             </div>
           </div>`;
         }
@@ -1176,12 +1185,18 @@ export default function JupChat() {
     if (!tokens?.length) return "No tokens found.";
     return tokens.slice(0, limit).map((t, i) => {
       const sym   = t.symbol || t.id?.slice(0,6) || "?";
+      const mint  = t.id || t.address || "";
       const name  = t.name ? ` — ${t.name.slice(0,22)}` : "";
       const price = t.usdPrice ? ` $${t.usdPrice < 0.001 ? t.usdPrice.toExponential(2) : t.usdPrice < 1 ? t.usdPrice.toFixed(4) : t.usdPrice.toFixed(2)}` : "";
       const chg   = t.stats24h?.priceChange != null ? ` (${t.stats24h.priceChange > 0 ? "+" : ""}${t.stats24h.priceChange.toFixed(1)}%)` : "";
       const score = t.organicScore != null ? ` · score ${Math.round(t.organicScore)}` : "";
       const ver   = t.isVerified ? " ✓" : "";
-      return `${i + 1}. **${sym}**${name}${ver}${price}${chg}${score}`;
+      // Resolve logo: v2 icon → v1 logoURI → normalized logo_url → known static map → img.jup.ag CDN
+      const logoUrl = t.icon || t.logoURI || t.logo_url
+        || TOKEN_LOGO_URLS[sym.toUpperCase()]
+        || (mint ? `https://img.jup.ag/tokens/${mint}` : "");
+      const logoTag = logoUrl ? `[img:${logoUrl}]` : "";
+      return `${i + 1}. ${logoTag}**${sym}**${name}${ver}${price}${chg}${score}`;
     }).join("\n");
   };
 
