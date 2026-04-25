@@ -644,74 +644,100 @@ function TokenPicker({ value, onSelect, jupFetch }) {
   );
 }
 
-// ─── Token price chart (GeckoTerminal OHLCV, no API key needed) ──────────────
-function TokenMiniChart({ mint }) {
-  const [data,    setData]    = useState(null);
+// ─── Token price chart (GeckoTerminal → CoinGecko fallback, no API key) ───────
+function TokenMiniChart({ mint, T }) {
+  const [data,    setData]    = useState(null);  // [{ t, p }]
   const [loading, setLoading] = useState(true);
   const [range,   setRange]   = useState("1D");
-  const [err,     setErr]     = useState(false);
+  const abortRef = useRef(null);
 
   useEffect(() => {
-    if (!mint) return;
-    setLoading(true); setErr(false); setData(null);
-    const cfg = {
-      "1D":  { gran:"hour", agg:1,  lim:24 },
-      "7D":  { gran:"hour", agg:4,  lim:42 },
-      "30D": { gran:"day",  agg:1,  lim:30 },
-    }[range] || { gran:"hour", agg:1, lim:24 };
-    fetch(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/ohlcv/${cfg.gran}?aggregate=${cfg.agg}&limit=${cfg.lim}`)
-      .then(r => r.json())
-      .then(d => {
-        const list = d?.data?.attributes?.ohlcv_list;
-        if (!list?.length) { setErr(true); setLoading(false); return; }
-        setData(list.map(([ts,,,,close]) => ({ t: ts * 1000, p: parseFloat(close) })));
-        setLoading(false);
+    if (!mint) { setLoading(false); return; }
+    // Cancel any previous in-flight fetch
+    if (abortRef.current) abortRef.current.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    setLoading(true); setData(null);
+
+    const daysCfg = { "1D":1, "7D":7, "30D":30 }[range] || 1;
+    const gtCfg   = { "1D":{ gran:"hour",agg:1,lim:24 }, "7D":{ gran:"hour",agg:4,lim:42 }, "30D":{ gran:"day",agg:1,lim:30 } }[range];
+
+    const tryGeckoTerminal = () =>
+      fetch(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mint}/ohlcv/${gtCfg.gran}?aggregate=${gtCfg.agg}&limit=${gtCfg.lim}`, { signal: ctrl.signal })
+        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(d => {
+          const list = d?.data?.attributes?.ohlcv_list;
+          if (!list?.length) throw new Error("empty");
+          return list.map(([ts,,,,close]) => ({ t: ts * 1000, p: parseFloat(close) })).filter(d => d.p > 0);
+        });
+
+    const tryCoinGecko = () =>
+      fetch(`https://api.coingecko.com/api/v3/coins/solana/contract/${mint}/market_chart?vs_currency=usd&days=${daysCfg}`, { signal: ctrl.signal })
+        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(d => {
+          const pts = d?.prices;
+          if (!pts?.length) throw new Error("empty");
+          const step = Math.max(1, Math.floor(pts.length / 36));
+          return pts.filter((_, i) => i % step === 0).map(([t, p]) => ({ t, p }));
+        });
+
+    tryGeckoTerminal()
+      .catch(() => tryCoinGecko())
+      .then(pts => {
+        if (!ctrl.signal.aborted) { setData(pts); setLoading(false); }
       })
-      .catch(() => { setErr(true); setLoading(false); });
+      .catch(() => {
+        if (!ctrl.signal.aborted) setLoading(false);
+      });
+
+    return () => ctrl.abort();
   }, [mint, range]);
 
+  const BD = "#1e2d3d";
   const ranges = ["1D","7D","30D"];
-  const borderColor = "#1e2d3d";
 
+  // Skeleton — always show while loading so user knows the chart section is there
   if (loading) return (
-    <div style={{ padding:"12px 0" }}>
+    <div style={{ padding:"12px 14px", background:(T||{}).bg||"#0d1117", border:`1px solid ${BD}`, borderRadius:12, marginBottom:0 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
         <span style={{ fontSize:10, color:"#4d6a7a", letterSpacing:"0.08em", textTransform:"uppercase" }}>Price Chart</span>
         <div style={{ display:"flex", gap:4 }}>
-          {ranges.map(r => <button key={r} onClick={() => setRange(r)} style={{ padding:"2px 8px", borderRadius:6, fontSize:10, fontWeight:600, background:"none", border:`1px solid ${borderColor}`, color:"#4d6a7a", cursor:"pointer" }}>{r}</button>)}
+          {ranges.map(r => <button key={r} onClick={() => setRange(r)} style={{ padding:"2px 8px", borderRadius:6, fontSize:10, background:"none", border:`1px solid ${BD}`, color:"#4d6a7a", cursor:"pointer" }}>{r}</button>)}
         </div>
       </div>
-      <div style={{ height:72, background:"linear-gradient(90deg,#161e27 25%,#1e2d3d 50%,#161e27 75%)", backgroundSize:"200% 100%", animation:"shimmer 1.4s infinite", borderRadius:8 }}/>
+      <div style={{ height:72, borderRadius:8, background:"linear-gradient(90deg,#0d1117 25%,#1e2d3d 50%,#0d1117 75%)", backgroundSize:"200% 100%", animation:"shimmer 1.4s infinite" }}/>
     </div>
   );
 
-  if (err || !data?.length) return null;
+  // No data from either source — render nothing (no ghost border)
+  if (!data?.length) return null;
 
   const prices = data.map(d => d.p);
   const min = Math.min(...prices), max = Math.max(...prices);
-  const W = 300, H = 72;
-  const px = (i) => (i / (prices.length - 1)) * W;
-  const py = (p) => H - ((p - min) / ((max - min) || 1)) * (H - 4) - 2;
-  const linePts  = prices.map((p, i) => `${px(i)},${py(p)}`).join(" ");
-  const areaPts  = `0,${H} ${linePts} ${W},${H}`;
-  const isUp     = prices[prices.length - 1] >= prices[0];
-  const color    = isUp ? "#68d391" : "#fc8181";
-  const gradId   = `cg-${mint.slice(0,8)}`;
-
-  const fmtLabel = (ts) => {
+  const W = 300, H = 72, PAD = 3;
+  const px = i  => (i / (prices.length - 1)) * W;
+  const py = p  => H - PAD - ((p - min) / ((max - min) || min * 0.001 || 1)) * (H - PAD * 2);
+  const linePts = prices.map((p, i) => `${px(i).toFixed(1)},${py(p).toFixed(1)}`).join(" ");
+  const areaPts = `0,${H} ${linePts} ${W},${H}`;
+  const isUp    = prices[prices.length - 1] >= prices[0];
+  const color   = isUp ? "#68d391" : "#fc8181";
+  const gradId  = `mcg-${mint.slice(0,6)}`;
+  const pct     = prices[0] > 0 ? ((prices[prices.length-1] - prices[0]) / prices[0] * 100) : 0;
+  const fmtT    = ts => {
     const d = new Date(ts);
-    if (range === "30D") return d.toLocaleDateString(undefined, { month:"short", day:"numeric" });
-    return d.toLocaleTimeString(undefined, { hour:"2-digit", minute:"2-digit" });
+    return range === "30D"
+      ? d.toLocaleDateString(undefined, { month:"short", day:"numeric" })
+      : d.toLocaleTimeString(undefined, { hour:"2-digit", minute:"2-digit" });
   };
-  const first = data[0], last = data[data.length - 1];
-  const pct = first.p > 0 ? ((last.p - first.p) / first.p * 100) : 0;
 
   return (
-    <div style={{ padding:"12px 0 4px" }}>
+    <div style={{ padding:"12px 14px", background:(T||{}).bg||"#0d1117", border:`1px solid ${BD}`, borderRadius:12 }}>
+      {/* Header */}
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <span style={{ fontSize:10, color:"#4d6a7a", letterSpacing:"0.08em", textTransform:"uppercase" }}>Price Chart</span>
-          <span style={{ fontSize:11, fontWeight:700, color, background: isUp ? "#68d39122" : "#fc818122", borderRadius:6, padding:"1px 7px" }}>
+          <span style={{ fontSize:11, fontWeight:700, color, background:color+"22", borderRadius:6, padding:"1px 7px" }}>
             {pct >= 0 ? "+" : ""}{pct.toFixed(2)}%
           </span>
         </div>
@@ -719,32 +745,33 @@ function TokenMiniChart({ mint }) {
           {ranges.map(r => (
             <button key={r} onClick={() => setRange(r)} style={{
               padding:"2px 8px", borderRadius:6, fontSize:10, fontWeight:600, cursor:"pointer",
-              background: range === r ? color + "22" : "none",
-              border: `1px solid ${range === r ? color : borderColor}`,
+              background: range === r ? color+"22" : "none",
+              border: `1px solid ${range === r ? color : BD}`,
               color: range === r ? color : "#4d6a7a",
             }}>{r}</button>
           ))}
         </div>
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:"100%", height:H, display:"block", overflow:"visible" }}>
+      {/* SVG chart */}
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:"100%", height:H, display:"block" }}>
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.28"/>
-            <stop offset="100%" stopColor={color} stopOpacity="0"/>
+            <stop offset="0%" stopColor={color} stopOpacity="0.3"/>
+            <stop offset="100%" stopColor={color} stopOpacity="0.02"/>
           </linearGradient>
         </defs>
         <polygon points={areaPts} fill={`url(#${gradId})`}/>
-        <polyline points={linePts} fill="none" stroke={color} strokeWidth="1.8"
+        <polyline points={linePts} fill="none" stroke={color} strokeWidth="2"
           strokeLinejoin="round" strokeLinecap="round"/>
-        {/* End dot */}
-        <circle cx={px(prices.length-1)} cy={py(prices[prices.length-1])} r="3"
+        <circle cx={px(prices.length-1)} cy={py(prices[prices.length-1])} r="3.5"
           fill={color} stroke="#0d1117" strokeWidth="1.5"/>
       </svg>
 
-      <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#4d6a7a", marginTop:3 }}>
-        <span>{fmtLabel(first.t)}</span>
-        <span>{fmtLabel(last.t)}</span>
+      {/* Time labels */}
+      <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#4d6a7a", marginTop:4 }}>
+        <span>{fmtT(data[0].t)}</span>
+        <span>{fmtT(data[data.length-1].t)}</span>
       </div>
     </div>
   );
@@ -5032,11 +5059,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                 <div style={{ padding:14, display:"flex", flexDirection:"column", gap:12 }}>
 
                   {/* ── Price Chart ── */}
-                  {mint && (
-                    <div style={{ padding:"4px 12px 8px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:12 }}>
-                      <TokenMiniChart mint={mint} />
-                    </div>
-                  )}
+                  {mint && <TokenMiniChart mint={mint} T={T} />}
 
                   {/* ── Market Data Grid ── */}
                   <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
