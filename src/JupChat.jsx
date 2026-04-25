@@ -1223,6 +1223,7 @@ export default function JupChat() {
     if (!name.trim() || !symbol.trim()) return;
     if (!studioImage) { push("ai", "Please upload a token image before launching."); return; }
     setStudioStatus("signing");
+    let succeeded = false;
     try {
       // ── Preset configs per Jupiter Studio docs ──
       const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -1333,12 +1334,15 @@ export default function JupChat() {
       }
       if (submitData.error) throw new Error(submitData.error?.message || JSON.stringify(submitData.error));
 
+      succeeded = true;
       setStudioResult({ mintAddress: mint, poolAddress: submitData.poolAddress });
       setStudioStatus("done");
       push("ai", `**Token created ✓**\n\n**${name.trim()} (${symbol.trim().toUpperCase()})** is live on Jupiter Studio!\n\nMint: \`${mint}\`\n\nView on: [jup.ag/studio/${mint}](https://jup.ag/studio/${mint}) · [Solscan](https://solscan.io/token/${mint})\n\nCreator fees will accrue as people trade your DBC pool.`);
     } catch (err) {
-      if (studioStatus !== "done") setStudioStatus("error");
-      push("ai", `Token creation failed: ${err?.message}\n\nTip: Make sure your wallet has enough SOL for pool creation (~0.05–0.1 SOL).`);
+      if (!succeeded) {
+        setStudioStatus("error");
+        push("ai", `Token creation failed: ${err?.message}\n\nTip: Make sure your wallet has enough SOL for pool creation (~0.05–0.1 SOL).`);
+      }
     }
   };
 
