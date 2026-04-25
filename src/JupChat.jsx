@@ -185,6 +185,25 @@ const TOKEN_DECIMALS = {
   MSOL:9, JITOSOL:9, BSOL:9, SAMO:9, ORCA:6, POPCAT:9, TRUMP:6,
 };
 
+// Reliable logo URLs — img.jup.ag blocks cross-origin hotlinks from non-jup.ag origins
+const TOKEN_LOGO_URLS = {
+  SOL:     "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+  USDC:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png",
+  USDT:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.svg",
+  JUP:     "https://static.jup.ag/jup/icon.png",
+  BONK:    "https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I",
+  WIF:     "https://bafkreibk3covs5ltyqxa272uodhculbgn2k7znl3yqco6hkvuoknoce5a.ipfs.nftstorage.link",
+  RAY:     "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R/logo.png",
+  MSOL:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So/logo.png",
+  JITOSOL: "https://storage.googleapis.com/token-metadata/JitoSOL-256.png",
+  BSOL:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1/logo.png",
+  ORCA:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE/logo.png",
+  SAMO:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU/logo.png",
+  PYTH:    "https://pyth.network/token.svg",
+  POPCAT:  "https://bafkreifonkfmn75h5cdxdlkjkjzzgskvifndrpofb3fbgqxdktfzpkiebe.ipfs.nftstorage.link",
+  TRUMP:   "https://bafkreia4g6tdumxzs3yuumfyixxwtlzqkjexifb44lprpioexmzblbq4y4.ipfs.nftstorage.link",
+};
+
 // Jupiter Prediction categories (per official API docs)
 const PRED_CATEGORIES = ["sports","crypto","politics","esports","culture","economics","tech"];
 
@@ -1181,7 +1200,7 @@ export default function JupChat() {
           const uiAmt = rawBals["SOL"].uiAmount || 0;
           balances["SOL"] = uiAmt;
           mintMap["SOL"]  = "So11111111111111111111111111111111111111112";
-          logoMap["SOL"]  = "https://img.jup.ag/tokens/So11111111111111111111111111111111111111112";
+          logoMap["SOL"]  = "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png";
         }
 
         // All other keys are mint addresses
@@ -1216,7 +1235,7 @@ export default function JupChat() {
           if (sym) {
             balances[sym] = uiAmt;
             mintMap[sym]  = mint;
-            logoMap[sym]  = "https://img.jup.ag/tokens/" + mint;
+            logoMap[sym]  = TOKEN_LOGO_URLS[sym] || "https://img.jup.ag/tokens/" + mint;
             if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
           } else {
             unknownMints.push({ mint, uiAmt });
@@ -3895,11 +3914,8 @@ Order: \`${orderKey.slice(0,20)}…\`
           setShowPortfolio(true);
           setPortfolioData(null);
           const pData = await fetchPortfolioData(addr);
-          // Build fallback logoMap from TOKEN_MINTS so known tokens always show logos
-          const fallbackLogoMap = Object.fromEntries(
-            Object.entries(TOKEN_MINTS).map(([sym, mint]) => [sym, `https://img.jup.ag/tokens/${mint}`])
-          );
-          const mergedLogoMap = { ...fallbackLogoMap, ...(pData?.logoMap || {}) };
+          // Merge reliable known logos (TOKEN_LOGO_URLS) with any logos fetched by the API
+          const mergedLogoMap = { ...TOKEN_LOGO_URLS, ...(pData?.logoMap || {}) };
           setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices });
           setPortfolioLoading(false);
         }
