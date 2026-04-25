@@ -618,7 +618,20 @@ function TokenPicker({ value, onSelect, jupFetch }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function JupChat() {
-  const [msgs, setMsgs] = useState([{ id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" }]);
+  // ── Message persistence — survive page refresh ────────────────────────────
+  const MSGS_KEY = "chatfi-msgs-v1";
+  const loadPersistedMsgs = () => {
+    try {
+      const raw = localStorage.getItem(MSGS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return null;
+  };
+  const WELCOME_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" };
+  const [msgs, setMsgs] = useState(() => loadPersistedMsgs() || [WELCOME_MSG]);
   const [showWalletModal, setShowWalletModal] = useState(false);
   // WalletConnect state
   const [wcStatus, setWcStatus]   = useState("idle"); // "idle" | "loading" | "waiting" | "connected"
@@ -1289,10 +1302,13 @@ export default function JupChat() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(createPayload),
         });
-        createData = await directRes.json();
+        const directText = await directRes.text();
+        try { createData = JSON.parse(directText); }
+        catch { throw new Error(`Studio API error (${directRes.status}): ${directText.slice(0, 200)}`); }
       }
-      if (createData.error) throw new Error(createData.error?.message || JSON.stringify(createData.error));
-      if (!createData.transaction) throw new Error("No transaction returned from Studio API.");
+      console.log("[Studio create-tx]", JSON.stringify(createData).slice(0, 400));
+      if (createData.error) throw new Error(createData.error?.message || createData.error?.msg || JSON.stringify(createData.error));
+      if (!createData.transaction) throw new Error(`No transaction returned. API said: ${JSON.stringify(createData).slice(0, 200)}`);
 
       const { transaction: txB64, imagePresignedUrl, metadataPresignedUrl, imageUrl, mint } = createData;
 
@@ -3544,6 +3560,14 @@ Order: \`${orderKey.slice(0,20)}…\`
     return id;
   };
 
+  // Save messages to localStorage on every update (keep last 200 to cap storage)
+  useEffect(() => {
+    try {
+      const toSave = msgs.slice(-200);
+      localStorage.setItem(MSGS_KEY, JSON.stringify(toSave));
+    } catch {}
+  }, [msgs]);
+
   // ── Reown connection sync ────────────────────────────────────────────────────
   // Keeps local wallet/walletFull state in sync with Reown's connected account.
   useEffect(() => {
@@ -4210,7 +4234,7 @@ Order: \`${orderKey.slice(0,20)}…\`
             )}
           </div>
           <div style={{ padding:"10px 8px" }}>
-            <button onClick={() => { histRef.current=[]; setMsgs([{id:Date.now(),role:"ai",text:"New conversation started. How can I help?"}]); setChatHistory(h=>[{id:Date.now(),title:"New conversation",active:true},...h.map(c=>({...c,active:false}))]); }}
+            <button onClick={() => { histRef.current=[]; localStorage.removeItem(MSGS_KEY); setMsgs([{id:Date.now(),role:"ai",text:"New conversation started. How can I help?"}]); setChatHistory(h=>[{id:Date.now(),title:"New conversation",active:true},...h.map(c=>({...c,active:false}))]); }}
               style={{ width:"100%", padding:"8px 12px", background:"transparent", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer", textAlign:"left", display:"flex", alignItems:"center", gap:8 }}
               className="hov-row">
               <span style={{ fontSize:16 }}>+</span> New chat
@@ -5981,7 +6005,12 @@ Order: \`${orderKey.slice(0,20)}…\`
               {studioStatus === "done" && studioResult ? (
                 <div>
                   <div style={{ padding:"16px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:10, marginBottom:16, textAlign:"center" }}>
-                    <div style={{ fontSize:28, marginBottom:8 }}>🎉</div>
+                    <div style={{ marginBottom:10, display:"flex", justifyContent:"center" }}>
+                      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke={T.green} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                        <polyline points="22 4 12 14.01 9 11.01"/>
+                      </svg>
+                    </div>
                     <div style={{ fontSize:15, fontWeight:700, color:T.green, marginBottom:4 }}>Token Launched Successfully!</div>
                     <div style={{ fontSize:12, color:T.text2, marginBottom:12 }}>{studioCfg.name} ({studioCfg.symbol.toUpperCase()}) is now live on Jupiter</div>
                     <div style={{ background:T.bg, borderRadius:8, padding:"8px 12px", marginBottom:10, fontSize:11, color:T.text3, wordBreak:"break-all", textAlign:"left" }}>
@@ -6021,13 +6050,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                     <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Launch Preset</div>
                     <div style={{ display:"flex", gap:8 }}>
                       {[
-                        { id:"meme",  label:"🐸 Meme",  desc:"16K→69K MC, raises ~18K USDC, no vesting" },
-                        { id:"indie", label:"🚀 Indie",  desc:"32K→240K MC, raises ~58K USDC + 10% vesting" },
-                        { id:"custom",label:"⚙️ Custom", desc:"Set your own market cap & vesting" },
+                        { id:"meme",   label:"Meme",   icon:<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="9" r="2"/><circle cx="15" cy="9" r="2"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M8 15s1.5 2 4 2 4-2 4-2"/></svg>,  desc:"16K→69K MC, raises ~18K USDC, no vesting" },
+                        { id:"indie",  label:"Indie",  icon:<SvgRocket size={13}/>, desc:"32K→240K MC, raises ~58K USDC + 10% vesting" },
+                        { id:"custom", label:"Custom", icon:<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93A10 10 0 0 0 12 2C6.48 2 2 6.48 2 12s4.48 10 10 10a10 10 0 0 0 7.07-2.93"/><path d="M20.45 20.45A10 10 0 0 0 22 12"/></svg>, desc:"Set your own market cap & vesting" },
                       ].map(p => (
                         <button key={p.id} onClick={() => setStudioCfg(c=>({...c,preset:p.id,useCustomVesting:p.id==="custom"}))}
                           style={{ flex:1, padding:"8px 10px", borderRadius:8, border:`1px solid ${studioCfg.preset===p.id ? T.accent : T.border}`, background: studioCfg.preset===p.id ? T.accentBg : T.bg, color: studioCfg.preset===p.id ? T.accent : T.text2, fontSize:11, cursor:"pointer", textAlign:"left" }}>
-                          <div style={{ fontWeight:600 }}>{p.label}</div>
+                          <div style={{ fontWeight:600, display:"flex", alignItems:"center", gap:5 }}>{p.icon}{p.label}</div>
                           <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{p.desc}</div>
                         </button>
                       ))}
@@ -6155,7 +6184,10 @@ Order: \`${orderKey.slice(0,20)}…\`
                   {/* Advanced Settings — Custom only */}
                   {studioCfg.preset === "custom" && (
                     <div style={{ marginBottom:12, padding:"12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>
-                      <div style={{ fontSize:11, color:T.text2, fontWeight:600, marginBottom:10 }}>⚙️ Advanced Settings</div>
+                      <div style={{ fontSize:11, color:T.text2, fontWeight:600, marginBottom:10, display:"flex", alignItems:"center", gap:6 }}>
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.text2} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93A10 10 0 0 0 12 2C6.48 2 2 6.48 2 12s4.48 10 10 10a10 10 0 0 0 7.07-2.93"/><path d="M20.45 20.45A10 10 0 0 0 22 12"/></svg>
+                        Advanced Settings
+                      </div>
                       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                         <div>
                           <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Creator Fee (bps)</div>
@@ -6186,8 +6218,9 @@ Order: \`${orderKey.slice(0,20)}…\`
                     </div>
                   )}
                   {studioStatus === "error" && (
-                    <div style={{ padding:"10px 12px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.red }}>
-                      ✗ Creation failed. Check your wallet has enough SOL (~0.05–0.1 SOL for pool creation) and try again.
+                    <div style={{ padding:"10px 12px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, marginBottom:12, fontSize:12, color:T.red, display:"flex", alignItems:"center", gap:8 }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.red} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                      Creation failed. Check your wallet has enough SOL (~0.05–0.1 SOL for pool creation) and try again.
                     </div>
                   )}
 
@@ -6195,8 +6228,8 @@ Order: \`${orderKey.slice(0,20)}…\`
                     <button onClick={doCreateToken}
                       disabled={!studioCfg.name.trim() || !studioCfg.symbol.trim() || !studioImage || studioStatus==="signing" || !walletFull}
                       className="hov-btn"
-                      style={{ flex:1, padding:"10px", background: (!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accentBg, border:`1px solid ${(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accent}`, borderRadius:8, color:(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.text3:T.accent, fontSize:14, fontWeight:600, cursor:"pointer" }}>
-                      {studioStatus==="signing" ? "Launching…" : "🚀 Launch Token"}
+                      style={{ flex:1, padding:"10px", background: (!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accentBg, border:`1px solid ${(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accent}`, borderRadius:8, color:(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.text3:T.accent, fontSize:14, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                      {studioStatus==="signing" ? "Launching…" : <><SvgRocket size={14}/> Launch Token</>}
                     </button>
                     <button onClick={() => { setShowStudio(false); setStudioStatus(null); }}
                       style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
