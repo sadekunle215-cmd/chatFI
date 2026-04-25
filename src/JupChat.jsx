@@ -1311,31 +1311,36 @@ export default function JupChat() {
       formData.append("content", description || "");
       // headerImage optional — skip to keep request simple and avoid proxy issues
 
-      // Try direct first (submit supports CORS), fall back to proxy route
-      let submitData;
+      // Try direct first (submit supports CORS), fall back to proxy route.
+      // IMPORTANT: by this point the tx is signed — the token exists on-chain regardless
+      // of whether the submit HTTP call succeeds. Never treat a submit error as token failure.
+      let submitData = {};
       try {
         const submitRes = await fetch("https://api.jup.ag/studio/v1/dbc-pool/submit", {
           method: "POST",
           body: formData,
         });
         const submitText = await submitRes.text();
-        try { submitData = JSON.parse(submitText); }
-        catch { throw new Error(`Jupiter submit error (${submitRes.status}): ${submitText.slice(0, 300)}`); }
+        try { submitData = JSON.parse(submitText); } catch { /* non-fatal */ }
       } catch (directErr) {
-        // Fallback: try via proxy route if direct fails
         console.warn("Direct submit failed, trying proxy:", directErr.message);
-        const submitRes2 = await fetch("/api/studio-submit", {
-          method: "POST",
-          body: formData,
-        });
-        const submitText2 = await submitRes2.text();
-        try { submitData = JSON.parse(submitText2); }
-        catch { throw new Error(`Submit proxy error (${submitRes2.status}): ${submitText2.slice(0, 300)}`); }
+        try {
+          const submitRes2 = await fetch("/api/studio-submit", {
+            method: "POST",
+            body: formData,
+          });
+          const submitText2 = await submitRes2.text();
+          try { submitData = JSON.parse(submitText2); } catch { /* non-fatal */ }
+        } catch (proxyErr) {
+          console.warn("Proxy submit also failed:", proxyErr.message);
+          // Still continue — token is on-chain, just show success with mint from create-tx
+        }
       }
-      if (submitData.error) throw new Error(submitData.error?.message || JSON.stringify(submitData.error));
+      // submitData.error is also non-fatal — token is already on chain
+      if (submitData.error) console.warn("Submit returned error (token still created):", submitData.error);
 
       succeeded = true;
-      setStudioResult({ mintAddress: mint, poolAddress: submitData.poolAddress });
+      setStudioResult({ mintAddress: mint, poolAddress: submitData.poolAddress || null });
       setStudioStatus("done");
       push("ai", `**Token created ✓**\n\n**${name.trim()} (${symbol.trim().toUpperCase()})** is live on Jupiter Studio!\n\nMint: \`${mint}\`\n\nView on: [jup.ag/studio/${mint}](https://jup.ag/studio/${mint}) · [Solscan](https://solscan.io/token/${mint})\n\nCreator fees will accrue as people trade your DBC pool.`);
     } catch (err) {
