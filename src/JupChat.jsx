@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { Transaction, VersionedTransaction, Keypair } from "@solana/web3.js";
 
 // ── Reown AppKit (wallet connection) ────────────────────────────────────────
-import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect } from "@reown/appkit/react";
+import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect, useWalletInfo } from "@reown/appkit/react";
 import { SolanaAdapter } from "@reown/appkit-adapter-solana";
 import { solana as solanaMainnet } from "@reown/appkit/networks";
 
@@ -661,7 +661,14 @@ export default function JupChat() {
   const { address: reownAddress, isConnected: reownConnected }  = useAppKitAccount();
   const { walletProvider: reownProvider }                       = useAppKitProvider("solana");
   const { disconnect: reownDisconnect }                         = useDisconnect();
+  const { walletInfo: reownWalletInfo }                         = useWalletInfo();
+  const [connectedWalletIcon, setConnectedWalletIcon]           = useState(null);
   const prevConnectedRef = useRef(false);
+
+  // Capture wallet icon from Reown whenever it changes
+  useEffect(() => {
+    if (reownWalletInfo?.icon) setConnectedWalletIcon(reownWalletInfo.icon);
+  }, [reownWalletInfo]);
 
   // Swap — stores symbol + resolved mint + decimals for any token
   const [showSwap, setShowSwap]   = useState(false);
@@ -1550,41 +1557,23 @@ export default function JupChat() {
   };
 
   // ── Lock: fetch existing locks for wallet ────────────────────────────────────
-  // Queries Jupiter Lock program on-chain directly — no backend needed.
+  // Routes through /api/lock (action:"accounts") so the server-side RPC is used —
+  // the public mainnet RPC silently returns [] for getProgramAccounts with filters.
   const fetchLocks = async () => {
     if (!walletFull) { push("ai", "Connect your wallet first to view locks."); return; }
     setLocksLoading(true);
     setShowLocks(false);
     setLockList([]);
     try {
-      const { PublicKey, Connection } = await import("@solana/web3.js");
-      const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
-      const RPC_URL      = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
-      const connection   = new Connection(RPC_URL, "confirmed");
-      const walletPk     = new PublicKey(walletFull);
-      const now          = Math.floor(Date.now() / 1000);
+      const res = await fetch("/api/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "accounts", wallet: walletFull }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
 
-      // VestingEscrow on-chain layout (verified against jup-lock IDL + lock.js):
-      // Offset 0:   8 bytes  — Anchor discriminator
-      // Offset 8:   32 bytes — base key
-      // Offset 40:  32 bytes — mint
-      // Offset 72:  32 bytes — sender  ← filter asSender here
-      // Offset 104: 32 bytes — recipient ← filter asRecipient here
-      // BUT: our data parsing skips base key first, so field order in buf is:
-      //   o=8: base(32) → mint(32) → sender(32) → recipient(32) → u64s…
-      // memcmp offsets must match the RAW on-chain byte positions (no skipping).
-      const [asSender, asRecipient] = await Promise.all([
-        connection.getProgramAccounts(LOCK_PROGRAM, { filters: [
-          { dataSize: 200 },
-          { memcmp: { offset: 72, bytes: walletPk.toBase58() } }  // sender at byte 8+32+32=72
-        ]}).catch(() => []),
-        connection.getProgramAccounts(LOCK_PROGRAM, { filters: [
-          { dataSize: 200 },
-          { memcmp: { offset: 104, bytes: walletPk.toBase58() } } // recipient at byte 8+32+32+32=104
-        ]}).catch(() => []),
-      ]);
-
-      // Known mint → symbol map for display
+      // Enrich each account with display fields the UI needs
       const KNOWN_MINT_SYMS = {
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
         "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":  "JUP",
@@ -1596,75 +1585,29 @@ export default function JupChat() {
         "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn":  "JITOSOL",
         "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
       };
+      const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6, RAY:6, JITOSOL:9, JUPUSD:6 };
 
-      const seen = new Set();
-      const accounts = [];
-      for (const item of [...asSender, ...asRecipient]) {
-        const key = item.pubkey.toBase58();
-        if (seen.has(key)) continue;
-        seen.add(key);
+      const enriched = (data.accounts || []).map(acct => {
+        const mintSym = Object.entries(tokenCacheRef.current).find(([, v]) => v === acct.mint)?.[0]
+          || KNOWN_MINT_SYMS[acct.mint]
+          || `${acct.mint.slice(0, 6)}…`;
+        const dec = tokenDecimalsRef.current[mintSym] || KNOWN_DECIMALS[mintSym] || 6;
+        const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
+        return {
+          ...acct,
+          lockId:          acct.pubkey,
+          symbol:          mintSym,
+          claimableAmount: fmtAmt(acct.claimableRaw || 0),
+          totalAmount:     fmtAmt(acct.totalRaw || 0),
+          vestedPercent:   acct.totalRaw > 0
+            ? ((acct.claimableRaw / acct.totalRaw) * 100).toFixed(1)
+            : "0",
+        };
+      });
 
-        try {
-          const buf = Buffer.from(item.account.data);
-          // Parse VestingEscrow fields — skip discriminator (8), then base key (32)
-          // Layout after disc: base(32) | mint(32) | sender(32) | recipient(32) | u64×7 | u8×3
-          let o = 8;
-          o += 32; // skip base key — not needed for display
-          const mintBytes      = buf.slice(o, o + 32); o += 32; // mint
-          const senderBytes    = buf.slice(o, o + 32); o += 32; // sender
-          const recipientBytes = buf.slice(o, o + 32); o += 32; // recipient
-
-          const vestingStart    = Number(buf.readBigUInt64LE(o)); o += 8; // vesting_start_time
-          const cliffTime       = Number(buf.readBigUInt64LE(o)); o += 8; // cliff_time (absolute unix ts)
-          const frequency       = Number(buf.readBigUInt64LE(o)); o += 8;
-          const cliffUnlockAmt  = Number(buf.readBigUInt64LE(o)); o += 8; // cliff_unlock_amount
-          const amountPerPeriod = Number(buf.readBigUInt64LE(o)); o += 8;
-          const numberOfPeriod  = Number(buf.readBigUInt64LE(o)); o += 8;
-          const totalClaimed    = Number(buf.readBigUInt64LE(o)); o += 8;
-
-          const mint      = new PublicKey(mintBytes).toBase58();
-          const sender    = new PublicKey(senderBytes).toBase58();
-          const recipient = new PublicKey(recipientBytes).toBase58();
-
-          // Resolve human-readable symbol from token cache, known mints map, or mint prefix
-          const mintSym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
-            || KNOWN_MINT_SYMS[mint]
-            || `${mint.slice(0, 6)}…`;
-
-          const totalRaw     = cliffUnlockAmt + amountPerPeriod * numberOfPeriod;
-          // cliff_time is an absolute unix timestamp — tokens unlock once now >= cliffTime
-          const claimableRaw = now >= cliffTime ? Math.max(totalRaw - totalClaimed, 0) : 0;
-          const isClaimable  = claimableRaw > 0;
-
-          // Resolve decimals: check token cache, then known common ones, then default 6
-          const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6, RAY:6, JITOSOL:9, JUPUSD:6 };
-          const dec = tokenDecimalsRef.current[mintSym] || KNOWN_DECIMALS[mintSym] || 6;
-          const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
-
-          accounts.push({
-            pubkey:          key,
-            lockId:          key,
-            mint,
-            symbol:          mintSym,  // ← resolved symbol for display
-            sender,
-            recipient,
-            cliffEnd:        cliffTime,
-            vestingStart,
-            totalRaw,
-            totalClaimed,
-            claimableRaw,
-            claimable:       isClaimable,
-            claimableAmount: fmtAmt(claimableRaw),
-            totalAmount:     fmtAmt(totalRaw),
-            vestedPercent:   totalRaw > 0 ? ((claimableRaw / totalRaw) * 100).toFixed(1) : "0",
-          });
-        } catch (_) {
-          // Skip malformed or incompatible accounts silently
-        }
-      }
-      setLockList(accounts);
+      setLockList(enriched);
       setShowLocks(true);
-      if (!accounts.length) push("ai", "No token locks found for your wallet.");
+      if (!enriched.length) push("ai", "No token locks found for your wallet.");
     } catch (err) {
       push("ai", `Could not fetch locks: ${err?.message}`);
     }
@@ -4619,12 +4562,12 @@ Order: \`${orderKey.slice(0,20)}…\`
                         cursor:"default",
                       }}
                     >
-                      {/* Wallet logo — show if we have a logo for the connected wallet */}
-                      {connectedWalletName && WALLET_LOGOS[connectedWalletName] ? (
+                      {/* Wallet logo — show live icon from Reown, fall back to WALLET_LOGOS map */}
+                      {(connectedWalletIcon || (connectedWalletName && WALLET_LOGOS[connectedWalletName])) ? (
                         <img
-                          src={WALLET_LOGOS[connectedWalletName]}
-                          alt={connectedWalletName}
-                          title={connectedWalletName}
+                          src={connectedWalletIcon || WALLET_LOGOS[connectedWalletName]}
+                          alt={connectedWalletName || "Wallet"}
+                          title={connectedWalletName || "Wallet"}
                           style={{ width:16, height:16, borderRadius:4, flexShrink:0, objectFit:"cover" }}
                           onError={e => { e.currentTarget.style.display = "none"; }}
                         />
