@@ -34,7 +34,9 @@ export default async function handler(req, res) {
 
   const { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction, Keypair } = web3;
   const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
-          createAssociatedTokenAccountInstruction, createSyncNativeInstruction } = splToken;
+          createAssociatedTokenAccountInstruction,
+          createAssociatedTokenAccountIdempotentInstruction,
+          createSyncNativeInstruction } = splToken;
 
   const SOLANA_RPC   = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
   const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
@@ -120,10 +122,12 @@ export default async function handler(req, res) {
       tx.recentBlockhash = blockhash;
       tx.feePayer        = funderKey;
 
-      // NOTE: Do NOT pre-create the escrow ATA here.
-      // The lock program creates it internally via CPI (using Anchor's spl crate which
-      // allows PDA owners). Pre-creating it with JS @solana/spl-token fails with
-      // IllegalOwner because the JS library rejects PDA accounts as ATA owners.
+      // Pre-create escrow ATA using the Idempotent variant (instruction 1).
+      // Standard createAssociatedTokenAccountInstruction (instruction 0) rejects PDA owners in JS.
+      // The Idempotent variant allows PDA owners AND is a no-op if the ATA already exists.
+      tx.add(createAssociatedTokenAccountIdempotentInstruction(
+        funderKey, escrowToken, escrowPDA, mintKey, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+      ));
 
       // wSOL: wrap native SOL into sender ATA first
       if (isWsol) {
