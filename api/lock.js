@@ -109,17 +109,24 @@ export default async function handler(req, res) {
       const baseKeypair = Keypair.generate();
       const [escrowPDA] = deriveEscrow(baseKeypair.publicKey);
 
-      // Look up sender's actual token account on-chain rather than deriving it.
-      // Deriving the ATA can fail if the account doesn't exist yet or if the mint
-      // address is slightly different — this guarantees we use the real account.
+      // Look up sender's actual token account on-chain — guarantees we use a real
+      // account owned by the Token Program, not a derived address that may not exist.
       let senderToken;
-      const senderTokenAccounts = await connection.getTokenAccountsByOwner(funderKey, { mint: mintKey });
+      let senderTokenAccounts;
+      try {
+        senderTokenAccounts = await connection.getTokenAccountsByOwner(funderKey, { mint: mintKey });
+      } catch (e) {
+        senderTokenAccounts = { value: [] };
+      }
       if (senderTokenAccounts.value.length > 0) {
-        // Use the first (largest balance) token account found
         senderToken = senderTokenAccounts.value[0].pubkey;
       } else {
-        // Fallback: derive ATA — will be created idempotently before the lock ix
-        senderToken = await getAssociatedTokenAddress(mintKey, funderKey, false, TOKEN_PROGRAM_ID);
+        // No token account found on-chain for this mint — the sender does not hold it.
+        // Return a clear error rather than passing an uninitialized address to the program
+        // (which would produce the confusing AccountOwnedByWrongProgram / 0xbbf error).
+        return res.status(400).json({
+          error: `No token account found for mint ${mint} in wallet ${funder}. Ensure you hold this token before locking.`,
+        });
       }
       const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA, true, TOKEN_PROGRAM_ID);
 
@@ -199,12 +206,6 @@ export default async function handler(req, res) {
           lamports:   Number(amtBig),
         }));
         tx.add(createSyncNativeInstruction(senderToken, TOKEN_PROGRAM_ID));
-      } else if (senderTokenAccounts.value.length === 0) {
-        // Fallback: no token account found on-chain, create it idempotently
-        tx.add(createAssociatedTokenAccountInstruction(
-          funderKey, senderToken, funderKey, mintKey,
-          TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-        ));
       }
 
       tx.add(lockIx);
