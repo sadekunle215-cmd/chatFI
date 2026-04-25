@@ -113,21 +113,21 @@ export default async function handler(req, res) {
       data.writeUInt8(0, o);                 // cancel_mode = 0
 
       // Correct account order for CreateVestingEscrow (from jup-lock IDL):
-      // base, escrow, escrow_token, recipient, sender, sender_token, mint,
-      // event_authority, program, token_program, associated_token_program, system_program
+      // base, escrow, escrow_token, sender, sender_token, recipient, mint,
+      // token_program, associated_token_program, system_program, event_authority, program
       const keys = [
-        { pubkey: baseKp.publicKey,            isSigner: true,  isWritable: false },
-        { pubkey: escrowPDA,                   isSigner: false, isWritable: true  },
-        { pubkey: escrowToken,                 isSigner: false, isWritable: true  },
-        { pubkey: recipientKey,                isSigner: false, isWritable: false },
-        { pubkey: funderKey,                   isSigner: true,  isWritable: true  },
-        { pubkey: senderToken,                 isSigner: false, isWritable: true  },
-        { pubkey: mintKey,                     isSigner: false, isWritable: false }, // REQUIRED: program validates ATAs against this
-        { pubkey: eventAuthority,              isSigner: false, isWritable: false },
-        { pubkey: LOCK_PROGRAM,                isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID,            isSigner: false, isWritable: false },
-        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId,     isSigner: false, isWritable: false },
+        { pubkey: baseKp.publicKey,            isSigner: true,  isWritable: false }, // base
+        { pubkey: escrowPDA,                   isSigner: false, isWritable: true  }, // escrow
+        { pubkey: escrowToken,                 isSigner: false, isWritable: true  }, // escrow_token
+        { pubkey: funderKey,                   isSigner: true,  isWritable: true  }, // sender
+        { pubkey: senderToken,                 isSigner: false, isWritable: true  }, // sender_token
+        { pubkey: recipientKey,                isSigner: false, isWritable: false }, // recipient
+        { pubkey: mintKey,                     isSigner: false, isWritable: false }, // mint
+        { pubkey: TOKEN_PROGRAM_ID,            isSigner: false, isWritable: false }, // token_program
+        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // associated_token_program
+        { pubkey: SystemProgram.programId,     isSigner: false, isWritable: false }, // system_program
+        { pubkey: eventAuthority,              isSigner: false, isWritable: false }, // event_authority
+        { pubkey: LOCK_PROGRAM,                isSigner: false, isWritable: false }, // program
       ];
 
       const lockIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
