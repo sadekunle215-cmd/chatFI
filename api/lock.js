@@ -1,11 +1,13 @@
 // pages/api/lock.js
-// Jupiter Lock — NO @coral-xyz/anchor dependency
+// Jupiter Lock - NO @coral-xyz/anchor dependency
 // Pure @solana/web3.js + @solana/spl-token + Node.js crypto
 // Program: LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn
 
 import crypto from "crypto";
 
-// Compute Anchor instruction discriminator: sha256("global:<name>")[0..8]
+const WSOL_MINT_STR = "So11111111111111111111111111111111111111112";
+
+// Anchor instruction discriminator: sha256("global:<name>")[0..8]
 function disc(name) {
   return crypto.createHash("sha256").update(`global:${name}`).digest().slice(0, 8);
 }
@@ -28,11 +30,18 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `SDK missing: ${e.message}` });
   }
 
-  const { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY,
-          Transaction, TransactionInstruction, Keypair } = web3;
-  const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID,
-          ASSOCIATED_TOKEN_PROGRAM_ID,
-          createAssociatedTokenAccountInstruction } = splToken;
+  const {
+    Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY,
+    Transaction, TransactionInstruction, Keypair,
+  } = web3;
+
+  const {
+    getAssociatedTokenAddress,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+    createAssociatedTokenAccountInstruction,
+    createSyncNativeInstruction,
+  } = splToken;
 
   const { action } = req.body || {};
   if (!action) return res.status(400).json({ error: "Missing action" });
@@ -50,9 +59,9 @@ export default async function handler(req, res) {
   try {
     const connection = new Connection(SOLANA_RPC, "confirmed");
 
-    // ─────────────────────────────────────────────────────────────────────
-    // CREATE — build createVestingEscrow ix without Anchor
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // CREATE
+    // -----------------------------------------------------------------------
     if (action === "create") {
       const { funder, recipient, mint, amount, cliffSecs, vestingSecs } = req.body;
       if (!funder) return res.status(400).json({ error: "Missing: funder" });
@@ -60,101 +69,95 @@ export default async function handler(req, res) {
       if (!mint)   return res.status(400).json({ error: "Missing: mint" });
 
       const funderKey    = new PublicKey(funder);
-      const recipientKey = recipient?.trim() ? new PublicKey(recipient.trim()) : funderKey;
+      const recipientKey = recipient && recipient.trim() ? new PublicKey(recipient.trim()) : funderKey;
       const mintKey      = new PublicKey(mint);
+      const isWsol       = mint === WSOL_MINT_STR;
 
       const cliff   = Math.max(parseInt(cliffSecs)  || 0, 0);
       const vesting = Math.max(parseInt(vestingSecs) || 86400, 1);
       const periods = Math.max(Math.floor(vesting / 86400), 1);
-      const amtBig  = BigInt(amount);
-      const perPeriod = amtBig / BigInt(periods);
-      // remainder goes into cliffUnlockAmount so total is exact
-      const remainder = amtBig - (perPeriod * BigInt(periods));
+      const amtBig     = BigInt(amount);
+      const perPeriod  = amtBig / BigInt(periods);
+      const remainder  = amtBig - (perPeriod * BigInt(periods));
+      const now        = BigInt(Math.floor(Date.now() / 1000));
 
-      const now = BigInt(Math.floor(Date.now() / 1000));
-
-      // Unique base keypair for this lock
       const baseKeypair = Keypair.generate();
       const [escrowPDA] = deriveEscrow(baseKeypair.publicKey);
 
-      const senderToken = await getAssociatedTokenAddress(mintKey, funderKey,  false, TOKEN_PROGRAM_ID);
-      const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA,  true,  TOKEN_PROGRAM_ID);
+      const senderToken = await getAssociatedTokenAddress(mintKey, funderKey, false, TOKEN_PROGRAM_ID);
+      const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA,  true, TOKEN_PROGRAM_ID);
 
-      // ── Encode instruction data ──────────────────────────────────────────
-      // Layout: 8 discriminator + 7×u64 (56 bytes) + 1×u8 = 65 bytes
-      // Fields: vestingStartTime, cliffTime, frequency, cliffUnlockAmount,
-      //         amountPerPeriod, numberOfPeriod, updateRecipientMode
+      // Encode instruction: 8 disc + 6*u64 + u8 = 57 bytes
       const CREATE_DISC = disc("createVestingEscrow");
-      const params = Buffer.alloc(57); // 8 + 48 + 1
+      const params = Buffer.alloc(57);
       let off = 0;
-
-      // discriminator (8 bytes)
       CREATE_DISC.copy(params, off); off += 8;
+      writeU64LE(params, now,             off); off += 8; // vestingStartTime
+      writeU64LE(params, BigInt(cliff),   off); off += 8; // cliffTime (duration)
+      writeU64LE(params, BigInt(86400),   off); off += 8; // frequency
+      writeU64LE(params, remainder,       off); off += 8; // cliffUnlockAmount
+      writeU64LE(params, perPeriod,       off); off += 8; // amountPerPeriod
+      writeU64LE(params, BigInt(periods), off); off += 8; // numberOfPeriod
+      params.writeUInt8(0, off);                          // updateRecipientMode
 
-      // vestingStartTime: when vesting begins (absolute unix ts)
-      writeU64LE(params, now, off); off += 8;
-      // cliffTime: cliff duration in seconds (relative to vestingStartTime)
-      writeU64LE(params, BigInt(cliff), off); off += 8;
-      // frequency: unlock interval in seconds
-      writeU64LE(params, BigInt(86400), off); off += 8;
-      // cliffUnlockAmount: tokens unlocked at cliff (put remainder here)
-      writeU64LE(params, remainder, off); off += 8;
-      // amountPerPeriod: tokens unlocked each period
-      writeU64LE(params, perPeriod, off); off += 8;
-      // numberOfPeriod: total unlock periods
-      writeU64LE(params, BigInt(periods), off); off += 8;
-      // updateRecipientMode: 0 = recipient cannot change themselves
-      params.writeUInt8(0, off);
-
-      const keys = [
-        { pubkey: baseKeypair.publicKey, isSigner: true,  isWritable: false },
-        { pubkey: escrowPDA,             isSigner: false, isWritable: true  },
-        { pubkey: escrowToken,           isSigner: false, isWritable: true  },
-        { pubkey: funderKey,             isSigner: true,  isWritable: true  },
-        { pubkey: senderToken,           isSigner: false, isWritable: true  },
-        { pubkey: recipientKey,          isSigner: false, isWritable: false },
-        { pubkey: mintKey,               isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID,      isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: SYSVAR_RENT_PUBKEY,    isSigner: false, isWritable: false },
+      const lockKeys = [
+        { pubkey: baseKeypair.publicKey,    isSigner: true,  isWritable: false },
+        { pubkey: escrowPDA,                isSigner: false, isWritable: true  },
+        { pubkey: escrowToken,              isSigner: false, isWritable: true  },
+        { pubkey: funderKey,                isSigner: true,  isWritable: true  },
+        { pubkey: senderToken,              isSigner: false, isWritable: true  },
+        { pubkey: recipientKey,             isSigner: false, isWritable: false },
+        { pubkey: mintKey,                  isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID,         isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId,  isSigner: false, isWritable: false },
+        { pubkey: SYSVAR_RENT_PUBKEY,       isSigner: false, isWritable: false },
       ];
 
-      const createIx = new TransactionInstruction({
-        programId: LOCK_PROGRAM,
-        keys,
-        data: params,
-      });
+      const lockIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys: lockKeys, data: params });
 
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
       const tx = new Transaction();
-      tx.add(createIx);
       tx.recentBlockhash = blockhash;
       tx.feePayer        = funderKey;
 
-      // base keypair must co-sign (server-side partial sign)
-      tx.partialSign(baseKeypair);
+      // For native SOL: wrap into wSOL ATA before locking
+      if (isWsol) {
+        const wsolAtaInfo = await connection.getAccountInfo(senderToken);
+        if (!wsolAtaInfo) {
+          // Create wSOL ATA if it doesn't exist
+          tx.add(createAssociatedTokenAccountInstruction(
+            funderKey, senderToken, funderKey, mintKey,
+            TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+          ));
+        }
+        // Transfer native SOL into wSOL ATA then sync balance
+        tx.add(SystemProgram.transfer({ fromPubkey: funderKey, toPubkey: senderToken, lamports: Number(amtBig) }));
+        tx.add(createSyncNativeInstruction(senderToken, TOKEN_PROGRAM_ID));
+      }
 
-      const serialized = Buffer.from(
-        tx.serialize({ requireAllSignatures: false })
-      ).toString("base64");
+      tx.add(lockIx);
+      tx.partialSign(baseKeypair); // base must co-sign
+
+      const serialized = Buffer.from(tx.serialize({ requireAllSignatures: false })).toString("base64");
 
       return res.status(200).json({
-        transaction:         serialized,
-        escrow:              escrowPDA.toBase58(),
-        baseKey:             baseKeypair.publicKey.toBase58(),
+        transaction: serialized,
+        escrow: escrowPDA.toBase58(),
+        baseKey: baseKeypair.publicKey.toBase58(),
         blockhash,
         lastValidBlockHeight,
-        cliffDays:           cliff   / 86400,
-        vestingDays:         vesting / 86400,
+        cliffDays:  cliff   / 86400,
+        vestingDays: vesting / 86400,
         mint,
         amount,
-        recipient:           recipientKey.toBase58(),
+        recipient: recipientKey.toBase58(),
+        wrappedSol: isWsol,
       });
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // CLAIM — build claim ix without Anchor (same as doClaimLock client-side)
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // CLAIM
+    // -----------------------------------------------------------------------
     if (action === "claim") {
       const { escrow, recipient } = req.body;
       if (!escrow)    return res.status(400).json({ error: "Missing: escrow" });
@@ -163,121 +166,111 @@ export default async function handler(req, res) {
       const recipientKey = new PublicKey(recipient);
       const escrowKey    = new PublicKey(escrow);
 
-      // Fetch escrow account — mint is at offset 40 (8 disc + 32 base)
       const acctInfo = await connection.getAccountInfo(escrowKey);
       if (!acctInfo) return res.status(400).json({ error: "Escrow account not found" });
+
+      // mint starts at offset 40: 8 disc + 32 base = 40
       const mintKey = new PublicKey(acctInfo.data.slice(40, 72));
 
       const escrowATA    = await getAssociatedTokenAddress(mintKey, escrowKey,    true,  TOKEN_PROGRAM_ID);
       const recipientATA = await getAssociatedTokenAddress(mintKey, recipientKey, false, TOKEN_PROGRAM_ID);
 
-      // claim discriminator = sha256("global:claim")[0..8]
       const CLAIM_DISC = disc("claim");
-      const maxAmount  = Buffer.alloc(8);
-      maxAmount.writeBigUInt64LE(BigInt("18446744073709551615"), 0); // u64::MAX
-      const data = Buffer.concat([CLAIM_DISC, maxAmount]);
+      const maxAmt = Buffer.alloc(8);
+      maxAmt.writeBigUInt64LE(BigInt("18446744073709551615"), 0); // u64::MAX = claim all
+      const data = Buffer.concat([CLAIM_DISC, maxAmt]);
 
-      const keys = [
-        { pubkey: escrowKey,             isSigner: false, isWritable: true  },
-        { pubkey: escrowATA,             isSigner: false, isWritable: true  },
-        { pubkey: recipientKey,          isSigner: true,  isWritable: false },
-        { pubkey: recipientATA,          isSigner: false, isWritable: true  },
-        { pubkey: mintKey,               isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID,      isSigner: false, isWritable: false },
+      const claimKeys = [
+        { pubkey: escrowKey,               isSigner: false, isWritable: true  },
+        { pubkey: escrowATA,               isSigner: false, isWritable: true  },
+        { pubkey: recipientKey,            isSigner: true,  isWritable: false },
+        { pubkey: recipientATA,            isSigner: false, isWritable: true  },
+        { pubkey: mintKey,                 isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID,        isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ];
 
-      const claimIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
-
-      // Create recipient ATA ix (no-op if already exists — handled client-side)
-      const createAtaIx = createAssociatedTokenAccountInstruction(
+      const claimIx  = new TransactionInstruction({ programId: LOCK_PROGRAM, keys: claimKeys, data });
+      const createAta = createAssociatedTokenAccountInstruction(
         recipientKey, recipientATA, recipientKey, mintKey,
         TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
       );
 
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
       const tx = new Transaction();
-      tx.add(createAtaIx);
+      tx.add(createAta); // no-op on-chain if ATA already exists
       tx.add(claimIx);
       tx.recentBlockhash = blockhash;
       tx.feePayer        = recipientKey;
 
-      const serialized = Buffer.from(
-        tx.serialize({ requireAllSignatures: false })
-      ).toString("base64");
-
+      const serialized = Buffer.from(tx.serialize({ requireAllSignatures: false })).toString("base64");
       return res.status(200).json({ transaction: serialized, blockhash, lastValidBlockHeight });
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // ACCOUNTS — fetch on-chain escrows for a wallet
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // ACCOUNTS -- fetch + decode on-chain escrows for a wallet
+    // -----------------------------------------------------------------------
     if (action === "accounts") {
       const { wallet } = req.body;
       if (!wallet) return res.status(400).json({ error: "Missing: wallet" });
 
       const walletPk = new PublicKey(wallet);
+      const now      = Math.floor(Date.now() / 1000);
 
-      // VestingEscrow: 8 disc + 32 base + 32 mint + 32 sender + 32 recipient = 200 bytes total
-      // sender offset: 72, recipient offset: 104
+      // VestingEscrow layout: 200 bytes total
+      // sender @ 72, recipient @ 104
       const [asSender, asRecipient] = await Promise.all([
         connection.getProgramAccounts(LOCK_PROGRAM, {
-          filters: [
-            { dataSize: 200 },
-            { memcmp: { offset: 72, bytes: walletPk.toBase58() } },
-          ],
+          filters: [{ dataSize: 200 }, { memcmp: { offset: 72,  bytes: walletPk.toBase58() } }],
         }).catch(() => []),
         connection.getProgramAccounts(LOCK_PROGRAM, {
-          filters: [
-            { dataSize: 200 },
-            { memcmp: { offset: 104, bytes: walletPk.toBase58() } },
-          ],
+          filters: [{ dataSize: 200 }, { memcmp: { offset: 104, bytes: walletPk.toBase58() } }],
         }).catch(() => []),
       ]);
 
-      const seen = new Set();
+      const seen     = new Set();
       const accounts = [];
+
       for (const item of [...asSender, ...asRecipient]) {
         const key = item.pubkey.toBase58();
-        if (!seen.has(key)) {
-          seen.add(key);
-          // Decode binary account data
-          const buf = Buffer.from(item.account.data);
-          let off = 8; // skip discriminator
-          const base      = new PublicKey(buf.slice(off, off += 32)).toBase58();
-          const mint      = new PublicKey(buf.slice(off, off += 32)).toBase58();
-          const sender    = new PublicKey(buf.slice(off, off += 32)).toBase58();
-          const recipient = new PublicKey(buf.slice(off, off += 32)).toBase58();
-          const startTime       = Number(buf.readBigUInt64LE(off)); off += 8;
-          const frequency       = Number(buf.readBigUInt64LE(off)); off += 8;
-          const cliffUnlockAmt  = Number(buf.readBigUInt64LE(off)); off += 8;
-          const amountPerPeriod = Number(buf.readBigUInt64LE(off)); off += 8;
-          const numberOfPeriod  = Number(buf.readBigUInt64LE(off)); off += 8;
-          const totalClaimed    = Number(buf.readBigUInt64LE(off)); off += 8;
-          const cliffTime       = Number(buf.readBigUInt64LE(off));
+        if (seen.has(key)) continue;
+        seen.add(key);
 
-          const now      = Math.floor(Date.now() / 1000);
-          const cliffEnd = startTime + cliffTime;
-          const elapsed  = Math.max(now - cliffEnd, 0);
-          const periodsElapsed = frequency > 0 ? Math.floor(elapsed / frequency) : 0;
-          const totalVested = Math.min(
-            cliffUnlockAmt + amountPerPeriod * periodsElapsed,
-            cliffUnlockAmt + amountPerPeriod * numberOfPeriod
-          );
-          const claimableRaw = Math.max(totalVested - totalClaimed, 0);
-          const totalRaw     = cliffUnlockAmt + amountPerPeriod * numberOfPeriod;
+        const buf = Buffer.from(item.account.data);
+        let o = 8;
+        const base      = new PublicKey(buf.slice(o, o += 32)).toBase58();
+        const mint      = new PublicKey(buf.slice(o, o += 32)).toBase58();
+        const sender    = new PublicKey(buf.slice(o, o += 32)).toBase58();
+        const recipient = new PublicKey(buf.slice(o, o += 32)).toBase58();
 
-          accounts.push({
-            pubkey: key,
-            mint, sender, recipient,
-            cliffEnd, startTime,
-            totalRaw,
-            totalClaimed,
-            claimableRaw,
-            claimable: claimableRaw > 0 && now >= cliffEnd,
-            vestedPercent: totalRaw > 0 ? ((totalVested / totalRaw) * 100).toFixed(1) : "0",
-          });
-        }
+        const startTime       = Number(buf.readBigUInt64LE(o)); o += 8;
+        const frequency       = Number(buf.readBigUInt64LE(o)); o += 8;
+        const cliffUnlockAmt  = Number(buf.readBigUInt64LE(o)); o += 8;
+        const amountPerPeriod = Number(buf.readBigUInt64LE(o)); o += 8;
+        const numberOfPeriod  = Number(buf.readBigUInt64LE(o)); o += 8;
+        const totalClaimed    = Number(buf.readBigUInt64LE(o)); o += 8;
+        const cliffTime       = Number(buf.readBigUInt64LE(o));
+
+        const cliffEnd       = startTime + cliffTime;
+        const elapsed        = Math.max(now - cliffEnd, 0);
+        const periodsElapsed = frequency > 0 ? Math.floor(elapsed / frequency) : 0;
+        const totalVested    = Math.min(
+          cliffUnlockAmt + amountPerPeriod * periodsElapsed,
+          cliffUnlockAmt + amountPerPeriod * numberOfPeriod
+        );
+        const claimableRaw = Math.max(totalVested - totalClaimed, 0);
+        const totalRaw     = cliffUnlockAmt + amountPerPeriod * numberOfPeriod;
+
+        accounts.push({
+          pubkey: key,
+          mint, sender, recipient,
+          cliffEnd, startTime,
+          totalRaw,
+          totalClaimed,
+          claimableRaw,
+          claimable:     claimableRaw > 0 && now >= cliffEnd,
+          vestedPercent: totalRaw > 0 ? ((totalVested / totalRaw) * 100).toFixed(1) : "0",
+        });
       }
 
       return res.status(200).json({ accounts });
