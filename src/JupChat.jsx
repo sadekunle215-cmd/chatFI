@@ -768,6 +768,10 @@ export default function JupChat() {
   const [portfolioData, setPortfolioData]   = useState(null);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
 
+  // ── Token Info Card ──────────────────────────────────────────────────────────
+  const [showTokenCard, setShowTokenCard]   = useState(false);
+  const [tokenCardData, setTokenCardData]   = useState(null);
+
   // ── Perps panel (SHOW_PERPS — interactive trade config) ─────────────────────
   const [showPerps, setShowPerps]           = useState(false);
   const [perpCfg, setPerpCfg]              = useState({ market:"SOL-PERP", side:"long", collateral:"", leverage:"10" });
@@ -1409,6 +1413,79 @@ export default function JupChat() {
       const stakedRes = await fetch("https://api.jup.ag/portfolio/v1/staked-jup/" + walletAddress)
         .then(r => r.json());
       if (stakedRes && !stakedRes.error) results.stakedJup = stakedRes;
+    } catch {}
+
+    // ── 9. Perps positions ────────────────────────────────────────────────────
+    try {
+      const perpData = await jupFetch(`${JUP_PORTFOLIO}/positions/${walletAddress}?platforms=jupiter-perps`);
+      const perpElements = (perpData?.elements || []).filter(el =>
+        el.platformId === "jupiter-perps" || el.name?.toLowerCase().includes("perp")
+      );
+      const perpPositionsList = perpElements.flatMap(el => {
+        const assets = el.data?.assets || el.data?.borrows || [];
+        return assets.map(asset => ({
+          market:   asset.data?.symbol || el.name || "PERP",
+          side:     el.data?.side || asset.data?.side || "long",
+          sizeUsd:  asset.value ?? el.value ?? null,
+          entryPrice: asset.data?.price ?? null,
+          unrealizedPnlUsd: el.data?.pnl ?? asset.data?.pnl ?? null,
+          leverage:   el.data?.leverage ?? null,
+          liquidationPrice: el.data?.liquidationPrice ?? null,
+          positionKey: el.id || asset.data?.address || Math.random().toString(),
+        }));
+      });
+      if (perpPositionsList.length > 0) results.perpPositions = perpPositionsList;
+    } catch {}
+
+    // ── 10. LP / Liquidity positions from portfolioElements ───────────────────
+    try {
+      const lpElements = (results.portfolioElements || []).filter(el =>
+        el.label === "LiquidityPool" || el.type === "liquidity-position" || el.platformId?.includes("orca") || el.platformId?.includes("raydium") || el.platformId?.includes("meteora")
+      );
+      if (lpElements.length > 0) {
+        results.lpPositions = lpElements.map(el => ({
+          platform: el.platformId || el.name || "LP",
+          name:     el.name || el.label || "Liquidity Position",
+          value:    el.value || el.data?.value || null,
+          assets:   el.data?.assets || [],
+          id:       el.id || Math.random().toString(),
+        }));
+      }
+    } catch {}
+
+    // ── 11. Locks (token vesting) ─────────────────────────────────────────────
+    try {
+      const lockRes = await fetch("/api/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "accounts", wallet: walletAddress }),
+      });
+      const lockData = await lockRes.json();
+      if (!lockData.error && lockData.accounts?.length > 0) {
+        const KNOWN_MINT_SYMS = {
+          "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+          "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":  "JUP",
+          "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+          "So11111111111111111111111111111111111111112":   "SOL",
+          "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+          "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
+        };
+        const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6, JUPUSD:6 };
+        results.lockPositions = lockData.accounts.map(acct => {
+          const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === acct.mint)?.[0]
+            || KNOWN_MINT_SYMS[acct.mint] || `${acct.mint.slice(0, 6)}…`;
+          const dec = tokenDecimalsRef.current[sym] || KNOWN_DECIMALS[sym] || 6;
+          const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
+          return {
+            ...acct,
+            lockId:          acct.pubkey,
+            symbol:          sym,
+            claimableAmount: fmtAmt(acct.claimableRaw || 0),
+            totalAmount:     fmtAmt(acct.totalRaw || 0),
+            vestedPercent:   acct.totalRaw > 0 ? ((acct.claimableRaw / acct.totalRaw) * 100).toFixed(1) : "0",
+          };
+        });
+      }
     } catch {}
 
     return results;
@@ -3845,6 +3922,7 @@ Order: \`${orderKey.slice(0,20)}…\`
     setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
     setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
     setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false); setShowPerps(false);
+    setShowTokenCard(false); setTokenCardData(null);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
 
@@ -3900,72 +3978,9 @@ Order: \`${orderKey.slice(0,20)}…\`
         if (!info) {
           push("ai", text + `\n\nCould not find **${actionData?.symbol || "that token"}** on Jupiter. It may not be listed yet or the symbol might be different — try the exact contract address.`);
         } else {
-          const mint = info.address || info.id || info.mint || "";
-          const fmtUSD = (n, dp=0) => n != null ? `$${Number(n).toLocaleString(undefined,{maximumFractionDigits:dp})}` : null;
-          const fmtNum = (n) => n != null ? Number(n).toLocaleString() : null;
-
-          // Price & market data
-          const price   = info.usdPrice != null ? `$${info.usdPrice < 0.0001 ? info.usdPrice.toExponential(4) : info.usdPrice < 1 ? info.usdPrice.toFixed(6) : info.usdPrice.toFixed(4)}` : null;
-          const chg24h  = info.priceChange24h != null ? `${info.priceChange24h > 0 ? "+" : ""}${info.priceChange24h.toFixed(2)}%` : null;
-          const vol     = info.daily_volume ? fmtUSD(info.daily_volume) : null;
-          const mcap    = fmtUSD(info.market_cap || info.mcap);
-          const fdv     = fmtUSD(info.fdv);
-          const liq     = fmtUSD(info.liquidity);
-          const circ    = info.circSupply ? fmtNum(Math.round(info.circSupply)) : null;
-          const total   = info.totalSupply ? fmtNum(Math.round(info.totalSupply)) : null;
-          const holders = info.holderCount ? fmtNum(info.holderCount) : null;
-
-          // 24h trading stats
-          const buys    = info.numBuys24h ? fmtNum(info.numBuys24h) : null;
-          const sells   = info.numSells24h ? fmtNum(info.numSells24h) : null;
-          const traders = info.numTraders24h ? fmtNum(info.numTraders24h) : null;
-          const buyVol  = fmtUSD(info.buyVolume24h);
-          const sellVol = fmtUSD(info.sellVolume24h);
-
-          // Token age
-          const poolAge = info.firstPoolAt ? (() => {
-            const days = Math.floor((Date.now() - new Date(info.firstPoolAt)) / 86400000);
-            return days < 1 ? "< 1 day old" : days === 1 ? "1 day old" : `${days} days old`;
-          })() : null;
-
-          // Safety & audit signals
-          const hasFreeze   = info.freezeAuthority || info.audit?.freezeAuthorityDisabled === false ? "⚠ Freeze authority active" : null;
-          const hasMintAuth = info.mint_authority  || info.audit?.mintAuthorityDisabled === false   ? "⚠ Mint authority active"   : null;
-          const topHolders  = info.topHoldersPercentage != null ? `Top holders: ${info.topHoldersPercentage.toFixed(1)}%` : null;
-          const devMints    = info.devMints != null ? `Dev mints: ${info.devMints}` : null;
-          const organic     = info.organicScore != null ? `Organic score: ${Math.round(info.organicScore)}/100 (${info.organicScoreLabel || "?"})` : null;
-          const isSus       = info.audit?.isSus ? "🚨 Flagged as suspicious by Jupiter" : null;
-          const verified    = (info.isVerified || info.tags?.includes("verified")) ? "✓ Verified on Jupiter" : null;
-          const safetyLines = [isSus, hasFreeze, hasMintAuth, verified, organic, topHolders, devMints].filter(Boolean).join(" · ");
-
-          // Social links
-          const socials = [
-            info.twitter  ? `[Twitter](${info.twitter})`   : null,
-            info.website  ? `[Website](${info.website})`   : null,
-            info.telegram ? `[Telegram](${info.telegram})` : null,
-            info.discord  ? `[Discord](${info.discord})`   : null,
-          ].filter(Boolean).join("  ");
-
-          let extra = `\n\n**${info.name || info.symbol || "Unknown"}** (${info.symbol || "?"})`;
-          extra += `\nMint: \`${mint.slice(0,20)}…\``;
-          if (price)   extra += `\nPrice: ${price}${chg24h ? `  ${chg24h} 24h` : ""}`;
-          if (mcap)    extra += `\nMkt Cap: ${mcap}`;
-          if (fdv)     extra += `  ·  FDV: ${fdv}`;
-          if (liq)     extra += `\nLiquidity: ${liq}`;
-          if (vol)     extra += `\n24h Volume: ${vol}`;
-          if (buys || sells) extra += `\nBuys/Sells: ${buys || "—"} / ${sells || "—"}${traders ? `  (${traders} traders)` : ""}`;
-          if (buyVol || sellVol) extra += `\nBuy/Sell Vol: ${buyVol || "—"} / ${sellVol || "—"}`;
-          if (circ)    extra += `\nCirc Supply: ${circ}`;
-          if (total && total !== circ) extra += `  ·  Total: ${total}`;
-          if (holders) extra += `\nHolders: ${holders}`;
-          if (poolAge) extra += `\nAge: ${poolAge}`;
-          if (info.launchpad)   extra += `\nLaunchpad: ${info.launchpad}`;
-          if (info.graduatedAt) extra += `  ·  Graduated: ${new Date(info.graduatedAt).toLocaleDateString()}`;
-          if (info.decimals !== undefined) extra += `\nDecimals: ${info.decimals}`;
-          if (info.tags?.length) extra += `\nTags: ${info.tags.slice(0,5).join(", ")}`;
-          if (safetyLines) extra += `\n\n${safetyLines}`;
-          if (socials) extra += `\n${socials}`;
-          push("ai", text + extra);
+          push("ai", text);
+          setTokenCardData(info);
+          setShowTokenCard(true);
         }
 
       } else if (action === "FETCH_PORTFOLIO") {
@@ -4696,6 +4711,238 @@ Order: \`${orderKey.slice(0,20)}…\`
               </div>
             </div>
           )}
+
+          {/* ── Token Info Card ───────────────────────────────────────────── */}
+          {showTokenCard && tokenCardData && (() => {
+            const info = tokenCardData;
+            const mint = info.address || info.id || info.mint || "";
+            const fmtUSD = (n, dp=2) => n != null && n > 0 ? `$${Number(n) >= 1e9 ? (Number(n)/1e9).toFixed(1)+"B" : Number(n) >= 1e6 ? (Number(n)/1e6).toFixed(2)+"M" : Number(n) >= 1e3 ? (Number(n)/1e3).toFixed(1)+"K" : Number(n).toLocaleString(undefined,{maximumFractionDigits:dp})}` : null;
+            const fmtNum = (n) => n != null ? Number(n).toLocaleString() : null;
+            const price   = info.usdPrice != null ? (info.usdPrice < 0.0001 ? `$${info.usdPrice.toExponential(4)}` : info.usdPrice < 1 ? `$${info.usdPrice.toFixed(6)}` : `$${info.usdPrice.toFixed(4)}`) : null;
+            const chgRaw  = info.priceChange24h;
+            const chg24h  = chgRaw != null ? `${chgRaw > 0 ? "+" : ""}${chgRaw.toFixed(2)}%` : null;
+            const chgUp   = chgRaw != null && chgRaw >= 0;
+            const mcap    = fmtUSD(info.market_cap || info.mcap, 0);
+            const fdv     = fmtUSD(info.fdv, 0);
+            const liq     = fmtUSD(info.liquidity, 0);
+            const vol     = fmtUSD(info.daily_volume, 0);
+            const holders = info.holderCount ? fmtNum(info.holderCount) : null;
+            const circ    = info.circSupply ? fmtNum(Math.round(info.circSupply)) : null;
+            const buys    = info.numBuys24h ? fmtNum(info.numBuys24h) : null;
+            const sells   = info.numSells24h ? fmtNum(info.numSells24h) : null;
+            const traders = info.numTraders24h ? fmtNum(info.numTraders24h) : null;
+            const buyVol  = fmtUSD(info.buyVolume24h, 0);
+            const sellVol = fmtUSD(info.sellVolume24h, 0);
+            const poolAge = info.firstPoolAt ? (() => {
+              const days = Math.floor((Date.now() - new Date(info.firstPoolAt)) / 86400000);
+              return days < 1 ? "< 1 day" : days === 1 ? "1 day" : days < 365 ? `${days}d` : `${(days/365).toFixed(1)}y`;
+            })() : null;
+            const verified    = info.isVerified || info.tags?.includes("verified");
+            const isSus       = info.audit?.isSus;
+            const hasFreeze   = info.freezeAuthority || info.audit?.freezeAuthorityDisabled === false;
+            const hasMintAuth = info.mint_authority  || info.audit?.mintAuthorityDisabled === false;
+            const organicScore = info.organicScore != null ? Math.round(info.organicScore) : null;
+            const organicColor = organicScore >= 80 ? T.green : organicScore >= 50 ? "#f6ad55" : T.red;
+            const logoUrl = info.icon || info.logoURI || info.logo_url || TOKEN_LOGO_URLS[info.symbol?.toUpperCase()] || (mint ? `https://img.jup.ag/tokens/${mint}` : null);
+
+            return (
+              <div style={{ margin:"0 0 20px 44px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, overflow:"hidden" }}>
+
+                {/* ── Hero header with logo + name + price ── */}
+                <div style={{ padding:"16px", background:`linear-gradient(135deg, #161e27 0%, #1a2535 100%)`, borderBottom:`1px solid ${T.border}` }}>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                      {/* Logo */}
+                      <div style={{ width:48, height:48, borderRadius:14, overflow:"hidden", flexShrink:0, background:"linear-gradient(135deg, #1e2d3d, #253545)", border:`1.5px solid ${T.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, fontWeight:800, color:T.text2, position:"relative" }}>
+                        {logoUrl
+                          ? <img src={logoUrl} alt={info.symbol} style={{ width:"100%", height:"100%", objectFit:"cover" }} onError={e => e.target.style.display="none"} />
+                          : <span>{(info.symbol||"?").slice(0,2)}</span>
+                        }
+                      </div>
+                      <div>
+                        <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                          <span style={{ fontFamily:T.serif, fontSize:17, fontWeight:700, color:T.text1 }}>{info.name || info.symbol}</span>
+                          {verified && (
+                            <span style={{ display:"flex", alignItems:"center", gap:3, fontSize:10, fontWeight:700, color:T.accent, background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:20, padding:"1px 7px" }}>
+                              <svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                              Verified
+                            </span>
+                          )}
+                          {isSus && <span style={{ fontSize:10, fontWeight:700, color:T.red, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:20, padding:"1px 7px" }}>🚨 Sus</span>}
+                        </div>
+                        <div style={{ fontSize:12, color:T.text3, marginTop:2 }}>{info.symbol} · <span style={{ fontFamily:"monospace", fontSize:11 }}>{mint.slice(0,8)}…{mint.slice(-4)}</span></div>
+                      </div>
+                    </div>
+                    <button onClick={() => setShowTokenCard(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:18, cursor:"pointer", lineHeight:1, padding:"4px 6px", alignSelf:"flex-start" }}>✕</button>
+                  </div>
+
+                  {/* Price + 24h change */}
+                  {price && (
+                    <div style={{ display:"flex", alignItems:"flex-end", gap:10 }}>
+                      <div style={{ fontSize:28, fontWeight:800, color:T.text1, lineHeight:1 }}>{price}</div>
+                      {chg24h && (
+                        <div style={{ fontSize:13, fontWeight:700, color: chgUp ? T.green : T.red, background: chgUp ? T.greenBg : T.redBg, border:`1px solid ${chgUp ? T.greenBd : T.redBd}`, borderRadius:8, padding:"3px 9px", lineHeight:1.4, marginBottom:2 }}>
+                          {chgUp ? "▲" : "▼"} {chg24h}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ padding:14, display:"flex", flexDirection:"column", gap:12 }}>
+
+                  {/* ── Market Data Grid ── */}
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                    {[
+                      { label:"Mkt Cap",   value:mcap },
+                      { label:"FDV",       value:fdv },
+                      { label:"Liquidity", value:liq },
+                      { label:"24h Vol",   value:vol },
+                      { label:"Holders",   value:holders },
+                      { label:"Age",       value:poolAge ? poolAge + " old" : null },
+                    ].filter(r => r.value).map(({ label, value }) => (
+                      <div key={label} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
+                        <div style={{ fontSize:10, color:T.text3, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:3 }}>{label}</div>
+                        <div style={{ fontSize:14, fontWeight:700, color:T.text1 }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* ── 24h Trading Activity ── */}
+                  {(buys || sellVol) && (
+                    <div style={{ padding:"12px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:12 }}>
+                      <div style={{ fontSize:10, color:T.text3, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:10 }}>24h Trading Activity</div>
+                      <div style={{ display:"flex", gap:8 }}>
+                        {(buys || sells) && (
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Buys / Sells</div>
+                            <div style={{ fontSize:13, fontWeight:600 }}>
+                              <span style={{ color:T.green }}>{buys||"—"}</span>
+                              <span style={{ color:T.text3 }}> / </span>
+                              <span style={{ color:T.red }}>{sells||"—"}</span>
+                            </div>
+                            {traders && <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{traders} traders</div>}
+                          </div>
+                        )}
+                        {(buyVol || sellVol) && (
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Buy / Sell Vol</div>
+                            <div style={{ fontSize:13, fontWeight:600 }}>
+                              <span style={{ color:T.green }}>{buyVol||"—"}</span>
+                              <span style={{ color:T.text3 }}> / </span>
+                              <span style={{ color:T.red }}>{sellVol||"—"}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      {/* Buy vs Sell pressure bar */}
+                      {info.buyVolume24h > 0 && info.sellVolume24h > 0 && (() => {
+                        const total = info.buyVolume24h + info.sellVolume24h;
+                        const buyPct = Math.round((info.buyVolume24h / total) * 100);
+                        return (
+                          <div style={{ marginTop:10 }}>
+                            <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3, marginBottom:3 }}>
+                              <span style={{ color:T.green }}>Buy {buyPct}%</span>
+                              <span style={{ color:T.red }}>Sell {100-buyPct}%</span>
+                            </div>
+                            <div style={{ height:5, borderRadius:5, background:T.redBg, overflow:"hidden" }}>
+                              <div style={{ height:"100%", width:`${buyPct}%`, background:T.green, borderRadius:5, transition:"width 0.5s" }}/>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* ── Organic Score + Safety ── */}
+                  {(organicScore != null || hasFreeze || hasMintAuth || info.topHoldersPercentage != null) && (
+                    <div style={{ padding:"12px 14px", background: isSus ? T.redBg : T.bg, border:`1px solid ${isSus ? T.redBd : T.border}`, borderRadius:12 }}>
+                      <div style={{ fontSize:10, color:T.text3, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:10 }}>Safety & Trust</div>
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                        {organicScore != null && (
+                          <div style={{ flex:1, minWidth:120 }}>
+                            <div style={{ fontSize:10, color:T.text3, marginBottom:4 }}>Organic Score</div>
+                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <div style={{ flex:1, height:5, borderRadius:5, background:T.border, overflow:"hidden" }}>
+                                <div style={{ height:"100%", width:`${organicScore}%`, background:organicColor, borderRadius:5 }}/>
+                              </div>
+                              <span style={{ fontSize:13, fontWeight:800, color:organicColor }}>{organicScore}</span>
+                            </div>
+                            {info.organicScoreLabel && <div style={{ fontSize:10, color:organicColor, marginTop:2 }}>{info.organicScoreLabel}</div>}
+                          </div>
+                        )}
+                        <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
+                          {verified && <span style={{ fontSize:11, color:T.green }}>✓ Verified</span>}
+                          {hasFreeze && <span style={{ fontSize:11, color:"#f6ad55" }}>⚠ Freeze auth</span>}
+                          {hasMintAuth && <span style={{ fontSize:11, color:"#f6ad55" }}>⚠ Mint auth</span>}
+                          {isSus && <span style={{ fontSize:11, color:T.red, fontWeight:700 }}>🚨 Flagged suspicious</span>}
+                          {info.topHoldersPercentage != null && <span style={{ fontSize:11, color:T.text3 }}>Top holders: {info.topHoldersPercentage.toFixed(1)}%</span>}
+                          {info.devMints != null && <span style={{ fontSize:11, color:T.text3 }}>Dev mints: {info.devMints}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Supply ── */}
+                  {circ && (
+                    <div style={{ display:"flex", gap:8 }}>
+                      <div style={{ flex:1, padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
+                        <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Circ Supply</div>
+                        <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{circ}</div>
+                      </div>
+                      {info.totalSupply && Math.round(info.totalSupply) !== Math.round(info.circSupply) && (
+                        <div style={{ flex:1, padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
+                          <div style={{ fontSize:10, color:T.text3, marginBottom:3 }}>Total Supply</div>
+                          <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{fmtNum(Math.round(info.totalSupply))}</div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Token metadata ── */}
+                  {(info.launchpad || info.graduatedAt || info.decimals !== undefined || info.tags?.length) && (
+                    <div style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, display:"flex", flexWrap:"wrap", gap:"4px 14px", fontSize:11, color:T.text3 }}>
+                      {info.launchpad && <span>Launchpad: <span style={{color:T.text2}}>{info.launchpad}</span></span>}
+                      {info.graduatedAt && <span>Graduated: <span style={{color:T.text2}}>{new Date(info.graduatedAt).toLocaleDateString()}</span></span>}
+                      {info.decimals !== undefined && <span>Decimals: <span style={{color:T.text2}}>{info.decimals}</span></span>}
+                      {info.tags?.slice(0,5).map(tag => (
+                        <span key={tag} style={{ padding:"1px 7px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontWeight:500 }}>{tag}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* ── Social links ── */}
+                  {(info.twitter || info.website || info.telegram || info.discord) && (
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                      {[
+                        { key:"twitter",  label:"Twitter / X", icon:"𝕏", url:info.twitter },
+                        { key:"website",  label:"Website",     icon:"🌐", url:info.website },
+                        { key:"telegram", label:"Telegram",    icon:"✈️", url:info.telegram },
+                        { key:"discord",  label:"Discord",     icon:"🎮", url:info.discord },
+                      ].filter(s => s.url).map(s => (
+                        <a key={s.key} href={s.url} target="_blank" rel="noopener noreferrer"
+                          style={{ display:"flex", alignItems:"center", gap:5, padding:"7px 13px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, textDecoration:"none", fontSize:12, fontWeight:500 }}>
+                          <span>{s.icon}</span> {s.label}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* ── Action buttons ── */}
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={() => { setShowTokenCard(false); send(`Swap SOL to ${info.symbol}`); }}
+                      style={{ flex:1, padding:"10px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:700, cursor:"pointer" }}>
+                      Swap → {info.symbol}
+                    </button>
+                    <a href={`https://jup.ag/swap/SOL-${mint}`} target="_blank" rel="noopener noreferrer"
+                      style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", padding:"10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, fontWeight:500, textDecoration:"none" }}>
+                      View on Jupiter ↗
+                    </a>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Swap panel ─────────────────────────────────────────────────── */}
           {showSwap && (
@@ -5676,6 +5923,41 @@ Order: \`${orderKey.slice(0,20)}…\`
               ) : (
                 <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
 
+                  {/* ── Net Worth Banner ── */}
+                  {(() => {
+                    const walletUsd = Object.entries(portfolioData.walletBalances || {}).reduce((sum, [sym, bal]) => {
+                      return sum + (portfolioData.prices?.[sym] ? bal * portfolioData.prices[sym] : 0);
+                    }, 0);
+                    const perpUsd = (portfolioData.perpPositions || []).reduce((sum, p) => sum + parseFloat(p.sizeUsd || 0), 0);
+                    const earnUsd = (portfolioData.earnPositions || []).reduce((sum, e) => {
+                      const ua = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
+                      const sym = e.asset?.symbol || e.assetSymbol || "?";
+                      return sum + (ua > 1e6 ? ua / Math.pow(10, e.asset?.decimals ?? 6) : ua) * (portfolioData.prices?.[sym] || 0);
+                    }, 0);
+                    const lpUsd = (portfolioData.lpPositions || []).reduce((sum, p) => sum + parseFloat(p.value || 0), 0);
+                    const stakedUsd = (() => {
+                      const s = portfolioData.stakedJup;
+                      if (!s) return 0;
+                      const amt = parseFloat(s.totalStaked || s.stakedAmount || s.amount || 0);
+                      return amt * (portfolioData.prices?.["JUP"] || 0);
+                    })();
+                    const netWorth = walletUsd + perpUsd + earnUsd + lpUsd + stakedUsd;
+                    if (netWorth <= 0) return null;
+                    return (
+                      <div style={{ padding:"14px 16px", background:`linear-gradient(135deg, ${T.accent}11, ${T.accent}22)`, border:`1px solid ${T.accent}33`, borderRadius:12 }}>
+                        <div style={{ fontSize:10, color:T.text3, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:4 }}>Total Net Worth</div>
+                        <div style={{ fontSize:28, fontWeight:800, color:T.accent, lineHeight:1 }}>${netWorth.toLocaleString(undefined, { minimumFractionDigits:2, maximumFractionDigits:2 })}</div>
+                        <div style={{ display:"flex", flexWrap:"wrap", gap:"6px 14px", marginTop:8, fontSize:11, color:T.text3 }}>
+                          {walletUsd > 0 && <span>Wallet <span style={{ color:T.text2 }}>${walletUsd.toFixed(2)}</span></span>}
+                          {perpUsd > 0   && <span>Perps <span style={{ color:T.text2 }}>${perpUsd.toFixed(2)}</span></span>}
+                          {earnUsd > 0   && <span>Earn <span style={{ color:T.text2 }}>${earnUsd.toFixed(2)}</span></span>}
+                          {lpUsd > 0     && <span>LP <span style={{ color:T.text2 }}>${lpUsd.toFixed(2)}</span></span>}
+                          {stakedUsd > 0 && <span>Staked <span style={{ color:T.text2 }}>${stakedUsd.toFixed(2)}</span></span>}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   {/* ── Token Balances with real logos ── */}
                   <div>
                     <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
@@ -5686,7 +5968,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                       {Object.entries(portfolioData.walletBalances || portfolioData.solBalance || {}).length === 0 ? (
                         <div style={{ fontSize:12, color:T.text3 }}>No balances found.</div>
                       ) : (
-                        Object.entries(portfolioData.walletBalances || portfolioData.solBalance || {}).map(([sym, bal]) => {
+                        Object.entries(portfolioData.walletBalances || portfolioData.solBalance || {})
+                          .sort(([,a], [,b]) => {
+                            const aUsd = portfolioData.prices?.[Object.keys(portfolioData.walletBalances||{})[0]] ? a * (portfolioData.prices?.[Object.keys(portfolioData.walletBalances||{})[0]]||0) : a;
+                            const bUsd = portfolioData.prices?.[Object.keys(portfolioData.walletBalances||{})[1]] ? b * (portfolioData.prices?.[Object.keys(portfolioData.walletBalances||{})[1]]||0) : b;
+                            return bUsd - aUsd;
+                          })
+                          .map(([sym, bal]) => {
                           const usdVal  = portfolioData.prices?.[sym] ? (bal * portfolioData.prices[sym]) : null;
                           const logoUrl = portfolioData.logoMap?.[sym] || null;
                           return (
@@ -5702,11 +5990,14 @@ Order: \`${orderKey.slice(0,20)}…\`
                                     : sym.slice(0,2)
                                   }
                                 </div>
-                                <span style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{sym}</span>
+                                <div>
+                                  <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{sym}</div>
+                                  {portfolioData.prices?.[sym] && <div style={{ fontSize:10, color:T.text3 }}>${portfolioData.prices[sym] < 1 ? portfolioData.prices[sym].toFixed(4) : portfolioData.prices[sym].toFixed(2)}</div>}
+                                </div>
                               </div>
                               <div style={{ textAlign:"right" }}>
                                 <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{typeof bal === "number" ? (bal < 1 ? bal.toFixed(6) : bal.toFixed(4)) : String(bal)}</div>
-                                {usdVal != null && <div style={{ fontSize:11, color:T.text3, marginTop:1 }}>{"$" + usdVal.toFixed(2)}</div>}
+                                {usdVal != null && <div style={{ fontSize:11, color:usdVal > 10 ? T.accent : T.text3, marginTop:1, fontWeight: usdVal > 10 ? 600 : 400 }}>{"$" + usdVal.toFixed(2)}</div>}
                               </div>
                             </div>
                           );
@@ -5891,6 +6182,131 @@ Order: \`${orderKey.slice(0,20)}…\`
                       </div>
                     </div>
                   )}
+                  {/* ── Perps Positions ── */}
+                  {(portfolioData.perpPositions||[]).length > 0 && (
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                        <SvgZap size={13} color={T.red}/>
+                        <span style={{ fontSize:11, fontWeight:700, color:T.red, letterSpacing:"0.08em", textTransform:"uppercase" }}>Perps Positions</span>
+                        <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.perpPositions.length}</span>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {portfolioData.perpPositions.map((p, i) => {
+                          const side = p.side || "long";
+                          const mkt  = p.market || "PERP";
+                          const pnlRaw = parseFloat(p.unrealizedPnlUsd ?? 0);
+                          const pnlColor = pnlRaw >= 0 ? T.green : T.red;
+                          return (
+                            <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                                <span style={{ fontWeight:700, color:T.text1 }}>{side==="long"?"📈":"📉"} {side.toUpperCase()} {mkt}</span>
+                                {p.sizeUsd && <span style={{ fontWeight:700, color:T.text1 }}>${parseFloat(p.sizeUsd).toFixed(2)}</span>}
+                              </div>
+                              <div style={{ display:"flex", flexWrap:"wrap", gap:"3px 10px", color:T.text3, fontSize:11 }}>
+                                {p.entryPrice && <span>Entry: <span style={{color:T.text2}}>${parseFloat(p.entryPrice).toFixed(2)}</span></span>}
+                                {p.leverage && <span>Lev: <span style={{color:T.text2}}>{parseFloat(p.leverage).toFixed(1)}x</span></span>}
+                                {p.liquidationPrice && <span>Liq: <span style={{color:T.red}}>${parseFloat(p.liquidationPrice).toFixed(2)}</span></span>}
+                                {p.unrealizedPnlUsd != null && <span>PnL: <span style={{color:pnlColor, fontWeight:700}}>{pnlRaw>=0?"+":""}${pnlRaw.toFixed(2)}</span></span>}
+                              </div>
+                              <button onClick={() => doClosePerp(p)} disabled={!!closingPerp} className="hov-btn"
+                                style={{ marginTop:8, width:"100%", padding:"5px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:7, color:T.red, fontSize:11, fontWeight:600, cursor:"pointer" }}>
+                                {closingPerp === p.positionKey ? <><span className="spinner" style={{borderTopColor:T.red, display:"inline-block", marginRight:4}}/> Closing…</> : "⚡ Close Position"}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── LP / Liquidity Positions ── */}
+                  {(portfolioData.lpPositions||[]).length > 0 && (
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                        <SvgCoin size={13} color="#a78bfa"/>
+                        <span style={{ fontSize:11, fontWeight:700, color:"#a78bfa", letterSpacing:"0.08em", textTransform:"uppercase" }}>LP Positions</span>
+                        <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.lpPositions.length}</span>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {portfolioData.lpPositions.map((lp, i) => (
+                          <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
+                            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                              <div>
+                                <div style={{ fontWeight:600, color:T.text1 }}>{lp.name}</div>
+                                <div style={{ fontSize:11, color:T.text3, marginTop:2 }}>{lp.platform}</div>
+                              </div>
+                              {lp.value != null && <span style={{ fontWeight:700, color:T.text1 }}>${parseFloat(lp.value).toFixed(2)}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Staked JUP ── */}
+                  {portfolioData.stakedJup && (() => {
+                    const s = portfolioData.stakedJup;
+                    const amt = parseFloat(s.totalStaked || s.stakedAmount || s.amount || 0);
+                    const jupPrice = portfolioData.prices?.["JUP"] || 0;
+                    const usdVal = amt * jupPrice;
+                    const voteWeight = s.voteWeight || s.votingPower || null;
+                    if (amt <= 0) return null;
+                    return (
+                      <div>
+                        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                          <SvgLock size={13} color="#f6ad55"/>
+                          <span style={{ fontSize:11, fontWeight:700, color:"#f6ad55", letterSpacing:"0.08em", textTransform:"uppercase" }}>Staked JUP</span>
+                        </div>
+                        <div style={{ padding:"12px 14px", background:T.bg, border:`1px solid #f6ad5533`, borderRadius:10, fontSize:12 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <img src="https://static.jup.ag/jup/icon.png" alt="JUP" style={{ width:22, height:22, borderRadius:"50%" }} onError={e=>e.target.style.display="none"} />
+                              <span style={{ fontWeight:700, color:T.text1 }}>{amt.toFixed(2)} JUP</span>
+                            </div>
+                            {jupPrice > 0 && <span style={{ fontWeight:700, color:"#f6ad55" }}>${usdVal.toFixed(2)}</span>}
+                          </div>
+                          {voteWeight && <div style={{ fontSize:11, color:T.text3 }}>Vote weight: {parseFloat(voteWeight).toFixed(2)}</div>}
+                          <a href="https://vote.jup.ag" target="_blank" rel="noopener noreferrer"
+                            style={{ display:"inline-block", marginTop:6, fontSize:11, color:"#f6ad55", textDecoration:"none" }}>
+                            Manage at vote.jup.ag ↗
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* ── Lock / Vesting Positions ── */}
+                  {(portfolioData.lockPositions||[]).length > 0 && (
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                        <SvgLock size={13} color={T.teal}/>
+                        <span style={{ fontSize:11, fontWeight:700, color:T.teal, letterSpacing:"0.08em", textTransform:"uppercase" }}>Locked / Vesting</span>
+                        <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.lockPositions.length}</span>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {portfolioData.lockPositions.map((lk, i) => {
+                          const claimable = parseFloat(lk.claimableAmount || 0) > 0;
+                          return (
+                            <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${claimable ? T.greenBd : T.border}`, borderRadius:10, fontSize:12 }}>
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
+                                <span style={{ fontWeight:700, color:T.text1 }}>{lk.totalAmount} {lk.symbol}</span>
+                                <span style={{ fontSize:10, padding:"2px 7px", background: claimable ? T.greenBg : T.border, borderRadius:6, color: claimable ? T.green : T.text3, fontWeight:700 }}>
+                                  {lk.vestedPercent}% vested
+                                </span>
+                              </div>
+                              {claimable && (
+                                <div style={{ color:T.green, fontWeight:600 }}>
+                                  {lk.claimableAmount} {lk.symbol} claimable
+                                </div>
+                              )}
+                              {lk.cliff && <div style={{ color:T.text3, fontSize:11, marginTop:2 }}>Cliff: {new Date(lk.cliff * 1000).toLocaleDateString()}</div>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* ── Airdrops (claimed + unclaimed) ── */}
                   {(portfolioData.airdrops||[]).length > 0 && (
                     <div>
