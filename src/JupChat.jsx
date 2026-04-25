@@ -1447,8 +1447,8 @@ export default function JupChat() {
     } catch (err) {
       setLockStatus("error");
       push("ai", `Lock creation failed: ${err?.message}`);
+      setLockStatus(null);
     }
-    setLockStatus(null);
   };
 
   // ── Lock: claim vested tokens ────────────────────────────────────────────────
