@@ -267,7 +267,7 @@ Available actions:
 - "FETCH_TOKEN_CATEGORY"→ actionData: { "category": "toptrending", "interval": "24h", "limit": 20 } — category: toporganicscore|toptraded|toptrending; interval: 5m|1h|6h|24h
 - "FETCH_TOKEN_RECENT"  → actionData: {} — newest tokens that just got their first liquidity pool
 - "CHECK_TOKEN_VERIFY"  → actionData: { "symbol": "BONK" } — check if a token is eligible for Jupiter express verification
-- "FETCH_PORTFOLIO"  → actionData: { "wallet": "address_or_connected" } — fetches wallet balances + DeFi positions + prediction positions + earn positions + pending orders
+- "FETCH_PORTFOLIO"  → actionData: { "wallet": "address_or_connected" } — fetches wallet balances + DeFi positions + prediction positions + earn positions + pending orders + airdrops (claimed & unclaimed)
 - "SHOW_SWAP"        → actionData: { "from": "SOL", "to": "PEPE", "amount": "10", "amountUSD": null, "portion": null, "reason": "brief why" }
   Amount rules (pick ONE, others null):
   • portion: "all" | "half" | "quarter" | "75%" | "10%" — when user says "all my X", "half my X", "25% of X", etc.
@@ -1160,13 +1160,14 @@ export default function JupChat() {
 
   // ── Portfolio — full on-demand, always fresh ─────────────────────────────────
   // Fetches: wallet balances + token logos + trigger orders + recurring orders +
-  // DeFi positions + earn positions + prediction positions/orders
+  // DeFi positions + earn positions + prediction positions/orders + airdrops
   const fetchPortfolioData = async (walletAddress) => {
     if (!walletAddress) return null;
     const results = {};
 
     // ── 1. Fresh wallet balances + mint addresses (for logos) ──────────────────
     try {
+      // Comprehensive known-mints map — never skip a token just because it's unknown
       const KNOWN_MINTS = {
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
         "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
@@ -1174,6 +1175,16 @@ export default function JupChat() {
         "So11111111111111111111111111111111111111112":   "SOL",
         "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
         "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+        "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
+        "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R": "RAY",
+        "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3": "PYTH",
+        "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
+        "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
+        "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1": "BSOL",
+        "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU": "SAMO",
+        "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE": "ORCA",
+        "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr": "POPCAT",
+        "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN": "TRUMP",
       };
       const [solJson, splJson] = await Promise.all([
         jupFetch(SOLANA_RPC, { method:"POST", body:{ jsonrpc:"2.0", id:1, method:"getBalance", params:[walletAddress,{commitment:"confirmed"}] } }),
@@ -1182,15 +1193,52 @@ export default function JupChat() {
       const sol = (solJson.result?.value || 0) / 1e9;
       const balances = { SOL: sol };
       const mintMap  = { SOL: "So11111111111111111111111111111111111111112" }; // sym → mint
+      const mintToSym = {}; // reverse lookup used below for logo resolution
+
+      // Collect all SPL accounts with non-zero balance — NEVER skip unknown mints
+      const unknownMints = [];
       for (const acc of (splJson.result?.value || [])) {
         const info = acc.account.data.parsed.info;
-        const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === info.mint)?.[0]
-                 || KNOWN_MINTS[info.mint];
-        if (sym && info.tokenAmount.uiAmount > 0) {
-          balances[sym] = info.tokenAmount.uiAmount;
-          mintMap[sym]  = info.mint;
+        const uiAmt = info.tokenAmount.uiAmount;
+        if (!uiAmt || uiAmt <= 0) continue; // skip zero-balance dust
+        const mint = info.mint;
+        // Resolve symbol: cache → TOKEN_MINTS reverse → KNOWN_MINTS → fallback to short mint
+        const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
+                 || KNOWN_MINTS[mint]
+                 || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0];
+        if (sym) {
+          balances[sym] = uiAmt;
+          mintMap[sym]  = mint;
+          mintToSym[mint] = sym;
+          // Update cache so future operations know this mint
+          if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
+        } else {
+          // Unknown token — store with mint as key and batch-resolve metadata later
+          unknownMints.push({ mint, uiAmt });
         }
       }
+
+      // Batch-resolve unknown mints via Jupiter token API (parallel, up to 10)
+      if (unknownMints.length > 0) {
+        const resolved = await Promise.allSettled(
+          unknownMints.slice(0, 10).map(({ mint, uiAmt }) =>
+            jupFetch(`${JUP_TOKENS_API}/${mint}`)
+              .then(meta => ({ mint, uiAmt, sym: meta?.symbol || mint.slice(0,6) + "…", name: meta?.name }))
+              .catch(() => ({ mint, uiAmt, sym: mint.slice(0,6) + "…" }))
+          )
+        );
+        for (const r of resolved) {
+          if (r.status === "fulfilled") {
+            const { mint, uiAmt, sym } = r.value;
+            // Deduplicate: if symbol already taken, use mint prefix
+            const finalSym = balances[sym] !== undefined ? mint.slice(0,8) : sym;
+            balances[finalSym] = uiAmt;
+            mintMap[finalSym]  = mint;
+            if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
+          }
+        }
+      }
+
       results.walletBalances = balances;
       results.mintMap        = mintMap;
       // Keep global portfolio state in sync
@@ -1247,6 +1295,17 @@ export default function JupChat() {
       }
       results.earnPositions = earnArr;
     } catch {}
+
+    // ── 8. Jupiter Portfolio API — airdrops (claimed + unclaimed) ─────────────
+    try {
+      const airdropRes = await jupFetch(`${JUP_PORTFOLIO}/airdrops/${walletAddress}`);
+      // API returns array or { airdrops: [...] }
+      const airdropArr = Array.isArray(airdropRes) ? airdropRes
+        : Array.isArray(airdropRes?.airdrops) ? airdropRes.airdrops
+        : Array.isArray(airdropRes?.data) ? airdropRes.data
+        : [];
+      results.airdrops = airdropArr;
+    } catch { results.airdrops = []; }
 
     return results;
   };
@@ -5635,6 +5694,61 @@ Order: \`${orderKey.slice(0,20)}…\`
                   )}
                 </div>
               )}
+
+                  {/* ── Airdrops (claimed + unclaimed) ── */}
+                  {(portfolioData?.airdrops?.length > 0) && (() => {
+                    const unclaimed = (portfolioData.airdrops).filter(a => !a.claimed && !a.isClaimed);
+                    const claimed   = (portfolioData.airdrops).filter(a =>  a.claimed ||  a.isClaimed);
+                    return (
+                      <div>
+                        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                          <SvgRocket size={13} color="#c7f284"/>
+                          <span style={{ fontSize:11, fontWeight:700, color:"#c7f284", letterSpacing:"0.08em", textTransform:"uppercase" }}>Airdrops</span>
+                          {unclaimed.length > 0 && (
+                            <span style={{ fontSize:10, fontWeight:700, color:"#0d1117", background:"#c7f284", borderRadius:8, padding:"1px 7px" }}>{unclaimed.length} unclaimed</span>
+                          )}
+                        </div>
+                        <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                          {/* Unclaimed first */}
+                          {unclaimed.map((a, i) => {
+                            const name   = a.name || a.tokenSymbol || a.symbol || a.mint?.slice(0,8) || "Airdrop";
+                            const amount = a.amount || a.claimableAmount || a.totalAmount || "";
+                            const amtFmt = amount ? ` · ${parseFloat(amount).toLocaleString(undefined,{maximumFractionDigits:2})}` : "";
+                            const claimUrl = a.claimUrl || a.url || `https://jup.ag/portfolio`;
+                            const expiry = a.expiresAt || a.expiry;
+                            return (
+                              <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1.5px solid #c7f284`, borderRadius:10, fontSize:12 }}>
+                                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
+                                  <span style={{ fontWeight:700, color:"#c7f284" }}>🪂 {name}{amtFmt}</span>
+                                  <a href={claimUrl} target="_blank" rel="noopener noreferrer"
+                                    style={{ fontSize:11, fontWeight:700, color:"#0d1117", background:"#c7f284", borderRadius:6, padding:"2px 9px", textDecoration:"none" }}>Claim →</a>
+                                </div>
+                                {expiry && <div style={{ color:T.text3, fontSize:11 }}>Expires: {new Date(expiry).toLocaleDateString()}</div>}
+                              </div>
+                            );
+                          })}
+                          {/* Claimed (collapsed, max 3) */}
+                          {claimed.slice(0,3).map((a, i) => {
+                            const name   = a.name || a.tokenSymbol || a.symbol || a.mint?.slice(0,8) || "Airdrop";
+                            const amount = a.amount || a.claimableAmount || a.totalAmount || "";
+                            const amtFmt = amount ? ` · ${parseFloat(amount).toLocaleString(undefined,{maximumFractionDigits:2})}` : "";
+                            return (
+                              <div key={i} style={{ padding:"9px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12, opacity:0.6 }}>
+                                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                                  <span style={{ color:T.text2 }}>✅ {name}{amtFmt}</span>
+                                  <span style={{ fontSize:10, color:T.text3 }}>Claimed</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+              <div style={{ padding:"0 0 0" }}/>
+            </div>
+          )}
 
               <div style={{ padding:"0 16px 16px" }}>
                 <button onClick={() => setShowPortfolio(false)}
