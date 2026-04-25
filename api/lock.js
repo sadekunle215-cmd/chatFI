@@ -92,12 +92,12 @@ export default async function handler(req, res) {
       const params = Buffer.alloc(57);
       let off = 0;
       CREATE_DISC.copy(params, off); off += 8;
-      writeU64LE(params, now,             off); off += 8; // vestingStartTime
-      writeU64LE(params, BigInt(cliff),   off); off += 8; // cliffTime (duration)
-      writeU64LE(params, BigInt(86400),   off); off += 8; // frequency
-      writeU64LE(params, remainder,       off); off += 8; // cliffUnlockAmount
-      writeU64LE(params, perPeriod,       off); off += 8; // amountPerPeriod
-      writeU64LE(params, BigInt(periods), off); off += 8; // numberOfPeriod
+      writeU64LE(params, now,                      off); off += 8; // vestingStartTime
+      writeU64LE(params, now + BigInt(cliff),      off); off += 8; // cliffTime (absolute timestamp)
+      writeU64LE(params, BigInt(86400),            off); off += 8; // frequency
+      writeU64LE(params, 0n,                       off); off += 8; // cliffUnlockAmount = 0 (pure time-lock)
+      writeU64LE(params, amtBig / BigInt(periods), off); off += 8; // amountPerPeriod
+      writeU64LE(params, BigInt(periods),          off); off += 8; // numberOfPeriod
       params.writeUInt8(0, off);                          // updateRecipientMode
 
       const lockKeys = [
