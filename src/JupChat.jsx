@@ -1311,6 +1311,13 @@ export default function JupChat() {
         results.portfolioElements = portRes.elements || [];
         results.portfolioTokenInfo = portRes.tokenInfo || {};
 
+        // Debug: log all element labels/platformIds to console so we can see what the API returns
+        if (portRes.elements?.length) {
+          console.log("[JupChat Portfolio] elements:", portRes.elements.map(e => ({
+            label: e.label, platformId: e.platformId, name: e.name, value: e.value
+          })));
+        }
+
         // Extract logos from tokenInfo for any tokens we still don't have logos for
         const tokenInfoSolana = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
         for (const [mint, info] of Object.entries(tokenInfoSolana)) {
@@ -1349,63 +1356,68 @@ export default function JupChat() {
           }
         }
 
-        // ── Extract earn positions from portfolio elements ──────────────────
-        // Jupiter portfolio API aggregates earn/vault/yield positions under various labels
-        const earnEls = (portRes.elements || []).filter(el => {
+        // ── Capture ALL non-wallet DeFi elements from portfolio API ────────
+        // We don't filter by label name because Jupiter uses many different labels
+        // (JupiterLend, Earn, Vault, JupiterLock, Vested, etc.) and they change.
+        // Instead we take everything with value > 0 that isn't a plain wallet balance.
+        const allDefi = (portRes.elements || []).filter(el => {
           const label = (el.label || "").toLowerCase();
-          const pid   = (el.platformId || "").toLowerCase();
-          return label.includes("earn") || label.includes("lend") || label === "vault" ||
-                 label === "yield" || pid.includes("jupiter-lend") || pid.includes("earn");
+          return label !== "wallet" && parseFloat(el.value || 0) > 0;
         });
-        if (earnEls.length > 0) {
-          results._earnFromPortfolio = earnEls.flatMap(el => {
-            const assets = el.data?.assets || el.data?.positions || [];
-            if (assets.length === 0) {
-              return el.value ? [{
-                _fromPortfolio: true, label: el.label, platformId: el.platformId,
-                symbol: el.name || el.label || "Token", value: el.value,
-                underlyingAssets: el.value, shares: 0,
-              }] : [];
-            }
-            return assets.map(a => ({
-              _fromPortfolio: true, label: el.label, platformId: el.platformId,
-              symbol: a.symbol || a.name || el.name || "Token",
-              value: a.value ?? el.value,
-              underlyingAssets: a.underlyingAssets || a.amount || a.balance || a.depositedAmount || a.value,
-              shares: a.shares || 0,
-              asset: { ...(a.asset || a), decimals: a.decimals ?? a.asset?.decimals ?? 6 },
-            }));
-          }).filter(e => parseFloat(e.value || e.underlyingAssets || 0) > 0);
-        }
 
-        // ── Extract lock/vesting positions from portfolio elements ──────────
-        const lockEls = (portRes.elements || []).filter(el => {
-          const label = (el.label || "").toLowerCase();
-          const pid   = (el.platformId || "").toLowerCase();
-          return label.includes("lock") || label.includes("vest") || label === "vested" ||
-                 pid.includes("jupiter-lock") || pid.includes("lock");
-        });
-        if (lockEls.length > 0) {
-          results._lockFromPortfolio = lockEls.flatMap(el => {
-            const assets = el.data?.assets || el.data?.positions || [];
-            if (assets.length === 0) {
-              return [{
-                _fromPortfolio: true, label: el.label,
-                symbol: el.name || "Token",
-                totalAmount: el.value ? parseFloat(el.value).toFixed(2) : "0",
-                claimableAmount: "0", vestedPercent: "0",
-              }];
-            }
-            return assets.map(a => ({
-              _fromPortfolio: true, label: el.label,
-              symbol: a.symbol || a.name || el.name || "Token",
-              totalAmount: a.amount != null ? parseFloat(a.amount).toFixed(4)
-                         : el.value ? parseFloat(el.value).toFixed(2) : "0",
-              claimableAmount: a.claimableAmount ? parseFloat(a.claimableAmount).toFixed(4) : "0",
-              vestedPercent: "0",
-              cliff: a.cliff || a.cliffTime || null,
-            }));
-          });
+        // Sort into earn vs lock vs other based on best-effort label/platformId matching
+        const isEarnEl = (el) => {
+          const s = ((el.label || "") + (el.platformId || "") + (el.name || "")).toLowerCase();
+          return s.includes("earn") || s.includes("lend") || s.includes("vault") || s.includes("yield");
+        };
+        const isLockEl = (el) => {
+          const s = ((el.label || "") + (el.platformId || "") + (el.name || "")).toLowerCase();
+          return s.includes("lock") || s.includes("vest");
+        };
+
+        const toEarnPos = (el) => {
+          const assets = el.data?.assets || el.data?.positions || [];
+          if (assets.length === 0) {
+            return [{ _fromPortfolio: true, label: el.label, symbol: el.name || el.label || "Token",
+              value: el.value, underlyingAssets: el.value, shares: 0, asset: { decimals: 6 } }];
+          }
+          return assets.map(a => ({
+            _fromPortfolio: true, label: el.label,
+            symbol: a.symbol || a.name || el.name || "Token",
+            value: a.value ?? el.value,
+            underlyingAssets: a.underlyingAssets || a.amount || a.balance || a.depositedAmount || a.value,
+            shares: a.shares || 0,
+            asset: { decimals: a.decimals ?? a.asset?.decimals ?? 6 },
+          }));
+        };
+        const toLockPos = (el) => {
+          const assets = el.data?.assets || el.data?.positions || [];
+          if (assets.length === 0) {
+            return [{ _fromPortfolio: true, label: el.label, symbol: el.name || "Token",
+              totalAmount: el.value ? parseFloat(el.value).toFixed(2) : "0",
+              claimableAmount: "0", vestedPercent: "0" }];
+          }
+          return assets.map(a => ({
+            _fromPortfolio: true, label: el.label,
+            symbol: a.symbol || a.name || el.name || "Token",
+            totalAmount: a.amount != null ? parseFloat(a.amount).toFixed(4)
+                       : el.value ? parseFloat(el.value).toFixed(2) : "0",
+            claimableAmount: a.claimableAmount ? parseFloat(a.claimableAmount).toFixed(4) : "0",
+            vestedPercent: "0", cliff: a.cliff || a.cliffTime || null,
+          }));
+        };
+
+        const earnEls = allDefi.filter(isEarnEl);
+        const lockEls = allDefi.filter(isLockEl);
+        // Any element that didn't match earn or lock → treat as earn (generic DeFi yield)
+        const otherEls = allDefi.filter(el => !isEarnEl(el) && !isLockEl(el));
+
+        if (earnEls.length || otherEls.length) {
+          results._earnFromPortfolio = [...earnEls, ...otherEls].flatMap(toEarnPos)
+            .filter(e => parseFloat(e.value || e.underlyingAssets || 0) > 0);
+        }
+        if (lockEls.length) {
+          results._lockFromPortfolio = lockEls.flatMap(toLockPos);
         }
       }
     } catch {}
@@ -1456,8 +1468,12 @@ export default function JupChat() {
     } catch {}
 
     // ── 7. Earn positions ─────────────────────────────────────────────────────
+    // Try direct fetch first — the earn positions endpoint is publicly readable
+    // and going through the proxy fails silently when API key is missing.
     try {
-      const earn = await jupFetch(JUP_EARN_API + "/positions?wallets=" + walletAddress);
+      const earnRes = await fetch(JUP_EARN_API + "/positions?wallets=" + walletAddress);
+      if (!earnRes.ok) throw new Error("not ok");
+      const earn = await earnRes.json();
       if (!earn || earn.error) throw new Error("empty");
       let earnArr = Array.isArray(earn) ? earn
         : earn.data || earn.positions || earn.earnPositions || earn.result || earn.items || earn.balances || [];
@@ -1466,7 +1482,21 @@ export default function JupChat() {
       }
       if (earnArr.length) results.earnPositions = earnArr;
     } catch {}
-    // Fallback: use earn elements found in portfolio API (covers vault/yield/lend positions)
+    // Proxy fallback
+    if (!results.earnPositions?.length) {
+      try {
+        const earn = await jupFetch(JUP_EARN_API + "/positions?wallets=" + walletAddress);
+        if (earn && !earn.error) {
+          let earnArr = Array.isArray(earn) ? earn
+            : earn.data || earn.positions || earn.earnPositions || earn.result || earn.items || earn.balances || [];
+          if (!Array.isArray(earnArr)) {
+            earnArr = Object.values(earn).filter(v => v && typeof v === "object" && !Array.isArray(v));
+          }
+          if (earnArr.length) results.earnPositions = earnArr;
+        }
+      } catch {}
+    }
+    // Final fallback: earn elements extracted from portfolio API
     if (!results.earnPositions?.length && results._earnFromPortfolio?.length) {
       results.earnPositions = results._earnFromPortfolio;
     }
@@ -1517,40 +1547,76 @@ export default function JupChat() {
     } catch {}
 
     // ── 11. Locks (token vesting) ─────────────────────────────────────────────
+    // Try Jupiter lock API directly first (public endpoint)
     try {
-      const lockRes = await fetch("/api/lock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "accounts", wallet: walletAddress }),
-      });
-      const lockData = await lockRes.json();
-      if (!lockData.error && lockData.accounts?.length > 0) {
+      const lockDirect = await fetch(`${JUP_LOCK_API}/locks?wallet=${walletAddress}`).then(r => r.json());
+      const locks = Array.isArray(lockDirect) ? lockDirect
+        : lockDirect?.locks || lockDirect?.accounts || lockDirect?.data || [];
+      if (locks.length > 0) {
         const KNOWN_MINT_SYMS = {
           "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
           "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":  "JUP",
           "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
           "So11111111111111111111111111111111111111112":   "SOL",
-          "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
-          "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
         };
-        const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6, JUPUSD:6 };
-        results.lockPositions = lockData.accounts.map(acct => {
-          const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === acct.mint)?.[0]
-            || KNOWN_MINT_SYMS[acct.mint] || `${acct.mint.slice(0, 6)}…`;
+        const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6 };
+        results.lockPositions = locks.map(lk => {
+          const mint = lk.mint || lk.tokenMint || lk.asset || "";
+          const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
+            || KNOWN_MINT_SYMS[mint] || mint.slice(0, 6);
           const dec = tokenDecimalsRef.current[sym] || KNOWN_DECIMALS[sym] || 6;
           const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
+          const totalRaw = lk.totalRaw || lk.totalAmount || lk.amount || lk.depositedAmount || 0;
+          const claimRaw = lk.claimableRaw || lk.claimableAmount || lk.unlockedAmount || 0;
           return {
-            ...acct,
-            lockId:          acct.pubkey,
+            ...lk,
+            lockId:          lk.pubkey || lk.id || lk.address,
             symbol:          sym,
-            claimableAmount: fmtAmt(acct.claimableRaw || 0),
-            totalAmount:     fmtAmt(acct.totalRaw || 0),
-            vestedPercent:   acct.totalRaw > 0 ? ((acct.claimableRaw / acct.totalRaw) * 100).toFixed(1) : "0",
+            claimableAmount: typeof claimRaw === "number" && claimRaw > 1000 ? fmtAmt(claimRaw) : parseFloat(claimRaw || 0).toFixed(4),
+            totalAmount:     typeof totalRaw === "number" && totalRaw > 1000 ? fmtAmt(totalRaw) : parseFloat(totalRaw || 0).toFixed(4),
+            vestedPercent:   totalRaw > 0 ? ((parseFloat(claimRaw) / parseFloat(totalRaw)) * 100).toFixed(1) : "0",
+            cliff:           lk.cliff || lk.cliffTime || lk.cliffTimestamp || null,
           };
         });
       }
     } catch {}
-    // Merge any lock/vesting positions found in the portfolio API elements
+    // Server proxy fallback (/api/lock)
+    if (!results.lockPositions?.length) {
+      try {
+        const lockRes = await fetch("/api/lock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "accounts", wallet: walletAddress }),
+        });
+        const lockData = await lockRes.json();
+        if (!lockData.error && lockData.accounts?.length > 0) {
+          const KNOWN_MINT_SYMS = {
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+            "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":  "JUP",
+            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+            "So11111111111111111111111111111111111111112":   "SOL",
+            "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+            "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
+          };
+          const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6, JUPUSD:6 };
+          results.lockPositions = lockData.accounts.map(acct => {
+            const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === acct.mint)?.[0]
+              || KNOWN_MINT_SYMS[acct.mint] || `${acct.mint.slice(0, 6)}…`;
+            const dec = tokenDecimalsRef.current[sym] || KNOWN_DECIMALS[sym] || 6;
+            const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
+            return {
+              ...acct,
+              lockId:          acct.pubkey,
+              symbol:          sym,
+              claimableAmount: fmtAmt(acct.claimableRaw || 0),
+              totalAmount:     fmtAmt(acct.totalRaw || 0),
+              vestedPercent:   acct.totalRaw > 0 ? ((acct.claimableRaw / acct.totalRaw) * 100).toFixed(1) : "0",
+            };
+          });
+        }
+      } catch {}
+    }
+    // Final fallback: lock elements from portfolio API
     if (results._lockFromPortfolio?.length) {
       results.lockPositions = [...(results.lockPositions || []), ...results._lockFromPortfolio];
     }
