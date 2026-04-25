@@ -104,6 +104,12 @@ export default async function handler(req, res) {
       writeU64LE(params, numPeriods, off); off += 8; // numberOfPeriod = 1
       params.writeUInt8(0, off);                     // updateRecipientMode
 
+      // Anchor event CPI accounts — required by Jupiter Lock for on-chain event emission
+      const [eventAuthority] = PublicKey.findProgramAddressSync(
+        [Buffer.from("__event_authority")],
+        LOCK_PROGRAM
+      );
+
       const lockKeys = [
         { pubkey: baseKeypair.publicKey,        isSigner: true,  isWritable: false },
         { pubkey: escrowPDA,                    isSigner: false, isWritable: true  },
@@ -116,6 +122,8 @@ export default async function handler(req, res) {
         { pubkey: SystemProgram.programId,      isSigner: false, isWritable: false },
         { pubkey: SYSVAR_RENT_PUBKEY,           isSigner: false, isWritable: false },
         { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false },
+        { pubkey: eventAuthority,               isSigner: false, isWritable: false },
+        { pubkey: LOCK_PROGRAM,                 isSigner: false, isWritable: false },
       ];
 
       const lockIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys: lockKeys, data: params });
