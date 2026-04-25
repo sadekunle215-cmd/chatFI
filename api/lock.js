@@ -74,12 +74,16 @@ export default async function handler(req, res) {
       const isWsol       = mint === WSOL_MINT_STR;
 
       const cliff   = Math.max(parseInt(cliffSecs)  || 0, 0);
-      const vesting = Math.max(parseInt(vestingSecs) || 86400, 1);
-      const periods = Math.max(Math.floor(vesting / 86400), 1);
-      const amtBig     = BigInt(amount);
-      const perPeriod  = amtBig / BigInt(periods);
-      const remainder  = amtBig - (perPeriod * BigInt(periods));
-      const now        = BigInt(Math.floor(Date.now() / 1000));
+      const vesting = Math.max(parseInt(vestingSecs) || 86400, 86400);
+      const amtBig  = BigInt(amount);
+      const now     = BigInt(Math.floor(Date.now() / 1000));
+
+      // Use 1 period = full vesting duration to avoid rounding/token loss.
+      // cliffTime must be an absolute timestamp >= vestingStartTime.
+      const cliffTime  = now + BigInt(cliff);
+      const frequency  = BigInt(vesting); // single unlock at end of vesting
+      const perPeriod  = amtBig;          // all tokens in one period
+      const numPeriods = 1n;
 
       const baseKeypair = Keypair.generate();
       const [escrowPDA] = deriveEscrow(baseKeypair.publicKey);
@@ -92,13 +96,13 @@ export default async function handler(req, res) {
       const params = Buffer.alloc(57);
       let off = 0;
       CREATE_DISC.copy(params, off); off += 8;
-      writeU64LE(params, now,                      off); off += 8; // vestingStartTime
-      writeU64LE(params, now + BigInt(cliff),      off); off += 8; // cliffTime (absolute timestamp)
-      writeU64LE(params, BigInt(86400),            off); off += 8; // frequency
-      writeU64LE(params, 0n,                       off); off += 8; // cliffUnlockAmount = 0 (pure time-lock)
-      writeU64LE(params, amtBig / BigInt(periods), off); off += 8; // amountPerPeriod
-      writeU64LE(params, BigInt(periods),          off); off += 8; // numberOfPeriod
-      params.writeUInt8(0, off);                          // updateRecipientMode
+      writeU64LE(params, now,        off); off += 8; // vestingStartTime
+      writeU64LE(params, cliffTime,  off); off += 8; // cliffTime (absolute timestamp >= vestingStartTime)
+      writeU64LE(params, frequency,  off); off += 8; // frequency = full vesting duration
+      writeU64LE(params, 0n,         off); off += 8; // cliffUnlockAmount = 0
+      writeU64LE(params, perPeriod,  off); off += 8; // amountPerPeriod = full amount
+      writeU64LE(params, numPeriods, off); off += 8; // numberOfPeriod = 1
+      params.writeUInt8(0, off);                     // updateRecipientMode
 
       const lockKeys = [
         { pubkey: baseKeypair.publicKey,    isSigner: true,  isWritable: false },
@@ -122,14 +126,12 @@ export default async function handler(req, res) {
 
       // For native SOL: wrap into wSOL ATA before locking
       if (isWsol) {
-        const wsolAtaInfo = await connection.getAccountInfo(senderToken);
-        if (!wsolAtaInfo) {
-          // Create wSOL ATA if it doesn't exist
-          tx.add(createAssociatedTokenAccountInstruction(
-            funderKey, senderToken, funderKey, mintKey,
-            TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
-          ));
-        }
+        // Always add createATA instruction — it's a no-op on-chain if ATA already exists,
+        // and avoids a getAccountInfo RPC call that can fail and crash the route.
+        tx.add(createAssociatedTokenAccountInstruction(
+          funderKey, senderToken, funderKey, mintKey,
+          TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
+        ));
         // Transfer native SOL into wSOL ATA then sync balance
         tx.add(SystemProgram.transfer({ fromPubkey: funderKey, toPubkey: senderToken, lamports: Number(amtBig) }));
         tx.add(createSyncNativeInstruction(senderToken, TOKEN_PROGRAM_ID));
