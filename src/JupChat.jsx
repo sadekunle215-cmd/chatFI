@@ -9497,6 +9497,8 @@ export default function JupChat() {
       appId={appId}
       config={{
         loginMethods: ["email", "google", "twitter", "discord"],
+        // Ensure the modal closes and flow completes after OTP success
+        onSuccess: () => {},
         appearance: {
           theme: "dark",
           accentColor: "#c8f255",
@@ -9507,7 +9509,7 @@ export default function JupChat() {
           // Solana-only: disable ETH wallet creation, enable Solana
           ethereum: { createOnLogin: "off" },
           solana: { createOnLogin: "users-without-wallets" },
-          noPromptOnSignature: true,
+          noPromptOnSignature: false,
           requireUserPasswordOnCreate: false,
         },
         // Solana mainnet RPC
