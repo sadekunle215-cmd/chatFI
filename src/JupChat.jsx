@@ -417,6 +417,10 @@ Available actions:
 - "FETCH_LOCKS"     → actionData: {} — view all token locks where user is creator or recipient. Shows claimable amounts.
 - "SHOW_ROUTE"      → actionData: { "from": "SOL", "to": "USDC", "amount": "1" } — show full DEX route breakdown for this swap: AMMs used, split percentages, price impact per hop.
 - "FETCH_XSTOCKS"   → actionData: { "limit": 15, "sort": "volume" } — tokenized real-world stocks (xStocks / RWA stocks) on Solana. sort: "volume"|"price_change"|"market_cap". Default limit 15.
+- "SET_PRICE_ALERT" → actionData: { "token": "SOL", "condition": "above"|"below", "price": "200" } — set an in-session price alert; ChatFi notifies in chat when price crosses the threshold.
+- "SHOW_TRADE_JOURNAL" → actionData: { "period": "all"|"today"|"week" } — show the user's local trade history and estimated PnL.
+- "BASKET_SWAP"     → actionData: { "trades": [{ "from": "USDC", "to": "SOL", "amountUSD": "100" }, { "from": "USDC", "to": "JUP", "amountUSD": "100" }] } — execute multiple swaps in sequence. Use when user says "buy $X each of A B C" or "split $N between A B C".
+- "COPY_TRADE"      → actionData: { "wallet": "WALLET_ADDRESS", "limit": 5 } — fetch and show recent swaps from another wallet so user can mirror them. limit default 5.
 
 Rules:
 - "buy X" / "swap X to Y" / "exchange" → SHOW_SWAP — use EXACT symbol user mentioned even if unknown meme coin
@@ -456,6 +460,10 @@ Rules:
 - "lock tokens" / "vesting" / "lock JUP" / "lock SOL" / "lock my tokens" / "team vesting" / "investor lock" → SHOW_LOCK — open lock panel, pre-fill token/amount/cliff/vesting from user message
 - "my locks" / "vested tokens" / "claim vested" / "locked tokens" / "view locks" / "my vesting" → FETCH_LOCKS
 - "show route" / "how is swap routed" / "which DEX" / "route breakdown" / "swap path" / "which AMM" → SHOW_ROUTE
+- "alert me when" / "notify me when" / "price alert" / "tell me when X hits $Y" / "alert when X above/below" → SET_PRICE_ALERT — extract token, condition (above/below), price
+- "my trades" / "trade history" / "trade journal" / "my PnL" / "what have I traded" / "show my swaps" / "trading history" → SHOW_TRADE_JOURNAL
+- "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" → BASKET_SWAP — parse each token and USD amount into trades array; default from:"USDC"
+- "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
 - CRITICAL — SHOW_RECURRING is fully supported. When user asks for a recurring/DCA order, you MUST return action:"SHOW_RECURRING" with all fields pre-filled from the user's message. Never tell the user to do it manually.`;
@@ -469,7 +477,7 @@ const SUGGESTION_GROUPS = [
   {
     label: "Trade",
     color: "#63b3ed",
-    items: ["Swap SOL to BONK", "Limit order: buy SOL below $140", "OCO: TP $200 SL $120 on SOL", "Long SOL 10x perps"],
+    items: ["Swap SOL to BONK", "Limit order: buy SOL below $140", "OCO: TP $200 SL $120 on SOL", "Long SOL 10x perps", "Buy $50 each of SOL, JUP, BONK"],
   },
   {
     label: "Earn",
@@ -479,7 +487,7 @@ const SUGGESTION_GROUPS = [
   {
     label: "Tools",
     color: "#f6ad55",
-    items: ["Send 1 SOL via invite link", "Create a token on Jupiter Studio", "Lock 1000 JUP for 1 year", "Arsenal vs Man City prediction"],
+    items: ["Send 1 SOL via invite link", "Create a token on Jupiter Studio", "Lock 1000 JUP for 1 year", "Alert me when SOL hits $200", "My trade journal", "Arsenal vs Man City prediction"],
   },
 ];
 
@@ -1073,6 +1081,21 @@ function JupChatInner() {
   const [routeData, setRouteData]           = useState(null); // full Jupiter v1 quote response
   const [routeLoading, setRouteLoading]     = useState(false);
 
+  // ── Price Alerts ──────────────────────────────────────────────────────────────
+  const [priceAlerts, setPriceAlerts] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("chatfi-alerts") || "[]"); } catch { return []; }
+  });
+  const alertIntervalRef = useRef(null);
+
+  // ── Trade Journal ─────────────────────────────────────────────────────────────
+  const [tradeJournal, setTradeJournal] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("chatfi-journal") || "[]"); } catch { return []; }
+  });
+
+  // ── Copy Trade ────────────────────────────────────────────────────────────────
+  const [copyTradeData, setCopyTradeData] = useState(null);
+  const [showCopyTrade, setShowCopyTrade] = useState(false);
+
   // ── Jupiter official docs — fetched once, injected into AI system prompt ────
   const [jupDocs, setJupDocs] = useState("");
 
@@ -1514,6 +1537,52 @@ function JupChatInner() {
   };
 
   // ── Verify Eligibility — check if a token can be express-verified ───────────
+  // ── Trade Journal — log completed trades to localStorage ────────────────────
+  const logTrade = (entry) => {
+    const record = { ...entry, ts: Date.now() };
+    setTradeJournal(prev => {
+      const next = [record, ...prev].slice(0, 300);
+      try { localStorage.setItem("chatfi-journal", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  // ── Price Alert polling — checks every 30s ────────────────────────────────────
+  useEffect(() => {
+    if (alertIntervalRef.current) clearInterval(alertIntervalRef.current);
+    const active = priceAlerts.filter(a => !a.triggered);
+    if (!active.length) return;
+    alertIntervalRef.current = setInterval(async () => {
+      try {
+        const syms = [...new Set(active.map(a => a.token))];
+        const priceRes = await fetch(`${JUP_PRICE_API}?ids=${syms.join(",")}`).then(r => r.json());
+        const priceMap = priceRes?.data || {};
+        const updated = priceAlerts.map(a => {
+          if (a.triggered) return a;
+          const p = priceMap[a.token]?.price || priceMap[a.tokenMint]?.price;
+          if (!p) return a;
+          const hit = a.condition === "above" ? p >= a.target : p <= a.target;
+          if (hit) {
+            push("ai", `🔔 **Price Alert!**\n\n**${a.token}** just hit **$${Number(p).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})}** — your alert was set for ${a.condition === "above" ? "above" : "below"} **$${Number(a.target).toLocaleString()}**.`);
+            return { ...a, triggered: true };
+          }
+          return a;
+        });
+        setPriceAlerts(updated);
+        try { localStorage.setItem("chatfi-alerts", JSON.stringify(updated)); } catch {}
+      } catch {}
+    }, 30000);
+    return () => clearInterval(alertIntervalRef.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priceAlerts]);
+
+  // ── Copy Trade — serverside Helius fetch ─────────────────────────────────────
+  const fetchWalletTrades = async (walletAddress, limit = 5) => {
+    const res = await fetch(`/api/wallet-trades?wallet=${encodeURIComponent(walletAddress)}&limit=${limit}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  };
+
   const checkVerifyEligibility = async (mintAddress) => {
     if (!mintAddress) return null;
     try {
@@ -4095,6 +4164,7 @@ function JupChatInner() {
       const outAmt = orderData?.outAmount ? (parseInt(orderData.outAmount)/Math.pow(10,toDecimals||6)).toFixed(4) : "?";
       const feeBps = orderData?.feeBps ? ` · Fee: ${orderData.feeBps}bps` : "";
       push("ai", `Swap executed via Jupiter ✓\n\nSent **${amount} ${from}** → received **~${outAmt} ${to}**${feeBps}\n\nTransaction: \`${signature?.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      logTrade({ type: "swap", from, to, amount, out: outAmt, tx: signature });
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
@@ -4137,6 +4207,7 @@ function JupChatInner() {
       const signature=execRes.signature||execRes.txid||orderRes.order;
       setShowTrig(false);
       push("ai",`Limit order placed ✓\n\nWill ${direction==="below"?"buy":"sell"} **${amount} ${direction==="below"?"USDC worth of "+token:token}** when price hits **$${targetPrice}**\n\nTransaction: \`${signature?.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      logTrade({ type: "limit", token, amount, targetPrice, direction, tx: signature });
     } catch (err) {
       push("ai",`Limit order failed: ${err?.message||"Unknown error"}. Please try again.`);
     }
@@ -4625,6 +4696,19 @@ Order: \`${orderKey.slice(0,20)}…\`
   }, [privyReady, privyAuthed, privyEmbeddedWallet, privyUser]);
 
   // ── Send message to Claude ──────────────────────────────────────────────────
+  // ── Mirror-trade event: triggered by Copy Trade "Mirror" button ─────────────
+  useEffect(() => {
+    const handler = (e) => {
+      const { from, to, amount } = e.detail || {};
+      if (from && to && amount) {
+        send(`Swap ${amount} ${from} to ${to}`);
+      }
+    };
+    window.addEventListener("chatfi-mirror-trade", handler);
+    return () => window.removeEventListener("chatfi-mirror-trade", handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const send = async (override) => {
     const raw = (override ?? input).trim();
     if (!raw || typing) return;
@@ -5216,6 +5300,114 @@ Order: \`${orderKey.slice(0,20)}…\`
         const to   = actionData?.to   || "USDC";
         const amt  = actionData?.amount || "1";
         await fetchRouteBreakdown(from, to, amt);
+
+      // ── SET_PRICE_ALERT ────────────────────────────────────────────────────
+      } else if (action === "SET_PRICE_ALERT") {
+        const alertToken = (actionData?.token || "SOL").toUpperCase();
+        const alertCond  = actionData?.condition === "below" ? "below" : "above";
+        const alertPrice = parseFloat(actionData?.price);
+        if (!alertPrice || isNaN(alertPrice)) {
+          push("ai", "Please specify a valid price for the alert, e.g. *alert me when SOL hits $200*.");
+        } else {
+          const newAlert = { token: alertToken, condition: alertCond, target: alertPrice, triggered: false, id: Date.now() };
+          const updated = [...priceAlerts, newAlert];
+          setPriceAlerts(updated);
+          try { localStorage.setItem("chatfi-alerts", JSON.stringify(updated)); } catch {}
+          push("ai", text + `\n\n🔔 Alert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**\nI'll notify you in chat when it triggers. You can set multiple alerts.`);
+        }
+
+      // ── SHOW_TRADE_JOURNAL ─────────────────────────────────────────────────
+      } else if (action === "SHOW_TRADE_JOURNAL") {
+        const period = actionData?.period || "all";
+        const now = Date.now();
+        const cutoff = period === "today" ? now - 86400000 : period === "week" ? now - 604800000 : 0;
+        const trades = tradeJournal.filter(t => t.ts >= cutoff);
+        if (!trades.length) {
+          push("ai", text + "\n\nNo trades recorded yet. Your swaps and limit orders will appear here automatically.");
+        } else {
+          const lines = trades.slice(0, 50).map((t, i) => {
+            const d = new Date(t.ts).toLocaleDateString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
+            if (t.type === "swap") return `${i+1}. **${t.from}→${t.to}** — ${t.amount} ${t.from} → ~${t.out} ${t.to}  ·  ${d}`;
+            if (t.type === "limit") return `${i+1}. **Limit** ${t.direction === "below" ? "buy" : "sell"} ${t.amount} ${t.token} @ $${t.targetPrice}  ·  ${d}`;
+            if (t.type === "basket") return `${i+1}. **Basket** — ${t.summary}  ·  ${d}`;
+            return `${i+1}. ${t.type} — ${d}`;
+          }).join("\n");
+          push("ai", text + `\n\n**Trade Journal** (${trades.length} trades${period !== "all" ? `, ${period}` : ""}):\n${lines}`);
+        }
+
+      // ── BASKET_SWAP ────────────────────────────────────────────────────────
+      } else if (action === "BASKET_SWAP") {
+        const basketTrades = actionData?.trades || [];
+        if (!basketTrades.length) { push("ai", "No trades found in basket. Try: *buy $100 each of SOL, JUP, and BONK*."); }
+        else if (!walletFull) { push("ai", "Connect your wallet first to execute a basket swap."); }
+        else {
+          push("ai", text + `\n\nExecuting **${basketTrades.length} swaps** in sequence…`);
+          let done = 0, failed = 0;
+          const summary = [];
+          for (const t of basketTrades) {
+            try {
+              const fromSym = (t.from || "USDC").toUpperCase();
+              const toSym   = (t.to || "SOL").toUpperCase();
+              const usd     = parseFloat(t.amountUSD) || 0;
+              const amt     = t.amount || String(usd);
+              // resolve mints
+              const fromMint = tokenCacheRef.current[fromSym] || TOKEN_MINTS[fromSym];
+              const toMint   = tokenCacheRef.current[toSym]   || TOKEN_MINTS[toSym];
+              if (!fromMint || !toMint) { failed++; summary.push(`❌ ${fromSym}→${toSym}: unknown token`); continue; }
+              const fromDec = tokenDecimalsRef.current[fromSym] ?? TOKEN_DECIMALS[fromSym] ?? 6;
+              const toDec   = tokenDecimalsRef.current[toSym]   ?? TOKEN_DECIMALS[toSym]   ?? 9;
+              // get price to convert USD→units if needed
+              let inUnits = parseFloat(amt);
+              if (t.amountUSD) {
+                const pr = await fetch(`${JUP_PRICE_API}?ids=${fromMint}`).then(r=>r.json()).catch(()=>({}));
+                const p  = pr?.data?.[fromMint]?.price || 1;
+                inUnits  = usd / p;
+              }
+              const atomicAmt = Math.floor(inUnits * Math.pow(10, fromDec));
+              const orderRes  = await jupFetch(`${JUP_SWAP_ORDER}`, { method:"POST", body:{ inputMint:fromMint, outputMint:toMint, amount:atomicAmt, taker:walletFull, slippageBps:100 } });
+              if (!orderRes?.transaction) throw new Error("No transaction returned");
+              const txBytes  = Uint8Array.from(atob(orderRes.transaction), c=>c.charCodeAt(0));
+              const vTx      = VersionedTransaction.deserialize(txBytes);
+              const provider = connectedProviderRef.current;
+              const signed   = await provider.signTransaction(vTx);
+              const execRes  = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: btoa(String.fromCharCode(...signed.serialize())), requestId: orderRes.requestId } });
+              const sig      = execRes?.signature;
+              if (!sig) throw new Error("No signature");
+              done++;
+              const outAmt = execRes?.outputAmount ? (Number(execRes.outputAmount)/Math.pow(10,toDec)).toFixed(4) : "?";
+              summary.push(`✅ **${fromSym}→${toSym}**: ${inUnits.toFixed(4)} ${fromSym} → ~${outAmt} ${toSym}`);
+              logTrade({ type:"swap", from:fromSym, to:toSym, amount:inUnits.toFixed(4), out:outAmt, tx:sig });
+            } catch(e) { failed++; summary.push(`❌ ${t.from||"?"}→${t.to||"?"}: ${e?.message||"failed"}`); }
+          }
+          const summaryStr = basketTrades.map(t=>`${t.from||"USDC"}→${t.to}`).join(", ");
+          logTrade({ type:"basket", summary: summaryStr });
+          push("ai", `**Basket complete** — ${done} succeeded, ${failed} failed:\n${summary.join("\n")}`);
+        }
+
+      // ── COPY_TRADE ──────────────────────────────────────────────────────────
+      } else if (action === "COPY_TRADE") {
+        const ctWallet = actionData?.wallet;
+        const ctLimit  = parseInt(actionData?.limit) || 5;
+        if (!ctWallet) {
+          push("ai", "Please provide a wallet address, e.g. *copy trades from ABC...XYZ*.");
+        } else {
+          push("ai", text + `\n\nFetching last ${ctLimit} swaps from \`${ctWallet.slice(0,8)}…${ctWallet.slice(-4)}\`…`);
+          try {
+            const trades = await fetchWalletTrades(ctWallet, ctLimit);
+            if (!trades?.length) {
+              push("ai", `No recent swaps found for \`${ctWallet.slice(0,8)}…\``);
+            } else {
+              setCopyTradeData({ wallet: ctWallet, trades });
+              setShowCopyTrade(true);
+              const lines = trades.map((t, i) =>
+                `${i+1}. **${t.fromSymbol}→${t.toSymbol}** — ${t.fromAmount} ${t.fromSymbol} → ${t.toAmount} ${t.toSymbol}  ·  ${new Date(t.timestamp).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`
+              ).join("\n");
+              push("ai", `**Last ${trades.length} swaps** from \`${ctWallet.slice(0,8)}…${ctWallet.slice(-4)}\`:\n${lines}\n\nUse the **Mirror** buttons below to copy any trade.`);
+            }
+          } catch(e) {
+            push("ai", `Could not fetch trades: ${e?.message || "unknown error"}. Check the wallet address and try again.`);
+          }
+        }
 
       } else {
         push("ai", text);
@@ -8282,6 +8474,60 @@ Order: \`${orderKey.slice(0,20)}…\`
               style={{ padding:"6px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text3, fontSize:12, cursor:"pointer", flexShrink:0 }}>
               ✕
             </button>
+          </div>
+        )}
+
+        {/* ── Copy Trade Panel ──────────────────────────────────────────── */}
+        {showCopyTrade && copyTradeData && (
+          <div style={{ margin:"0 16px 16px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <span style={{ fontSize:15 }}>📋</span>
+                <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>
+                  Copy Trade — <span style={{ fontFamily:T.mono, fontSize:12, color:T.text3 }}>{copyTradeData.wallet.slice(0,8)}…{copyTradeData.wallet.slice(-4)}</span>
+                </span>
+              </div>
+              <button onClick={() => setShowCopyTrade(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
+            </div>
+            {copyTradeData.trades.map((t, i) => (
+              <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8, gap:12, flexWrap:"wrap" }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:14, fontWeight:600, color:T.text1 }}>{t.fromSymbol} → {t.toSymbol}</div>
+                  <div style={{ fontSize:11, color:T.text3, marginTop:2 }}>
+                    {t.fromAmount} {t.fromSymbol} → {t.toAmount} {t.toSymbol}
+                    {t.timestamp && <> · {new Date(t.timestamp).toLocaleDateString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}</>}
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowCopyTrade(false);
+                    setMsgs(m => {
+                      const next = [...m, { id: Date.now(), role:"user", text:`Swap ${t.fromAmount} ${t.fromSymbol} to ${t.toSymbol}` }];
+                      try { sessionStorage.setItem("chatfi-msgs", JSON.stringify(next.slice(-80))); } catch {}
+                      return next;
+                    });
+                    setTimeout(() => {
+                      const evt = new CustomEvent("chatfi-mirror-trade", { detail: { from: t.fromSymbol, to: t.toSymbol, amount: t.fromAmount } });
+                      window.dispatchEvent(evt);
+                    }, 100);
+                  }}
+                  className="hov-btn"
+                  style={{ padding:"6px 14px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:6, color:T.accent, fontSize:12, fontWeight:600, cursor:"pointer", flexShrink:0 }}>
+                  Mirror
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Price Alerts Summary (shown when alerts are active) ──────── */}
+        {priceAlerts.filter(a => !a.triggered).length > 0 && (
+          <div style={{ margin:"0 16px 8px", padding:"8px 14px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
+            <span style={{ fontSize:12, color:T.text2 }}>
+              🔔 <strong>{priceAlerts.filter(a=>!a.triggered).length}</strong> active alert{priceAlerts.filter(a=>!a.triggered).length>1?"s":""}: {priceAlerts.filter(a=>!a.triggered).map(a=>`${a.token} ${a.condition} $${a.target.toLocaleString()}`).join(" · ")}
+            </span>
+            <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem("chatfi-alerts",JSON.stringify(cleared));}catch{} }}
+              style={{ background:"none", border:"none", color:T.text3, fontSize:12, cursor:"pointer", flexShrink:0 }}>Clear all</button>
           </div>
         )}
 
