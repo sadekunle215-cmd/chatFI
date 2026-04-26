@@ -4166,10 +4166,6 @@ function JupChatInner() {
     if (reownConnected && reownProvider && !privyMode) {
       return {
         signTransaction: async (tx) => {
-          // Reown Solana provider uses sendTransaction internally but exposes
-          // signTransaction on the underlying adapter — access it directly.
-          // If the provider has a native signTransaction, use it; otherwise
-          // fall back to the wallet standard feature on the injected wallet.
           if (typeof reownProvider.signTransaction === "function") {
             return reownProvider.signTransaction(tx);
           }
@@ -4188,7 +4184,6 @@ function JupChatInner() {
             window?.phantom?.solana || window?.backpack?.solana ||
             window?.solflare || window?.solana || null;
           if (injected?.signAllTransactions) return injected.signAllTransactions(txs);
-          // Sequential fallback — sign one by one via the injected provider
           if (injected?.signTransaction) {
             const results = [];
             for (const tx of txs) results.push(await injected.signTransaction(tx));
@@ -4242,11 +4237,33 @@ function JupChatInner() {
       const txBytes = new Uint8Array(binaryStr.length);
       for (let i=0;i<binaryStr.length;i++) txBytes[i]=binaryStr.charCodeAt(i);
       const tx = VersionedTransaction.deserialize(txBytes);
+
+      // Refresh blockhash before signing — on mobile the user switches apps to
+      // approve, which can take 10-30s. Without this, Jupiter execute rejects
+      // with error 3O05 (blockhash expired / slot mismatch).
+      try {
+        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
+        tx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal — use Jupiter's baked blockhash as fallback */ }
+
       if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing");
       const signedTx = await provider.signTransaction(tx);
 
       const signedBase64 = bytesToB64(signedTx.serialize());
-      const execResult = await jupFetch(JUP_SWAP_EXEC, { method:"POST", body:{ signedTransaction:signedBase64, requestId:orderData.requestId } });
+      let execResult = await jupFetch(JUP_SWAP_EXEC, { method:"POST", body:{ signedTransaction:signedBase64, requestId:orderData.requestId } });
+
+      // 3O05 = blockhash expired. Re-fetch a fresh order + re-sign once automatically.
+      if (execResult?.error && JSON.stringify(execResult.error).includes("3O05")) {
+        push("ai", "Blockhash expired (mobile delay) — refreshing quote and retrying…");
+        const retryOrder = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&taker=${walletFull}`);
+        if (retryOrder?.transaction && !retryOrder?.error) {
+          const retryTx = VersionedTransaction.deserialize(b64ToBytes(retryOrder.transaction));
+          const retrySignedTx = await provider.signTransaction(retryTx);
+          execResult = await jupFetch(JUP_SWAP_EXEC, { method:"POST", body:{ signedTransaction: bytesToB64(retrySignedTx.serialize()), requestId: retryOrder.requestId } });
+        }
+      }
+
       if (execResult.error) throw new Error(typeof execResult.error==="object"?JSON.stringify(execResult.error):execResult.error);
 
       const signature = execResult.signature || execResult.txid || execResult.transaction;
