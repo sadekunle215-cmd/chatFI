@@ -4160,6 +4160,45 @@ function JupChatInner() {
   // ── Get active provider for signing ─────────────────────────────────────────
   // Used by swap/bet/deposit/claim — returns the connected provider or best fallback
   const getActiveProvider = () => {
+    // If connected via Reown AppKit (Phantom, Backpack, Solflare via modal),
+    // reownProvider exposes signAndSendTransaction but NOT signTransaction.
+    // We wrap it so all swap/sign code can call signTransaction uniformly.
+    if (reownConnected && reownProvider && !privyMode) {
+      return {
+        signTransaction: async (tx) => {
+          // Reown Solana provider uses sendTransaction internally but exposes
+          // signTransaction on the underlying adapter — access it directly.
+          // If the provider has a native signTransaction, use it; otherwise
+          // fall back to the wallet standard feature on the injected wallet.
+          if (typeof reownProvider.signTransaction === "function") {
+            return reownProvider.signTransaction(tx);
+          }
+          // Reown wraps the wallet — reach into the injected provider as fallback
+          const injected =
+            window?.phantom?.solana || window?.backpack?.solana ||
+            window?.solflare || window?.solana || null;
+          if (injected?.signTransaction) return injected.signTransaction(tx);
+          throw new Error("Wallet does not support signTransaction. Please reconnect.");
+        },
+        signAllTransactions: async (txs) => {
+          if (typeof reownProvider.signAllTransactions === "function") {
+            return reownProvider.signAllTransactions(txs);
+          }
+          const injected =
+            window?.phantom?.solana || window?.backpack?.solana ||
+            window?.solflare || window?.solana || null;
+          if (injected?.signAllTransactions) return injected.signAllTransactions(txs);
+          // Sequential fallback — sign one by one via the injected provider
+          if (injected?.signTransaction) {
+            const results = [];
+            for (const tx of txs) results.push(await injected.signTransaction(tx));
+            return results;
+          }
+          throw new Error("Wallet does not support signAllTransactions. Please reconnect.");
+        },
+        isReown: true,
+      };
+    }
     if (connectedProviderRef.current) return connectedProviderRef.current;
     // Fallback: try Wallet Standard first
     const stdWallets = getStandardWallets();
