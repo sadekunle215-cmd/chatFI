@@ -1279,13 +1279,21 @@ function JupChatInner() {
   // Tries V2 first (verified tokens), then V1 fallback for any Jupiter-listed token
   const resolveToken = async (symbolOrName) => {
     if (!symbolOrName) return null;
-    const upper = symbolOrName.toUpperCase();
+    const upper = symbolOrName.toUpperCase().trim();
+    // Cache hit (includes TOKEN_MINTS pre-seeded at init)
     if (tokenCacheRef.current[upper]) {
       return { mint: tokenCacheRef.current[upper], decimals: tokenDecimalsRef.current[upper] ?? 6 };
     }
+    // Detect base58 mint address (32-44 chars)
+    const isMintAddr = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(symbolOrName.trim());
+    if (isMintAddr) {
+      tokenCacheRef.current[upper] = symbolOrName.trim();
+      return { mint: symbolOrName.trim(), decimals: 6 };
+    }
     const tryParse = (data, sym) => {
       const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-      const match = list.find(t => t.symbol?.toUpperCase() === sym) || list[0];
+      // Prefer exact symbol match over first-result fallback
+      const match = list.find(t => t.symbol?.toUpperCase() === sym);
       const mint = match?.id || match?.address;
       return mint ? { mint, decimals: match.decimals ?? 6 } : null;
     };
@@ -1381,11 +1389,49 @@ function JupChatInner() {
       tags: match?.tags || (match?.isVerified ? ["verified"] : []),
     });
 
-    // Try V2 first
+    // ── Solana address detection (base58, 32-44 chars) ─────────────────────────
+    const isMintAddr = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(symbol.trim());
+
+    // ── Priority 1: Known hardcoded token OR direct mint address input ─────────
+    // Skip text search entirely — go straight to the token detail API.
+    // This prevents meme tokens with the same ticker (e.g. "betcuin" for BTC) from
+    // hijacking lookups, and makes CA paste work reliably.
+    const knownMint = TOKEN_MINTS[upper];
+    if (knownMint || isMintAddr) {
+      const targetMint = knownMint || symbol.trim();
+      try {
+        const detail = await jupFetch(`${JUP_TOKENS_API}/${targetMint}`);
+        if (detail?.address || detail?.id) {
+          const resolvedMint = detail.address || detail.id || targetMint;
+          tokenCacheRef.current[upper] = resolvedMint;
+          tokenDecimalsRef.current[upper] = detail.decimals ?? 6;
+          return normalise(detail, resolvedMint);
+        }
+      } catch {}
+      // v2 fallback for the same mint
+      try {
+        const v2 = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(targetMint)}&limit=5`);
+        const list2 = Array.isArray(v2) ? v2 : (v2?.tokens || v2?.data || []);
+        const m2 = list2.find(t => (t.id || t.address) === targetMint) || list2[0];
+        if (m2) {
+          const resolvedMint = m2.id || m2.address || targetMint;
+          tokenCacheRef.current[upper] = resolvedMint;
+          tokenDecimalsRef.current[upper] = m2.decimals ?? 6;
+          return normalise(m2, resolvedMint);
+        }
+      } catch {}
+    }
+
+    // ── Priority 2: Symbol text search (non-hardcoded tokens) ─────────────────
+    // Prefer exact symbol match; also prefer result whose mint === cachedMint.
     try {
       const searchData = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(symbol)}`);
       const list = Array.isArray(searchData) ? searchData : (searchData?.tokens || searchData?.data || []);
-      const match = list.find(t => t.symbol?.toUpperCase() === upper) || list[0];
+      // Exact symbol match first, then cachedMint match, then first result
+      const match = list.find(t => t.symbol?.toUpperCase() === upper && (t.id || t.address) === cachedMint)
+                 || list.find(t => t.symbol?.toUpperCase() === upper)
+                 || (cachedMint ? list.find(t => (t.id || t.address) === cachedMint) : null)
+                 || list[0];
       const mint = match?.id || match?.address || cachedMint;
       if (mint) {
         tokenCacheRef.current[upper] = mint;
@@ -1407,7 +1453,7 @@ function JupChatInner() {
       }
     } catch {}
 
-    // Last resort: if we have a cached mint, fetch detail directly
+    // Last resort: cached mint direct fetch
     if (cachedMint) {
       try {
         const detail = await jupFetch(`${JUP_TOKENS_API}/${cachedMint}`);
@@ -4994,9 +5040,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         const limit  = Math.min(Math.max(parseInt(actionData?.limit) || 15, 1), 50);
         const tokens = await fetchXStocks(limit);
         if (!tokens.length) {
-          push("ai", text + "
-
-Could not fetch xStock tokens right now. Try searching a specific one like **SPYx** or **QQQx**.");
+          push("ai", text + "\n\nCould not fetch xStock tokens right now. Try searching a specific one like **SPYx** or **QQQx**.");
         } else {
           const lines = tokens.map((t, i) => {
             const sym   = t.symbol || "?";
@@ -5008,12 +5052,8 @@ Could not fetch xStock tokens right now. Try searching a specific one like **SPY
             const logo  = t.icon || t.logoURI || (t.id ? `https://img.jup.ag/tokens/${t.id}` : "");
             const logoTag = logo ? `[img:${logo}]` : "";
             return `${i+1}. ${logoTag}**${sym}**${name}${ver}${price}${chg}${vol}`;
-          }).join("
-");
-          push("ai", text + `
-
-**Tokenized Stocks (xStocks)** on Solana — ${tokens.length} found:
-${lines}`);
+          }).join("\n");
+          push("ai", text + `\n\n**Tokenized Stocks (xStocks)** on Solana — ${tokens.length} found:\n${lines}`);
         }
 
       } else if (action === "CHECK_TOKEN_VERIFY") {
