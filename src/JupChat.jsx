@@ -1160,7 +1160,11 @@ function JupChatInner() {
   const { wallets: privyWallets } = useWallets();
   const { createWallet: privyCreateWallet } = useCreateWallet();
   // Find the Privy-managed embedded wallet (Solana)
-  const privyEmbeddedWallet = privyWallets.find(w => w.walletClientType === "privy" && w.chainType === "solana") || null;
+  // Prefer Solana embedded wallet; fall back to any privy-managed wallet for older accounts
+  const privyEmbeddedWallet = 
+    privyWallets.find(w => w.walletClientType === "privy" && w.chainType === "solana") ||
+    privyWallets.find(w => w.walletClientType === "privy" && w.type === "solana") ||
+    null;
   // Track whether Privy is the active auth method
   const [privyMode, setPrivyMode] = useState(false);
   const [privyProvider, setPrivyProvider] = useState(null); // "google"|"twitter"|"discord"|"email"
@@ -5013,11 +5017,11 @@ Order: \`${orderKey.slice(0,20)}…\`
     if (privyAuthed && !privyEmbeddedWallet) {
       if (!privyCreatingWalletRef.current) {
         privyCreatingWalletRef.current = true;
-        privyCreateWallet({ createAdditional: false })
-          .catch(() => {
-            // createWallet can fail if user already has a wallet record that
-            // hasn't propagated yet — wait 1.5s then clear the guard so the
-            // effect re-runs naturally when privyWallets updates.
+        // createAdditional:true allows Solana wallet creation even if user
+        // already has an ETH embedded wallet from a previous Privy session.
+        privyCreateWallet({ createAdditional: true })
+          .catch((err) => {
+            console.warn("[ChatFi] privyCreateWallet failed:", err?.message || err);
           })
           .finally(() => {
             setTimeout(() => { privyCreatingWalletRef.current = false; }, 1500);
@@ -9537,9 +9541,10 @@ export default function JupChat() {
           showWalletLoginFirst: false,
         },
         embeddedWallets: {
-          // Solana-only: disable ETH wallet creation, enable Solana
+          // Disable ETH, create Solana wallet for ALL users on login
+          // (all-users covers both new signups AND existing accounts migrated from ETH config)
           ethereum: { createOnLogin: "off" },
-          solana: { createOnLogin: "users-without-wallets" },
+          solana: { createOnLogin: "all-users" },
           noPromptOnSignature: false,
           requireUserPasswordOnCreate: false,
         },
