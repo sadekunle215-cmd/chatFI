@@ -4381,8 +4381,16 @@ function JupChatInner() {
 
   // Connect via Privy social login (email / Google / Twitter / Discord)
   const connectWithPrivy = () => {
+    if (!privyReady) {
+      console.warn("Privy not ready yet — try again in a moment");
+      return;
+    }
     setShowWalletModal(false);
-    privyLogin();
+    // Small delay lets the modal animate closed before Privy opens its
+    // overlay — prevents the click from being swallowed on mobile browsers.
+    setTimeout(() => {
+      privyLogin();
+    }, 150);
   };
 
   // Connect via Reown (Phantom, Backpack, WalletConnect, etc.)
@@ -9473,6 +9481,13 @@ Order: \`${orderKey.slice(0,20)}…\`
 // ─── Root export ─────────────────────────────────────────────────────────────
 export default function JupChat() {
   const appId = import.meta.env.VITE_PRIVY_APP_ID || "";
+  if (!appId) {
+    console.error(
+      "[ChatFi] VITE_PRIVY_APP_ID is not set. " +
+      "Privy will initialise but login() will silently fail. " +
+      "Add it to your .env file and restart the dev server."
+    );
+  }
   return (
     <PrivyProvider
       appId={appId}
