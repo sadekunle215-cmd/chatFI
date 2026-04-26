@@ -2019,53 +2019,77 @@ function JupChatInner() {
     setLocksLoading(true);
     setShowLocks(false);
     setLockList([]);
-    try {
-      const res = await fetch("/api/lock", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "accounts", wallet: walletFull }),
-      });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
 
-      // Enrich each account with display fields the UI needs
-      const KNOWN_MINT_SYMS = {
-        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
-        "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":  "JUP",
-        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
-        "So11111111111111111111111111111111111111112":   "SOL",
-        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
-        "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
-        "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R":  "RAY",
-        "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn":  "JITOSOL",
-        "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
+    const KNOWN_MINT_SYMS = {
+      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+      "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":  "JUP",
+      "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+      "So11111111111111111111111111111111111111112":   "SOL",
+      "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+      "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
+      "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R":  "RAY",
+      "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn":  "JITOSOL",
+      "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
+    };
+    const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6, RAY:6, JITOSOL:9, JUPUSD:6 };
+
+    const enrichLocks = (rawList) => rawList.map(acct => {
+      const mint = acct.mint || acct.tokenMint || acct.asset || "";
+      const mintSym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
+        || KNOWN_MINT_SYMS[mint]
+        || `${mint.slice(0, 6)}…`;
+      const dec = tokenDecimalsRef.current[mintSym] || KNOWN_DECIMALS[mintSym] || 6;
+      const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
+      const totalRaw = acct.totalRaw || acct.totalAmount || acct.amount || acct.depositedAmount || 0;
+      const claimRaw = acct.claimableRaw || acct.claimableAmount || acct.unlockedAmount || 0;
+      return {
+        ...acct,
+        lockId:          acct.pubkey || acct.id || acct.address,
+        symbol:          mintSym,
+        claimableAmount: typeof claimRaw === "number" && claimRaw > 1000 ? fmtAmt(claimRaw) : parseFloat(claimRaw || 0).toFixed(4),
+        totalAmount:     typeof totalRaw === "number" && totalRaw > 1000 ? fmtAmt(totalRaw) : parseFloat(totalRaw || 0).toFixed(4),
+        vestedPercent:   totalRaw > 0 ? ((parseFloat(claimRaw) / parseFloat(totalRaw)) * 100).toFixed(1) : "0",
+        cliff:           acct.cliff || acct.cliffTime || acct.cliffTimestamp || null,
       };
-      const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6, RAY:6, JITOSOL:9, JUPUSD:6 };
+    });
 
-      const enriched = (data.accounts || []).map(acct => {
-        const mintSym = Object.entries(tokenCacheRef.current).find(([, v]) => v === acct.mint)?.[0]
-          || KNOWN_MINT_SYMS[acct.mint]
-          || `${acct.mint.slice(0, 6)}…`;
-        const dec = tokenDecimalsRef.current[mintSym] || KNOWN_DECIMALS[mintSym] || 6;
-        const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
-        return {
-          ...acct,
-          lockId:          acct.pubkey,
-          symbol:          mintSym,
-          claimableAmount: fmtAmt(acct.claimableRaw || 0),
-          totalAmount:     fmtAmt(acct.totalRaw || 0),
-          vestedPercent:   acct.totalRaw > 0
-            ? ((acct.claimableRaw / acct.totalRaw) * 100).toFixed(1)
-            : "0",
-        };
-      });
+    // 1. Try direct Jupiter Lock API (public, no auth needed)
+    let enriched = [];
+    try {
+      const lockDirect = await fetch(`${JUP_LOCK_API}/locks?wallet=${walletFull}`).then(r => r.json());
+      const raw = Array.isArray(lockDirect) ? lockDirect
+        : lockDirect?.locks || lockDirect?.accounts || lockDirect?.data || [];
+      if (raw.length > 0) enriched = enrichLocks(raw);
+    } catch {}
 
-      setLockList(enriched);
-      setShowLocks(true);
-      if (!enriched.length) push("ai", "No token locks found for your wallet.");
-    } catch (err) {
-      push("ai", `Could not fetch locks: ${err?.message}`);
+    // 2. Also try as recipient (some locks show under recipient key, not creator)
+    if (!enriched.length) {
+      try {
+        const recipRes = await fetch(`${JUP_LOCK_API}/locks?recipient=${walletFull}`).then(r => r.json());
+        const raw = Array.isArray(recipRes) ? recipRes
+          : recipRes?.locks || recipRes?.accounts || recipRes?.data || [];
+        if (raw.length > 0) enriched = enrichLocks(raw);
+      } catch {}
     }
+
+    // 3. Server proxy fallback
+    if (!enriched.length) {
+      try {
+        const res = await fetch("/api/lock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "accounts", wallet: walletFull }),
+        });
+        const data = await res.json();
+        if (!data.error && (data.accounts?.length > 0)) {
+          enriched = enrichLocks(data.accounts);
+        }
+      } catch {}
+    }
+
+    setLockList(enriched);
+    setShowLocks(true);
+    if (!enriched.length) push("ai", "No token locks found for your wallet.");
     setLocksLoading(false);
   };
 
@@ -6667,14 +6691,21 @@ Order: \`${orderKey.slice(0,20)}…\`
                           const title = p.marketMetadata?.title || p.marketId || "Market";
                           const side  = p.isYes ? "YES" : "NO";
                           const cost  = p.totalCostUsd ? `$${(parseInt(p.totalCostUsd)/1_000_000).toFixed(2)}` : "";
-                          const claimable = p.claimable;
+                          const claimable = p.claimable && !p.claimed;
+                          const payout = p.payoutUsd ? `$${(parseInt(p.payoutUsd)/1_000_000).toFixed(2)}` : "";
                           return (
                             <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${claimable ? T.greenBd : T.border}`, borderRadius:10, fontSize:12 }}>
                               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
                                 <span style={{ fontSize:11, fontWeight:700, padding:"2px 7px", borderRadius:6, background: side==="YES" ? T.greenBg : T.redBg, color: side==="YES" ? T.green : T.red }}>{side}</span>
-                                <span style={{ fontWeight:600, color: claimable ? T.green : T.text3 }}>{claimable ? "🏆 Claimable" : cost}</span>
+                                <span style={{ fontWeight:600, color: claimable ? T.green : T.text3 }}>{claimable ? `🏆 ${payout || "Claimable"}` : cost}</span>
                               </div>
-                              <div style={{ color:T.text2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{title.slice(0,42)}</div>
+                              <div style={{ color:T.text2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginBottom: claimable ? 6 : 0 }}>{title.slice(0,42)}</div>
+                              {claimable && (
+                                <button onClick={() => doClaimPayouts()} className="hov-btn"
+                                  style={{ width:"100%", padding:"6px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:11, fontWeight:700, cursor:"pointer", transition:"all 0.15s" }}>
+                                  🏆 Claim Payout
+                                </button>
+                              )}
                             </div>
                           );
                         })}
@@ -6785,6 +6816,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                       <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                         {portfolioData.lockPositions.map((lk, i) => {
                           const claimable = parseFloat(lk.claimableAmount || 0) > 0;
+                          const lockId = lk.lockId || lk.pubkey || lk.id;
                           return (
                             <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${claimable ? T.greenBd : T.border}`, borderRadius:10, fontSize:12 }}>
                               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
@@ -6794,11 +6826,17 @@ Order: \`${orderKey.slice(0,20)}…\`
                                 </span>
                               </div>
                               {claimable && (
-                                <div style={{ color:T.green, fontWeight:600 }}>
+                                <div style={{ color:T.green, fontWeight:600, marginBottom:6 }}>
                                   {lk.claimableAmount} {lk.symbol} claimable
                                 </div>
                               )}
-                              {lk.cliff && <div style={{ color:T.text3, fontSize:11, marginTop:2 }}>Cliff: {new Date(lk.cliff * 1000).toLocaleDateString()}</div>}
+                              {lk.cliff && <div style={{ color:T.text3, fontSize:11, marginTop:2, marginBottom: claimable ? 6 : 0 }}>Cliff: {new Date(lk.cliff * 1000).toLocaleDateString()}</div>}
+                              {claimable && lockId && (
+                                <button onClick={() => doClaimLock(lockId)} disabled={claimingLock === lockId} className="hov-btn"
+                                  style={{ width:"100%", marginTop:4, padding:"6px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:11, fontWeight:700, cursor:"pointer", transition:"all 0.15s" }}>
+                                  {claimingLock === lockId ? <><span className="spinner" style={{borderTopColor:T.green,display:"inline-block",marginRight:4}}/> Claiming…</> : `⬇ Claim ${lk.claimableAmount} ${lk.symbol}`}
+                                </button>
+                              )}
                             </div>
                           );
                         })}
