@@ -659,6 +659,58 @@ const fmt = (text = "") => {
       continue;
     }
 
+    // ── Swap card: [swap-card|from|to|sentAmt|outAmt|fee|sig|status]
+    const swapCardMatch = line.match(/^\[swap-card\|([^|]+)\|([^|]+)\|([^|]+)\|([^|]+)\|([^|]*)\|([^|]+)\|([^\]]+)\]$/);
+    if (swapCardMatch) {
+      const [, from, to, sent, out, fee, sig, status] = swapCardMatch;
+      const isOk    = status === "ok";
+      const short   = sig.length > 10 ? sig.slice(0,8)+"…"+sig.slice(-6) : sig;
+      const color   = isOk ? "#c7f284" : "#fc8181";
+      const iconSvg = isOk
+        ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="#c7f284" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+        : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#fc8181" stroke-width="2.5"/><path d="M15 9l-6 6M9 9l6 6" stroke="#fc8181" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+      html += `<div style="background:#0e1820;border:1px solid ${isOk ? "rgba(199,242,132,0.18)" : "rgba(252,129,129,0.18)"};border-radius:14px;overflow:hidden;margin:6px 0;font-family:inherit">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:11px 14px 8px;border-bottom:1px solid #1a2535">
+          <div style="display:flex;align-items:center;gap:7px">
+            ${iconSvg}
+            <span style="font-size:13px;font-weight:700;color:${color};letter-spacing:-0.1px">Swap ${isOk ? "Executed" : "Failed"}</span>
+          </div>
+          <span style="font-size:10px;color:#4d6a7a;background:#161e27;padding:2px 8px;border-radius:20px;letter-spacing:0.04em">Jupiter</span>
+        </div>
+        <div style="padding:10px 14px 4px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <div style="background:#161e27;border-radius:8px;padding:6px 10px;flex:1;text-align:center">
+              <div style="font-size:9px;color:#4d6a7a;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:2px">Sent</div>
+              <div style="font-size:14px;font-weight:800;color:#e8f4f0;letter-spacing:-0.3px">${sent}</div>
+              <div style="font-size:10px;color:#4d6a7a">${from}</div>
+            </div>
+            <div style="flex-shrink:0">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="#4d6a7a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+            <div style="background:#161e27;border-radius:8px;padding:6px 10px;flex:1;text-align:center">
+              <div style="font-size:9px;color:#4d6a7a;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:2px">Received</div>
+              <div style="font-size:14px;font-weight:800;color:${isOk ? "#c7f284" : "#8fa8b8"};letter-spacing:-0.3px">${out}</div>
+              <div style="font-size:10px;color:#4d6a7a">${to}</div>
+            </div>
+          </div>
+          ${fee ? `<div style="font-size:10px;color:#4d6a7a;text-align:center;margin-bottom:6px">Fee: ${fee}</div>` : ""}
+        </div>
+        ${isOk && sig ? `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:#0b1219;border-top:1px solid #1a2535">
+          <div style="display:flex;align-items:center;gap:6px">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="3" stroke="#4d6a7a" stroke-width="2"/><path d="M7 12h10M7 8h10M7 16h6" stroke="#4d6a7a" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <span style="font-size:10px;color:#4d6a7a;font-family:monospace">${short}</span>
+            <span onclick="navigator.clipboard.writeText('${sig}').then(()=>{this.textContent='✓';setTimeout(()=>{this.textContent='Copy'},1200)})" style="cursor:pointer;font-size:9px;color:#8fa8b8;background:#161e27;border:1px solid #1e2d3d;border-radius:4px;padding:1px 6px;margin-left:2px;user-select:none">Copy</span>
+          </div>
+          <a href="https://solscan.io/tx/${sig}" target="_blank" rel="noreferrer" style="display:flex;align-items:center;gap:4px;font-size:10px;color:#c7f284;text-decoration:none;font-weight:600">
+            View
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" stroke="#c7f284" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+        </div>` : ""}
+      </div>`;
+      i++;
+      continue;
+    }
+
     // ── Normal paragraph line
     html += `<span style="font-size:14px;line-height:1.6">${inlineMd(line)}</span><br/>`;
     i++;
@@ -4163,7 +4215,7 @@ function JupChatInner() {
       // v2 outAmount field
       const outAmt = orderData?.outAmount ? (parseInt(orderData.outAmount)/Math.pow(10,toDecimals||6)).toFixed(4) : "?";
       const feeBps = orderData?.feeBps ? ` · Fee: ${orderData.feeBps}bps` : "";
-      push("ai", `Swap executed via Jupiter ✓\n\nSent **${amount} ${from}** → received **~${outAmt} ${to}**${feeBps}\n\nTransaction: \`${signature?.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      push("ai", `[swap-card|${from}|${to}|${amount}|~${outAmt}|${orderData?.feeBps ? orderData.feeBps+"bps" : ""}|${signature}|ok]`);
       logTrade({ type: "swap", from, to, amount, out: outAmt, tx: signature });
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
@@ -5342,34 +5394,47 @@ Order: \`${orderKey.slice(0,20)}…\`
         else if (!walletFull) { push("ai", "Connect your wallet first to execute a basket swap."); }
         else {
           push("ai", (text || "") + `\n\nPreparing **${basketTrades.length} swaps** — you'll approve all at once…`);
-          const provider = connectedProviderRef.current;
+          const provider = getActiveProvider();
+          if (!provider) { push("ai", "Wallet not connected. Please connect your wallet first."); return; }
           let done = 0, failed = 0;
           const summary = [];
 
-          // ── Phase 1: fetch all orders in parallel ──────────────────────────────
-          const orders = await Promise.all(basketTrades.map(async (t) => {
+          // ── Phase 1: batch price fetch + parallel order requests ──────────────
+          // Resolve all mints and meta first
+          const tradeMeta = basketTrades.map(t => {
+            const fromSym  = (t.from || "USDC").toUpperCase();
+            const toSym    = (t.to   || "SOL").toUpperCase();
+            const fromMint = tokenCacheRef.current[fromSym] || TOKEN_MINTS[fromSym];
+            const toMint   = tokenCacheRef.current[toSym]   || TOKEN_MINTS[toSym];
+            const fromDec  = tokenDecimalsRef.current[fromSym] ?? TOKEN_DECIMALS[fromSym] ?? 6;
+            const toDec    = tokenDecimalsRef.current[toSym]   ?? TOKEN_DECIMALS[toSym]   ?? 9;
+            const usd      = parseFloat(t.amountUSD) || 0;
+            return { fromSym, toSym, fromMint, toMint, fromDec, toDec, usd, needsPrice: !!t.amountUSD, rawAmt: parseFloat(t.amount || String(usd)) };
+          });
+
+          // Single batch price call for all unique fromMints that need USD conversion
+          const mintsNeedingPrice = [...new Set(tradeMeta.filter(m => m.needsPrice && m.fromMint).map(m => m.fromMint))];
+          const priceMap = {};
+          if (mintsNeedingPrice.length > 0) {
             try {
-              const fromSym  = (t.from || "USDC").toUpperCase();
-              const toSym    = (t.to   || "SOL").toUpperCase();
-              const usd      = parseFloat(t.amountUSD) || 0;
-              const fromMint = tokenCacheRef.current[fromSym] || TOKEN_MINTS[fromSym];
-              const toMint   = tokenCacheRef.current[toSym]   || TOKEN_MINTS[toSym];
-              if (!fromMint || !toMint) return { err: "unknown token", fromSym, toSym };
-              const fromDec  = tokenDecimalsRef.current[fromSym] ?? TOKEN_DECIMALS[fromSym] ?? 6;
-              const toDec    = tokenDecimalsRef.current[toSym]   ?? TOKEN_DECIMALS[toSym]   ?? 9;
-              let inUnits    = parseFloat(t.amount || String(usd));
-              if (t.amountUSD) {
-                const pr = await fetch(`${JUP_PRICE_API}?ids=${fromMint}`).then(r=>r.json()).catch(()=>({}));
-                inUnits  = usd / (pr?.data?.[fromMint]?.price || 1);
-              }
-              const atomicAmt = Math.floor(inUnits * Math.pow(10, fromDec));
-              const orderRes  = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${atomicAmt}&taker=${walletFull}`);
-              if (orderRes?.error) return { err: typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error, fromSym, toSym };
-              if (!orderRes?.transaction) return { err: `No transaction — ${JSON.stringify(orderRes).slice(0,150)}`, fromSym, toSym };
+              const pr = await fetch(`${JUP_PRICE_API}?ids=${mintsNeedingPrice.join(",")}`).then(r=>r.json()).catch(()=>({}));
+              mintsNeedingPrice.forEach(mint => { priceMap[mint] = pr?.data?.[mint]?.price || 1; });
+            } catch { mintsNeedingPrice.forEach(mint => { priceMap[mint] = 1; }); }
+          }
+
+          // Now fire all order requests in parallel — no per-order price fetch
+          const orders = await Promise.all(tradeMeta.map(async (m) => {
+            try {
+              if (!m.fromMint || !m.toMint) return { err: "unknown token", fromSym: m.fromSym, toSym: m.toSym };
+              const inUnits   = m.needsPrice ? m.usd / (priceMap[m.fromMint] || 1) : m.rawAmt;
+              const atomicAmt = Math.floor(inUnits * Math.pow(10, m.fromDec));
+              const orderRes  = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${m.fromMint}&outputMint=${m.toMint}&amount=${atomicAmt}&taker=${walletFull}`);
+              if (orderRes?.error) return { err: typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error, fromSym: m.fromSym, toSym: m.toSym };
+              if (!orderRes?.transaction) return { err: `No transaction — ${JSON.stringify(orderRes).slice(0,150)}`, fromSym: m.fromSym, toSym: m.toSym };
               const vTx = VersionedTransaction.deserialize(Uint8Array.from(atob(orderRes.transaction), c=>c.charCodeAt(0)));
-              return { ok: true, vTx, requestId: orderRes.requestId, fromSym, toSym, inUnits, toDec };
+              return { ok: true, vTx, requestId: orderRes.requestId, fromSym: m.fromSym, toSym: m.toSym, inUnits, toDec: m.toDec };
             } catch(e) {
-              return { err: e?.message || "order failed", fromSym: (t.from||"?").toUpperCase(), toSym: (t.to||"?").toUpperCase() };
+              return { err: e?.message || "order failed", fromSym: m.fromSym, toSym: m.toSym };
             }
           }));
 
@@ -5377,6 +5442,19 @@ Order: \`${orderKey.slice(0,20)}…\`
           const valid   = orders.filter(o => o.ok);
           const invalid = orders.filter(o => !o.ok);
           invalid.forEach(o => { failed++; summary.push(`❌ ${o.fromSym}→${o.toSym}: ${o.err}`); });
+
+          // Refresh blockhash right before signing to prevent stale blockhash failures
+          if (valid.length > 0) {
+            try {
+              const RPC_URL = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+              const conn = new Connection(RPC_URL, "confirmed");
+              const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+              valid.forEach(o => {
+                o.vTx.message.recentBlockhash = blockhash;
+                o._lastValidBlockHeight = lastValidBlockHeight;
+              });
+            } catch(e) { /* non-fatal — use blockhash baked by Jupiter */ }
+          }
 
           let signedTxs = [];
           if (valid.length > 0) {
@@ -5401,13 +5479,14 @@ Order: \`${orderKey.slice(0,20)}…\`
               if (!sig) throw new Error("No signature returned");
               done++;
               const outAmt = execRes?.outputAmount ? (Number(execRes.outputAmount)/Math.pow(10,o.toDec)).toFixed(4) : "?";
-              summary.push(`✅ **${o.fromSym}→${o.toSym}**: ${o.inUnits.toFixed(4)} ${o.fromSym} → ~${outAmt} ${o.toSym}`);
+              summary.push(`[swap-card|${o.fromSym}|${o.toSym}|${o.inUnits.toFixed(4)}|~${outAmt}|${execRes?.feeBps ? execRes.feeBps+"bps" : ""}|${sig}|ok]`);
               logTrade({ type:"swap", from:o.fromSym, to:o.toSym, amount:o.inUnits.toFixed(4), out:outAmt, tx:sig });
-            } catch(e) { failed++; summary.push(`❌ ${o.fromSym}→${o.toSym}: ${e?.message || "execute failed"}`); }
+            } catch(e) { failed++; summary.push(`[swap-card|${o.fromSym}|${o.toSym}|${o.inUnits?.toFixed(4)||"?"}|—|—|—|err]`+`\n❌ ${o.fromSym}→${o.toSym}: ${e?.message || "execute failed"}`); }
           }
           const summaryStr = basketTrades.map(t=>`${t.from||"USDC"}→${t.to}`).join(", ");
           logTrade({ type:"basket", summary: summaryStr });
-          push("ai", `**Basket complete** — ${done} succeeded, ${failed} failed:\n${summary.join("\n")}`);
+          const headerLine = `**Basket complete** — ${done} succeeded, ${failed} failed`;
+          push("ai", [headerLine, ...summary].join("\n"));
         }
 
       // ── COPY_TRADE ──────────────────────────────────────────────────────────
