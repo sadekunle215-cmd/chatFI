@@ -79,8 +79,9 @@ const usePrivyAuth = () => {
       alert("Privy App ID not set. Add VITE_PRIVY_APP_ID to Vercel environment variables.");
       return;
     }
-    const url = `https://auth.privy.io/oauth/login?app_id=${PRIVY_APP_ID}&redirect_uri=${encodeURIComponent(window.location.origin + "/privy-callback")}&response_type=token`;
-    const popup = window.open(url, "privy-login", "width=480,height=640,scrollbars=yes");
+    // Privy's hosted login page — correct endpoint for social/email login
+    const url = `https://auth.privy.io/api/v1/embedded-wallet/login?privy_app_id=${PRIVY_APP_ID}&login_method=google&redirect_uri=${encodeURIComponent(window.location.origin)}`;
+    const popup = window.open(url, "privy-login", "width=480,height=640,scrollbars=yes,left=" + Math.max(0,(screen.width-480)/2) + ",top=" + Math.max(0,(screen.height-640)/2));
     popupRef.current = popup;
   };
 
@@ -868,6 +869,7 @@ function TokenMiniChart({ mint, T }) {
 function JupChatInner() {
   const [msgs, setMsgs] = useState([{ id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" }]);
   const [showWalletModal, setShowWalletModal] = useState(false);
+  const [showSignInDropdown, setShowSignInDropdown] = useState(false);
   // WalletConnect state
   const [wcStatus, setWcStatus]   = useState("idle"); // "idle" | "loading" | "waiting" | "connected"
   const [wcUri, setWcUri]         = useState("");
@@ -5049,10 +5051,55 @@ Order: \`${orderKey.slice(0,20)}…\`
                       >✕</button>
                     </div>
                   ) : (
-                    <button onClick={() => connectWallet(null)} className="hov-btn"
-                      style={{ padding:"6px 14px", background:T.accent, border:"none", borderRadius:20, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer", boxShadow:`0 0 12px ${T.accent}44`, whiteSpace:"nowrap" }}>
-                      Sign In
-                    </button>
+                    <div style={{ position:"relative" }}>
+                      <button onClick={() => setShowSignInDropdown(v => !v)} className="hov-btn"
+                        style={{ padding:"6px 14px", background:T.accent, border:"none", borderRadius:20, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer", boxShadow:`0 0 12px ${T.accent}44`, whiteSpace:"nowrap", display:"flex", alignItems:"center", gap:5 }}>
+                        Sign In
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#0d1117" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                      </button>
+                      {showSignInDropdown && (
+                        <>
+                          <div onClick={() => setShowSignInDropdown(false)} style={{ position:"fixed", inset:0, zIndex:299 }}/>
+                          <div style={{
+                            position:"absolute", top:"calc(100% + 8px)", right:0, zIndex:300,
+                            background:T.surface, border:`1px solid ${T.border}`, borderRadius:14,
+                            padding:6, minWidth:200, boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
+                            animation:"fadeUp 0.15s ease",
+                          }}>
+                            {/* Google / Email via Privy */}
+                            <button onClick={() => { setShowSignInDropdown(false); connectWithPrivy(); }} className="hov-btn"
+                              style={{ width:"100%", display:"flex", alignItems:"center", gap:10, padding:"10px 12px", background:"none", border:"none", borderRadius:10, cursor:"pointer", marginBottom:4, transition:"background 0.12s" }}
+                              onMouseEnter={e => e.currentTarget.style.background=T.accentBg}
+                              onMouseLeave={e => e.currentTarget.style.background="none"}>
+                              <div style={{ width:28, height:28, borderRadius:8, background:T.accent, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="#0d1117"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                              </div>
+                              <div style={{ textAlign:"left" }}>
+                                <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>Google / Email</div>
+                                <div style={{ fontSize:10, color:T.text3 }}>Auto-creates embedded wallet</div>
+                              </div>
+                            </button>
+                            {/* Divider */}
+                            <div style={{ height:1, background:T.border, margin:"2px 8px 6px" }}/>
+                            {/* Connect Wallet via Reown */}
+                            <button onClick={() => { setShowSignInDropdown(false); connectWithReown(); }} className="hov-btn"
+                              style={{ width:"100%", display:"flex", alignItems:"center", gap:10, padding:"10px 12px", background:"none", border:"none", borderRadius:10, cursor:"pointer", transition:"background 0.12s" }}
+                              onMouseEnter={e => e.currentTarget.style.background=T.accentBg}
+                              onMouseLeave={e => e.currentTarget.style.background="none"}>
+                              <div style={{ width:28, height:28, borderRadius:8, background:`${T.border}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                                <SvgWallet size={14} color={T.text1}/>
+                              </div>
+                              <div style={{ textAlign:"left" }}>
+                                <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>Connect Wallet</div>
+                                <div style={{ fontSize:10, color:T.text3 }}>Phantom, Backpack, Solflare…</div>
+                              </div>
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
