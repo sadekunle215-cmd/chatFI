@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Connection, Transaction, VersionedTransaction, Keypair } from "@solana/web3.js";
+import { Connection, Transaction, VersionedTransaction, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
 // ── Reown AppKit (external wallet connect — Phantom, Backpack, etc.) ─────────
 import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect, useWalletInfo } from "@reown/appkit/react";
@@ -1158,7 +1158,7 @@ function JupChatInner() {
           login: privyLogin, logout: privyLogout } = usePrivy();
   const { wallets: privyWallets } = useWallets();
   // Find the Privy-managed embedded wallet (Solana)
-  const privyEmbeddedWallet = privyWallets.find(w => w.walletClientType === "privy") || null;
+  const privyEmbeddedWallet = privyWallets.find(w => w.walletClientType === "privy" && w.chainType === "solana") || null;
   // Track whether Privy is the active auth method
   const [privyMode, setPrivyMode] = useState(false);
   const [privyProvider, setPrivyProvider] = useState(null); // "google"|"twitter"|"discord"|"email"
@@ -1251,6 +1251,9 @@ function JupChatInner() {
   const [sendCfg, setSendCfg]           = useState({ token:"SOL", amount:"", mint: TOKEN_MINTS.SOL });
   const [sendStatus, setSendStatus]     = useState(null); // null|"signing"|"done"|"error"
   const [sendLink, setSendLink]         = useState("");
+  const [sendMode, setSendMode]         = useState("invite"); // "invite" | "direct"
+  const [sendRecipient, setSendRecipient] = useState("");
+  const [sendTxSig, setSendTxSig]       = useState("");
 
   // ── Portfolio panel ──────────────────────────────────────────────────────────
   const [showPortfolio, setShowPortfolio]   = useState(false);
@@ -3073,6 +3076,71 @@ function JupChatInner() {
     } catch (err) {
       setSendStatus("error");
       push("ai", `Send failed: ${err?.message || "Unknown error"}. Please check your balance and try again.`);
+    }
+  };
+
+  // ── Direct Send — transfer SOL or any SPL token straight to a wallet address ──
+  const doDirectSend = async () => {
+    const { token, amount, mint } = sendCfg;
+    const recipient = sendRecipient.trim();
+    if (!recipient) { push("ai", "Please enter a recipient wallet address."); return; }
+    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+
+    let recipientPubkey;
+    try { recipientPubkey = new PublicKey(recipient); } catch {
+      push("ai", "Invalid recipient address. Please check and try again."); return;
+    }
+
+    const amtNum = parseFloat(amount);
+    if (!amtNum || amtNum <= 0) { push("ai", "Enter a valid amount greater than 0."); return; }
+
+    setSendStatus("signing");
+    setSendTxSig("");
+    push("ai", `Preparing to send **${amount} ${token}** to \`${recipient.slice(0,6)}…${recipient.slice(-4)}\`…`);
+
+    try {
+      const connection = new Connection(SOLANA_RPC, "confirmed");
+      const senderPubkey = new PublicKey(walletFull);
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+      const tx = new Transaction({ recentBlockhash: blockhash, feePayer: senderPubkey });
+
+      if (token === "SOL") {
+        const lamports = Math.round(amtNum * LAMPORTS_PER_SOL);
+        tx.add(SystemProgram.transfer({ fromPubkey: senderPubkey, toPubkey: recipientPubkey, lamports }));
+      } else {
+        // SPL token transfer — dynamically import spl-token to keep bundle light
+        const spl = await import("@solana/spl-token");
+        const mintPubkey = new PublicKey(mint);
+        const decimalsInfo = await connection.getParsedAccountInfo(mintPubkey);
+        const decimals = decimalsInfo?.value?.data?.parsed?.info?.decimals ?? tokenDecimalsRef.current[token] ?? 6;
+        const rawAmt = BigInt(Math.round(amtNum * Math.pow(10, decimals)));
+
+        const senderATA   = await spl.getAssociatedTokenAddress(mintPubkey, senderPubkey);
+        const recipientATA = await spl.getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+
+        // Create recipient ATA if it doesn't exist
+        const recipientATAInfo = await connection.getAccountInfo(recipientATA);
+        if (!recipientATAInfo) {
+          tx.add(spl.createAssociatedTokenAccountInstruction(senderPubkey, recipientATA, recipientPubkey, mintPubkey));
+        }
+        tx.add(spl.createTransferInstruction(senderATA, recipientATA, senderPubkey, rawAmt));
+      }
+
+      const signedTx = await provider.signTransaction(tx);
+      const sig = await connection.sendRawTransaction(signedTx.serialize());
+      await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+
+      setSendTxSig(sig);
+      setSendStatus("done");
+      push("ai",
+        `✅ **Sent ${amount} ${token}** to \`${recipient.slice(0,6)}…${recipient.slice(-4)}\`\n\n` +
+        `[View on Solscan →](https://solscan.io/tx/${sig})`
+      );
+    } catch (err) {
+      setSendStatus("error");
+      push("ai", `❌ Direct send failed: ${err?.message || "Unknown error"}. Check your balance and try again.`);
     }
   };
 
@@ -5446,6 +5514,9 @@ Order: \`${orderKey.slice(0,20)}…\`
           setSendCfg({ token: upperTok, amount, mint });
           setSendStatus(null);
           setSendLink("");
+          setSendRecipient("");
+          setSendTxSig("");
+          setSendMode(privyMode ? "direct" : "invite");
           setShowSend(true);
           push("ai", text);
         }
@@ -7513,89 +7584,158 @@ Order: \`${orderKey.slice(0,20)}…\`
           {/* ── Send panel ────────────────────────────────────────────── */}
           {showSend && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>📤 Jupiter Send</div>
-                <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>INVITE LINK</span>
-              </div>
-              <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
-                Send tokens to anyone — recipient doesn't need a wallet. They claim via the link. You can claw back unclaimed tokens anytime.
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>📤 Send Tokens</div>
               </div>
 
-              {/* Jupiter Send only supports SOL and USDC — other mints are rejected server-side */}
-              <div style={{ fontSize:11, color:"#f6ad55", background:"#2e1f0a", border:"1px solid #f6ad5544", borderRadius:8, padding:"7px 10px", marginBottom:10 }}>
-                ⚠️ Jupiter Send only supports <strong>SOL</strong> and <strong>USDC</strong>. Other tokens will fail at the claim step.
+              {/* Mode toggle */}
+              <div style={{ display:"flex", gap:4, background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:3, marginBottom:14 }}>
+                {[["invite","🔗 Invite Link"],["direct","💸 Direct Transfer"]].map(([mode, label]) => (
+                  <button key={mode} onClick={() => { setSendMode(mode); setSendStatus(null); setSendLink(""); setSendTxSig(""); }}
+                    style={{ flex:1, padding:"7px", borderRadius:8, border:"none", background: sendMode===mode ? T.accent : "none", color: sendMode===mode ? "#0d1117" : T.text2, fontSize:12, fontWeight:700, cursor:"pointer", transition:"all 0.15s" }}>
+                    {label}
+                  </button>
+                ))}
               </div>
 
-              {/* Token + Amount row */}
-              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token</div>
-                  <select
-                    value={sendCfg.token}
-                    onChange={e => {
-                      const sym = e.target.value;
-                      const mint = sym === "SOL" ? TOKEN_MINTS.SOL : TOKEN_MINTS.USDC;
-                      const decimals = sym === "SOL" ? 9 : 6;
-                      tokenCacheRef.current[sym] = mint;
-                      tokenDecimalsRef.current[sym] = decimals;
-                      setSendCfg(c => ({ ...c, token: sym, mint }));
-                    }}
-                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, cursor:"pointer" }}>
-                    <option value="SOL">SOL</option>
-                    <option value="USDC">USDC</option>
-                  </select>
+              {sendMode === "invite" ? (<>
+                <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
+                  Send tokens to anyone — recipient doesn't need a wallet. They claim via the link. You can claw back unclaimed tokens anytime.
                 </div>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount</div>
-                  <input type="number" min="0" placeholder="e.g. 1"
-                    value={sendCfg.amount}
-                    onChange={e => setSendCfg(c => ({ ...c, amount:e.target.value }))}
-                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                <div style={{ fontSize:11, color:"#f6ad55", background:"#2e1f0a", border:"1px solid #f6ad5544", borderRadius:8, padding:"7px 10px", marginBottom:10 }}>
+                  ⚠️ Jupiter Send only supports <strong>SOL</strong> and <strong>USDC</strong>. Other tokens will fail at the claim step.
+                </div>
+                <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token</div>
+                    <select value={sendCfg.token}
+                      onChange={e => {
+                        const sym = e.target.value;
+                        const mint = sym === "SOL" ? TOKEN_MINTS.SOL : TOKEN_MINTS.USDC;
+                        const decimals = sym === "SOL" ? 9 : 6;
+                        tokenCacheRef.current[sym] = mint;
+                        tokenDecimalsRef.current[sym] = decimals;
+                        setSendCfg(c => ({ ...c, token: sym, mint }));
+                      }}
+                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, cursor:"pointer" }}>
+                      <option value="SOL">SOL</option>
+                      <option value="USDC">USDC</option>
+                    </select>
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount</div>
+                    <input type="number" min="0" placeholder="e.g. 1"
+                      value={sendCfg.amount}
+                      onChange={e => setSendCfg(c => ({ ...c, amount:e.target.value }))}
+                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                    />
+                  </div>
+                </div>
+                {sendCfg.amount && (
+                  <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
+                    📤 Sending <strong>{sendCfg.amount} {sendCfg.token}</strong> via invite link<br/>
+                    <span style={{ fontSize:11, color:T.text3 }}>From: {walletFull?.slice(0,4)}…{walletFull?.slice(-4)} · Unclaimed tokens auto-clawable</span>
+                  </div>
+                )}
+                <div style={{ fontSize:11, color:T.text3, background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
+                  💡 The invite link is generated on-chain. Share it via any app — the recipient creates a wallet when claiming.
+                </div>
+                <button onClick={doSend}
+                  disabled={!sendCfg.amount || parseFloat(sendCfg.amount) <= 0 || sendStatus === "signing"}
+                  style={{ width:"100%", padding:"11px", background: (!sendCfg.amount || sendStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
+                  {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `📤 Send ${sendCfg.amount||""} ${sendCfg.token} via Invite Link`}
+                </button>
+                {sendStatus === "done" && sendLink && (
+                  <div style={{ marginTop:4, marginBottom:8, background:T.tealBg, border:`1px solid ${T.teal}44`, borderRadius:10, padding:"12px 14px" }}>
+                    <div style={{ fontSize:12, fontWeight:700, color:T.teal, marginBottom:6 }}>✅ Invite link ready — share to recipient</div>
+                    <div style={{ fontSize:11, color:T.text2, wordBreak:"break-all", background:T.bg, borderRadius:6, padding:"6px 10px", marginBottom:8, fontFamily:"monospace" }}>
+                      {sendLink}
+                    </div>
+                    <div style={{ display:"flex", gap:8 }}>
+                      <button onClick={() => navigator.clipboard.writeText(sendLink)}
+                        style={{ flex:1, padding:"8px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                        📋 Copy Link
+                      </button>
+                      <button onClick={() => { const code = sendLink.split("code=")[1]; if (code) doClawback(code); }}
+                        style={{ flex:1, padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
+                        ↩ Claw Back
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>) : (<>
+                {/* Direct Transfer */}
+                <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
+                  Send any token directly to a Solana wallet address. The transaction settles on-chain immediately.
+                </div>
+
+                {/* Recipient */}
+                <div style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Recipient Wallet Address</div>
+                  <input placeholder="Solana wallet address (e.g. 7xKX…)"
+                    value={sendRecipient}
+                    onChange={e => setSendRecipient(e.target.value)}
+                    style={{ width:"100%", padding:"9px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:12, fontFamily:"monospace" }}
                   />
                 </div>
-              </div>
 
-              {/* Preview */}
-              {sendCfg.amount && (
-                <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
-                  📤 Sending <strong>{sendCfg.amount} {sendCfg.token}</strong> via invite link<br/>
-                  <span style={{ fontSize:11, color:T.text3 }}>From: {walletFull?.slice(0,4)}…{walletFull?.slice(-4)} · Unclaimed tokens auto-clawable</span>
-                </div>
-              )}
-
-              <div style={{ fontSize:11, color:T.text3, background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
-                💡 The invite link is generated on-chain. Share it via any app — the recipient creates a wallet when claiming.
-              </div>
-
-              <button onClick={doSend}
-                disabled={!sendCfg.amount || parseFloat(sendCfg.amount) <= 0 || sendStatus === "signing"}
-                style={{ width:"100%", padding:"11px", background: (!sendCfg.amount || sendStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
-                {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `📤 Send ${sendCfg.amount||""} ${sendCfg.token} via Invite Link`}
-              </button>
-
-              {sendStatus === "done" && sendLink && (
-                <div style={{ marginTop:4, marginBottom:8, background:T.tealBg, border:`1px solid ${T.teal}44`, borderRadius:10, padding:"12px 14px" }}>
-                  <div style={{ fontSize:12, fontWeight:700, color:T.teal, marginBottom:6 }}>✅ Invite link ready — share to recipient</div>
-                  <div style={{ fontSize:11, color:T.text2, wordBreak:"break-all", background:T.bg, borderRadius:6, padding:"6px 10px", marginBottom:8, fontFamily:"monospace" }}>
-                    {sendLink}
+                {/* Token + Amount */}
+                <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token</div>
+                    <select value={sendCfg.token}
+                      onChange={e => {
+                        const sym = e.target.value;
+                        const mint = tokenCacheRef.current[sym] || TOKEN_MINTS[sym] || TOKEN_MINTS.SOL;
+                        setSendCfg(c => ({ ...c, token: sym, mint }));
+                      }}
+                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, cursor:"pointer" }}>
+                      {["SOL","USDC","USDT","JUP","BONK","WIF"].map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
                   </div>
-                  <div style={{ display:"flex", gap:8 }}>
-                    <button onClick={() => navigator.clipboard.writeText(sendLink)}
-                      style={{ flex:1, padding:"8px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                      📋 Copy Link
-                    </button>
-                    <button onClick={() => {
-                      const code = sendLink.split("code=")[1];
-                      if (code) doClawback(code);
-                    }}
-                      style={{ flex:1, padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
-                      ↩ Claw Back
-                    </button>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount</div>
+                    <input type="number" min="0" placeholder="e.g. 1"
+                      value={sendCfg.amount}
+                      onChange={e => setSendCfg(c => ({ ...c, amount:e.target.value }))}
+                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                    />
                   </div>
                 </div>
-              )}
 
-              <button onClick={() => setShowSend(false)}
+                {/* Preview */}
+                {sendCfg.amount && sendRecipient && (
+                  <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
+                    💸 Sending <strong>{sendCfg.amount} {sendCfg.token}</strong> directly to<br/>
+                    <span style={{ fontFamily:"monospace", fontSize:11, color:T.text2, wordBreak:"break-all" }}>{sendRecipient}</span>
+                  </div>
+                )}
+
+                <button onClick={doDirectSend}
+                  disabled={!sendCfg.amount || !sendRecipient || parseFloat(sendCfg.amount) <= 0 || sendStatus === "signing"}
+                  style={{ width:"100%", padding:"11px", background:(!sendCfg.amount || !sendRecipient || sendStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
+                  {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `💸 Send ${sendCfg.amount||""} ${sendCfg.token} Directly`}
+                </button>
+
+                {sendStatus === "done" && sendTxSig && (
+                  <div style={{ marginBottom:8, background:T.tealBg, border:`1px solid ${T.teal}44`, borderRadius:10, padding:"12px 14px" }}>
+                    <div style={{ fontSize:12, fontWeight:700, color:T.teal, marginBottom:6 }}>✅ Transfer confirmed on-chain</div>
+                    <div style={{ fontSize:11, color:T.text2, wordBreak:"break-all", fontFamily:"monospace", background:T.bg, borderRadius:6, padding:"6px 10px", marginBottom:8 }}>{sendTxSig}</div>
+                    <button onClick={() => window.open(`https://solscan.io/tx/${sendTxSig}`, "_blank")}
+                      style={{ width:"100%", padding:"8px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                      🔍 View on Solscan
+                    </button>
+                  </div>
+                )}
+
+                {sendStatus === "error" && (
+                  <div style={{ fontSize:12, color:T.red, background:`${T.red}18`, border:`1px solid ${T.red}44`, borderRadius:8, padding:"8px 12px", marginBottom:8 }}>
+                    ❌ Transaction failed. Check your balance and recipient address.
+                  </div>
+                )}
+              </>)}
+
+              <button onClick={() => { setShowSend(false); setSendStatus(null); setSendTxSig(""); }}
                 style={{ width:"100%", padding:"9px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
                 Cancel
               </button>
@@ -9348,6 +9488,7 @@ export default function JupChat() {
           createOnLogin: "users-without-wallets",
           noPromptOnSignature: false,
           requireUserPasswordOnCreate: false,
+          solana: { createOnLogin: "users-without-wallets" },
         },
         // Solana mainnet — embedded wallet cluster config
         solanaClusters: [
