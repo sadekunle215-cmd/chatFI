@@ -1028,8 +1028,9 @@ function JupChatInner() {
   const [earnLoading, setEarnLoading]     = useState(false);
   const [earnDeposit, setEarnDeposit]     = useState({ vault:null, amount:"" });
   const [showEarnDeposit, setShowEarnDeposit] = useState(false);
-  const [earnWithdraw, setEarnWithdraw]       = useState({ vault:null, amount:"" });
+  const [earnWithdraw, setEarnWithdraw]       = useState({ vault:null, amount:"", positionAmount:0 });
   const [showEarnWithdraw, setShowEarnWithdraw] = useState(false);
+  const [earnUserPositions, setEarnUserPositions] = useState({}); // { [TOKEN]: { amount, amountRaw, shares, decimals } }
 
   // ── Jupiter Studio state ─────────────────────────────────────────────────────
   const [showStudio, setShowStudio]         = useState(false);
@@ -2100,24 +2101,49 @@ function JupChatInner() {
       };
     });
 
-    // 1. Try direct Jupiter Lock API (public, no auth needed)
+    // 1. Portfolio positions API — same source portfolio panel uses (most reliable)
     let enriched = [];
     try {
-      const lockDirect = await fetch(`${JUP_LOCK_API}/locks?wallet=${walletFull}`).then(r => r.json());
-      const raw = Array.isArray(lockDirect) ? lockDirect
-        : lockDirect?.locks || lockDirect?.accounts || lockDirect?.data || [];
-      if (raw.length > 0) enriched = enrichLocks(raw);
+      const portRes = await fetch(`${JUP_PORTFOLIO}/positions/${walletFull}`);
+      const portData = await portRes.json();
+      const allEl = Array.isArray(portData) ? portData : (portData?.data || portData?.elements || portData?.positions || []);
+      const lockEls = allEl.filter(el => {
+        const s = ((el.label || "") + (el.platformId || "") + (el.name || "")).toLowerCase();
+        return s.includes("lock") || s.includes("vest");
+      });
+      if (lockEls.length) {
+        enriched = lockEls.flatMap(el => {
+          const assets = el.data?.assets || el.data?.positions || [];
+          if (!assets.length) return [{ _fromPortfolio:true,
+            symbol: el.name || el.label || "Token",
+            totalAmount: el.value ? parseFloat(el.value).toFixed(2) : "0",
+            claimableAmount: "0", vestedPercent: "0", lockId: el.id || el.address }];
+          return assets.map(a => ({ _fromPortfolio:true,
+            symbol: a.symbol || a.name || el.name || "Token",
+            totalAmount: a.amount != null ? parseFloat(a.amount).toFixed(4) : el.value ? parseFloat(el.value).toFixed(2) : "0",
+            claimableAmount: a.claimableAmount ? parseFloat(a.claimableAmount).toFixed(4) : "0",
+            vestedPercent: "0", cliff: a.cliff || a.cliffTime || null,
+            lockId: a.pubkey || a.id || el.id }]);
+        });
+      }
     } catch {}
 
-    // 2. Also try as recipient (some locks show under recipient key, not creator)
-    if (!enriched.length) {
-      try {
-        const recipRes = await fetch(`${JUP_LOCK_API}/locks?recipient=${walletFull}`).then(r => r.json());
-        const raw = Array.isArray(recipRes) ? recipRes
-          : recipRes?.locks || recipRes?.accounts || recipRes?.data || [];
-        if (raw.length > 0) enriched = enrichLocks(raw);
-      } catch {}
-    }
+    // 2. Direct Jupiter Lock API — always check BOTH wallet (creator) AND recipient
+    try {
+      const [walletRes, recipRes] = await Promise.allSettled([
+        fetch(`${JUP_LOCK_API}/locks?wallet=${walletFull}`).then(r => r.json()),
+        fetch(`${JUP_LOCK_API}/locks?recipient=${walletFull}`).then(r => r.json()),
+      ]);
+      const seen = new Set(enriched.map(l => l.lockId).filter(Boolean));
+      for (const result of [walletRes, recipRes]) {
+        if (result.status !== "fulfilled") continue;
+        const raw = Array.isArray(result.value) ? result.value
+          : result.value?.locks || result.value?.accounts || result.value?.data || [];
+        enrichLocks(raw).forEach(lk => {
+          if (!seen.has(lk.lockId)) { seen.add(lk.lockId); enriched.push(lk); }
+        });
+      }
+    } catch {}
 
     // 3. Server proxy fallback
     if (!enriched.length) {
@@ -2444,6 +2470,35 @@ function JupChatInner() {
     } catch { /* fall through */ }
     setEarnVaults([]);
     setEarnLoading(false);
+  };
+
+  // ── Fetch user's earn positions to show balances on vault cards ───────────────
+  const fetchEarnUserPositions = async () => {
+    if (!walletFull) return;
+    try {
+      // Direct fetch — same pattern as fetchPortfolioData (NOT jupFetch proxy)
+      const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+      const earnRaw = await earnRes.json();
+      let earnArr = Array.isArray(earnRaw) ? earnRaw
+        : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
+        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || [];
+      if (!Array.isArray(earnArr)) {
+        earnArr = Object.values(earnRaw).filter(v => v && typeof v === "object" && !Array.isArray(v));
+      }
+      const map = {};
+      earnArr.forEach(e => {
+        const sym = (e.asset?.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
+        if (!sym) return;
+        const dec = e.asset?.decimals ?? e.decimals ?? 6;
+        const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
+        const amount = ua > 1e6 ? ua / Math.pow(10, dec) : ua;
+        const shares = parseFloat(e.shares || 0);
+        if (amount > 0 || shares > 0) {
+          map[sym] = { amount, amountRaw: ua, shares, decimals: dec };
+        }
+      });
+      setEarnUserPositions(map);
+    } catch {}
   };
 
   // ── Earn deposit — real on-chain tx via POST /lend/v1/earn/deposit ────────────
@@ -2967,39 +3022,53 @@ function JupChatInner() {
   };
 
   // ── Fetch open Lend positions ─────────────────────────────────────────────────
-  // Earn positions: direct REST call (GET /lend/v1/earn/positions) — works reliably.
+  // Earn positions: MUST use direct fetch() — jupFetch proxy strips/transforms earn response.
   // Borrow/Multiply positions: Jupiter Borrow REST API is "Coming Soon" (SDK-only for now).
-  // The /api/lend-positions serverless endpoint requires @jup-ag/lend-read SDK on the server.
-  // We try it safely (text → parse) so an HTML crash page never breaks the UI.
   const fetchLendPositions = async () => {
     if (!walletFull) { push("ai", "Connect your wallet first to view your Lend positions."); return; }
     setLendPosLoading(true);
     setShowLendPos(true);
 
-    // 1. Earn positions — direct REST API (always works)
+    // 1. Earn positions — direct fetch (same pattern as fetchPortfolioData, NOT through proxy)
     let earnPositions = [];
     try {
-      const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-      // Jupiter may return positions under various keys — try all known shapes
-      let earnArr = [];
-      if (Array.isArray(earnRaw)) {
-        earnArr = earnRaw;
-      } else if (earnRaw && typeof earnRaw === "object") {
-        // Try every possible key
-        earnArr = earnRaw.data || earnRaw.positions || earnRaw.earnPositions
-                || earnRaw.result || earnRaw.items || earnRaw.balances || [];
-        // Sometimes it's an object keyed by vault address — flatten to array
-        if (!Array.isArray(earnArr)) {
-          const vals = Object.values(earnRaw).filter(v => v && typeof v === "object" && !Array.isArray(v));
-          if (vals.length > 0) earnArr = vals;
-          else earnArr = [];
-        }
+      const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+      const earnRaw = await earnRes.json();
+      let earnArr = Array.isArray(earnRaw) ? earnRaw
+        : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
+        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || [];
+      if (!Array.isArray(earnArr)) {
+        const vals = Object.values(earnRaw).filter(v => v && typeof v === "object" && !Array.isArray(v));
+        earnArr = vals.length > 0 ? vals : [];
       }
-      earnPositions = earnArr.map(e => ({ ...e, _type: "earn" }));
+      earnPositions = earnArr
+        .filter(e => parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || e.value || e.shares || 0) > 0)
+        .map(e => ({ ...e, _type: "earn" }));
     } catch {}
 
+    // 1b. Portfolio API fallback — same source the portfolio panel uses for earn positions
+    if (!earnPositions.length) {
+      try {
+        const portRes = await fetch(`${JUP_PORTFOLIO}/positions/${walletFull}`);
+        const portData = await portRes.json();
+        const allEl = Array.isArray(portData) ? portData : (portData?.data || portData?.elements || portData?.positions || []);
+        const earnEls = allEl.filter(el => {
+          const s = ((el.label || "") + (el.platformId || "") + (el.name || "")).toLowerCase();
+          return s.includes("earn") || s.includes("lend") || s.includes("vault") || s.includes("yield");
+        });
+        earnPositions = earnEls.flatMap(el => {
+          const assets = el.data?.assets || el.data?.positions || [];
+          if (!assets.length) return [{ _type:"earn", _fromPortfolio:true,
+            symbol: el.name || el.label || "Token", underlyingAssets: el.value, value: el.value, asset:{ decimals:6 } }];
+          return assets.map(a => ({ _type:"earn", _fromPortfolio:true,
+            symbol: a.symbol || a.name || el.name || "Token",
+            underlyingAssets: a.underlyingAssets || a.amount || a.value,
+            value: a.value ?? el.value, asset:{ decimals: a.decimals ?? 6 } }));
+        }).filter(e => parseFloat(e.value || e.underlyingAssets || 0) > 0);
+      } catch {}
+    }
+
     // 2. Borrow/Multiply positions — via /api/lend-positions (uses @jup-ag/lend-read SDK)
-    // Uses res.text() → JSON.parse so an HTML crash page never breaks the UI
     let borrowPositions = [];
     try {
       const res = await fetch(`/api/lend-positions?wallet=${walletFull}`);
@@ -3007,7 +3076,7 @@ function JupChatInner() {
       try {
         const data = JSON.parse(txt);
         if (data.positions) borrowPositions = data.positions.map(p => ({ ...p, _type: "borrow" }));
-      } catch {} // non-JSON (HTML error page) — silently ignore
+      } catch {}
     } catch {}
 
     const all = [...borrowPositions, ...earnPositions];
@@ -4699,6 +4768,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       } else if (action === "FETCH_EARN") {
         push("ai", text + "\n\nFetching earn vaults…");
         await fetchEarnVaults();
+        if (walletFull) fetchEarnUserPositions();
         setShowEarn(true);
         // If AI specified a vault + amount/portion, auto-open deposit panel
         if (actionData?.vault) {
@@ -6318,14 +6388,18 @@ Order: \`${orderKey.slice(0,20)}…\`
                 </div>
               )}
 
-              {!earnLoading && earnVaults.map((v) => (
+              {!earnLoading && earnVaults.map((v) => {
+                const userPos = earnUserPositions[v.token?.toUpperCase()];
+                const hasPosition = userPos && userPos.amount > 0;
+                return (
                 <div key={v.id} className="vault-card"
-                  style={{ padding:"14px 16px", border:`1px solid ${T.border}`, borderRadius:10, marginBottom:10, background:T.bg, transition:"all 0.15s", cursor:"default" }}>
+                  style={{ padding:"14px 16px", border:`1px solid ${hasPosition ? T.green+"55" : T.border}`, borderRadius:10, marginBottom:10, background: hasPosition ? `${T.green}08` : T.bg, transition:"all 0.15s", cursor:"default" }}>
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
                     <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ display:"flex", alignItems:"center", gap:7 }}>
                         {v.logoUrl && <img src={v.logoUrl} alt={v.token} style={{ width:20, height:20, borderRadius:"50%", objectFit:"cover", flexShrink:0 }} onError={e=>e.target.style.display="none"} />}
                         <div style={{ fontWeight:600, fontSize:14, color:T.text1 }}>{v.token} Earn Vault</div>
+                        {hasPosition && <span style={{ fontSize:10, background:`${T.green}22`, color:T.green, border:`1px solid ${T.green}44`, borderRadius:6, padding:"1px 6px", fontWeight:600 }}>Deposited</span>}
                       </div>
                       <div style={{ fontSize:12, color:T.text3, marginTop:2 }}>
                         by Jupiter Lend
@@ -6346,6 +6420,15 @@ Order: \`${orderKey.slice(0,20)}…\`
                           </span>
                         )}
                       </div>
+                      {/* ── User position row ── */}
+                      {hasPosition && (
+                        <div style={{ marginTop:8, padding:"6px 10px", background:`${T.green}12`, border:`1px solid ${T.green}33`, borderRadius:7, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                          <span style={{ fontSize:11, color:T.text3 }}>Your position</span>
+                          <span style={{ fontSize:13, fontWeight:700, color:T.green }}>
+                            {userPos.amount.toLocaleString(undefined, { minimumFractionDigits:2, maximumFractionDigits:4 })} {v.token}
+                          </span>
+                        </div>
+                      )}
                     </div>
                     <div style={{ textAlign:"right", flexShrink:0, marginLeft:12 }}>
                       <div style={{ fontSize:22, fontWeight:800, color:T.green, lineHeight:1 }}>{v.apyDisplay}</div>
@@ -6357,15 +6440,16 @@ Order: \`${orderKey.slice(0,20)}…\`
                           Deposit
                         </button>
                         <button
-                          onClick={() => { setEarnWithdraw({ vault:v, amount:"" }); setShowEarnWithdraw(true); }} className="hov-btn"
-                          style={{ padding:"5px 14px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:11, cursor:"pointer" }}>
+                          onClick={() => { setEarnWithdraw({ vault:v, amount:"", positionAmount: userPos?.amount || 0 }); setShowEarnWithdraw(true); }} className="hov-btn"
+                          style={{ padding:"5px 14px", background:"none", border:`1px solid ${hasPosition ? T.green+"66" : T.border}`, borderRadius:6, color: hasPosition ? T.green : T.text2, fontSize:11, cursor:"pointer" }}>
                           Withdraw
                         </button>
                       </div>
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
 
               <button onClick={() => setShowEarn(false)}
                 style={{ marginTop:4, padding:"6px 14px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
@@ -7254,13 +7338,49 @@ Order: \`${orderKey.slice(0,20)}…\`
                 <div style={{ fontSize:12, color:T.text3 }}>No open positions found.</div>
               ) : (
                 <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                  {lendPositions.map((pos, i) => {
-                    // Look up vault to get correct decimals; fall back to 9 (SOL default)
+                  {/* ── Earn deposits ── */}
+                  {lendPositions.filter(p => p._type === "earn").map((pos, i) => {
+                    const sym = pos.asset?.symbol || pos.assetSymbol || pos.symbol || "Token";
+                    const dec = pos.asset?.decimals ?? pos.decimals ?? 6;
+                    const ua  = parseFloat(pos.underlyingAssets || pos.underlying_assets || pos.amount || pos.balance || pos.depositedAmount || 0);
+                    const amt = ua > 1e6 ? (ua / Math.pow(10, dec)).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})
+                              : ua > 0   ? ua.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})
+                              : parseFloat(pos.value||0).toFixed(2);
+                    // Find matching vault in earnVaults for APY + withdraw
+                    const matchVault = earnVaults.find(v => v.token?.toUpperCase() === sym.toUpperCase());
+                    return (
+                      <div key={`earn-${i}`} style={{ padding:"12px 14px", border:`1px solid ${T.green}44`, borderRadius:10, background:`${T.green}08` }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                          <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>
+                            📈 {sym} Earn Deposit
+                          </div>
+                          {matchVault && <span style={{ fontSize:12, fontWeight:700, color:T.green }}>{matchVault.apyDisplay} APY</span>}
+                        </div>
+                        <div style={{ padding:"8px 12px", background:`${T.green}12`, border:`1px solid ${T.green}33`, borderRadius:8, marginBottom:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                          <span style={{ fontSize:11, color:T.text3 }}>Deposited balance</span>
+                          <span style={{ fontSize:14, fontWeight:700, color:T.green }}>{amt} {sym}</span>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const posAmt = ua > 1e6 ? ua / Math.pow(10, dec) : ua;
+                            const vault = matchVault || { name:`Jupiter Lend ${sym}`, token:sym, apyDisplay:"—", tvl:0 };
+                            setEarnWithdraw({ vault, amount:"", positionAmount: posAmt });
+                            setShowEarnWithdraw(true);
+                            setShowLendPos(false);
+                          }}
+                          className="hov-btn"
+                          style={{ width:"100%", padding:"8px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                          ⬇ Withdraw
+                        </button>
+                      </div>
+                    );
+                  })}
+
+                  {/* ── Borrow / Multiply positions ── */}
+                  {lendPositions.filter(p => p._type === "borrow").map((pos, i) => {
                     const vaultMeta   = MULTIPLY_VAULTS.find(v => v.vaultId === pos.vaultId);
                     const colDec      = vaultMeta?.colDecimals  ?? 9;
                     const debtDec     = vaultMeta?.debtDecimals ?? 6;
-                    const colSym      = vaultMeta?.collateral || "Col";
-                    const debtSym     = vaultMeta?.debt       || "Debt";
                     const supplyNum   = parseFloat(pos.supply) / Math.pow(10, colDec);
                     const borrowNum   = parseFloat(pos.borrow) / Math.pow(10, debtDec);
                     const riskPct    = Math.round((pos.riskRatio || 0) * 100);
@@ -7268,7 +7388,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                     const riskColor  = riskPct > 80 ? T.red : riskPct > 60 ? "#f59e0b" : T.green;
                     const isUnwinding = unwindStatus === pos.positionId;
                     return (
-                      <div key={i} style={{ padding:"12px 14px", border:`1px solid ${T.border}`, borderRadius:10, background:T.bg }}>
+                      <div key={`borrow-${i}`} style={{ padding:"12px 14px", border:`1px solid ${T.border}`, borderRadius:10, background:T.bg }}>
                         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                           <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>Position #{pos.positionId} · Vault {pos.vaultId}</div>
                           {pos.isLiquidated && <span style={{ fontSize:10, color:T.red, fontWeight:700 }}>LIQUIDATED</span>}
@@ -7277,7 +7397,6 @@ Order: \`${orderKey.slice(0,20)}…\`
                           <span>📥 Collateral: <strong style={{ color:T.text1 }}>{supplyNum.toFixed(4)}</strong></span>
                           <span>💸 Debt: <strong style={{ color:T.red }}>{borrowNum.toFixed(4)}</strong></span>
                         </div>
-                        {/* Risk bar */}
                         <div style={{ marginBottom:10 }}>
                           <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, marginBottom:3 }}>
                             <span style={{ color:T.text3 }}>Risk ratio</span>
@@ -7287,7 +7406,6 @@ Order: \`${orderKey.slice(0,20)}…\`
                             <div style={{ height:"100%", width:`${Math.min(riskPct, 100)}%`, background:riskColor, borderRadius:4 }}/>
                           </div>
                         </div>
-                        {/* Action buttons */}
                         {!pos.isLiquidated && (
                           <div style={{ display:"flex", gap:8 }}>
                             <button onClick={() => doUnwind(pos, false)} disabled={!!unwindStatus} className="hov-btn"
@@ -7527,13 +7645,59 @@ Order: \`${orderKey.slice(0,20)}…\`
                 <span style={{ fontSize:16, fontWeight:700, color:T.green }}>{earnWithdraw.vault.apyDisplay} APY</span>
                 {earnWithdraw.vault.tvl > 0 && <span style={{ fontSize:12, color:T.text3 }}>· TVL ${Number(earnWithdraw.vault.tvl).toLocaleString()}</span>}
               </div>
-              <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>
+
+              {/* Position summary */}
+              {earnWithdraw.positionAmount > 0 && (
+                <div style={{ padding:"10px 14px", background:`${T.green}10`, border:`1px solid ${T.green}33`, borderRadius:8, marginBottom:12, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ fontSize:12, color:T.text3 }}>Your deposited balance</span>
+                  <span style={{ fontSize:14, fontWeight:700, color:T.green }}>
+                    {earnWithdraw.positionAmount.toLocaleString(undefined, { minimumFractionDigits:2, maximumFractionDigits:4 })} {earnWithdraw.vault.token}
+                  </span>
+                </div>
+              )}
+
+              <div style={{ fontSize:11, color:T.text3, marginBottom:10 }}>
                 Enter the amount of <strong style={{ color:T.text2 }}>{earnWithdraw.vault.token}</strong> to withdraw. Withdrawals are subject to the Automated Debt Ceiling — large amounts may be smoothed over blocks.
               </div>
+
+              {/* % quick-fill buttons — only shown when position is known */}
+              {earnWithdraw.positionAmount > 0 && (
+                <div style={{ display:"flex", gap:6, marginBottom:10 }}>
+                  {[25, 50, 75, 100].map(pct => {
+                    const fillAmt = (earnWithdraw.positionAmount * pct / 100);
+                    const display = fillAmt.toFixed(4).replace(/\.?0+$/, "");
+                    const isSelected = parseFloat(earnWithdraw.amount) === parseFloat(display) ||
+                      (pct === 100 && parseFloat(earnWithdraw.amount) >= earnWithdraw.positionAmount * 0.9999);
+                    return (
+                      <button key={pct}
+                        onClick={() => setEarnWithdraw(d => ({ ...d, amount: display }))}
+                        className="hov-btn"
+                        style={{
+                          flex:1, padding:"6px 0", fontSize:12, fontWeight:600,
+                          borderRadius:7, cursor:"pointer", transition:"all 0.15s",
+                          background: isSelected ? T.green : `${T.green}15`,
+                          border: `1px solid ${isSelected ? T.green : T.green+"44"}`,
+                          color: isSelected ? "#0d1117" : T.green,
+                        }}>
+                        {pct === 100 ? "MAX" : `${pct}%`}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               <input type="number" placeholder={`Amount (${earnWithdraw.vault.token})`} value={earnWithdraw.amount}
                 onChange={e => setEarnWithdraw(d=>({...d,amount:e.target.value}))}
                 style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:12 }}
               />
+
+              {/* Percentage indicator below input */}
+              {earnWithdraw.positionAmount > 0 && earnWithdraw.amount && parseFloat(earnWithdraw.amount) > 0 && (
+                <div style={{ fontSize:11, color:T.text3, marginTop:-8, marginBottom:12, textAlign:"right" }}>
+                  {Math.min(100, (parseFloat(earnWithdraw.amount) / earnWithdraw.positionAmount * 100)).toFixed(1)}% of your position
+                </div>
+              )}
+
               <div style={{ display:"flex", gap:8 }}>
                 <button
                   onClick={doEarnWithdraw}
