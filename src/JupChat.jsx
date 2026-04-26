@@ -6122,15 +6122,15 @@ Order: \`${orderKey.slice(0,20)}…\`
                       </button>
                       {showSignInDropdown && (
                         <>
-                          <div onClick={() => setShowSignInDropdown(false)} style={{ position:"fixed", inset:0, zIndex:299 }}/>
+                          <div onClick={() => setShowSignInDropdown(false)} style={{ position:"fixed", inset:0, zIndex:300 }}/>
                           <div style={{
-                            position:"absolute", top:"calc(100% + 8px)", right:0, zIndex:300,
+                            position:"absolute", top:"calc(100% + 8px)", right:0, zIndex:301,
                             background:T.surface, border:`1px solid ${T.border}`, borderRadius:14,
                             padding:6, minWidth:200, boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
                             animation:"fadeUp 0.15s ease",
                           }}>
                             {/* Google / Email via Privy */}
-                            <button onClick={() => { setShowSignInDropdown(false); connectWithPrivy(); }} className="hov-btn"
+                            <button onClick={() => { setShowSignInDropdown(false); privyLogin(); }} className="hov-btn"
                               style={{ width:"100%", display:"flex", alignItems:"center", gap:10, padding:"10px 12px", background:"none", border:"none", borderRadius:10, cursor:"pointer", marginBottom:4, transition:"background 0.12s" }}
                               onMouseEnter={e => e.currentTarget.style.background=T.accentBg}
                               onMouseLeave={e => e.currentTarget.style.background="none"}>
