@@ -1112,7 +1112,7 @@ const BLOG_POSTS = [
 ];
 
 // ─── Main component ───────────────────────────────────────────────────────────
-const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" };
+const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana.\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" };
 
 function JupChatInner() {
   const [msgs, setMsgs] = useState(() => {
@@ -1285,6 +1285,12 @@ function JupChatInner() {
   const [sendMode, setSendMode]         = useState("invite"); // "invite" | "direct"
   const [sendRecipient, setSendRecipient] = useState("");
   const [sendTxSig, setSendTxSig]       = useState("");
+  // Jupiter token search for direct send
+  const [directTokenQuery, setDirectTokenQuery]     = useState("SOL");
+  const [directTokenResults, setDirectTokenResults] = useState([]);
+  const [directTokenLoading, setDirectTokenLoading] = useState(false);
+  const [directTokenOpen, setDirectTokenOpen]       = useState(false);
+  const directTokenTimerRef = useRef(null);
 
   // ── Portfolio panel ──────────────────────────────────────────────────────────
   const [showPortfolio, setShowPortfolio]   = useState(false);
@@ -1823,7 +1829,7 @@ function JupChatInner() {
           if (!p) return a;
           const hit = a.condition === "above" ? p >= a.target : p <= a.target;
           if (hit) {
-            push("ai", `🔔 **Price Alert!**\n\n**${a.token}** just hit **$${Number(p).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})}** — your alert was set for ${a.condition === "above" ? "above" : "below"} **$${Number(a.target).toLocaleString()}**.`);
+            push("ai", `**Price Alert:**\n\n**${a.token}** just hit **$${Number(p).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})}** — your alert was set for ${a.condition === "above" ? "above" : "below"} **$${Number(a.target).toLocaleString()}**.`);
             return { ...a, triggered: true };
           }
           return a;
@@ -2604,7 +2610,7 @@ function JupChatInner() {
     // SOL (native) cannot be locked — the Jupiter Lock program requires an SPL token ATA.
     // Use USDC, JUP, or any other SPL token instead.
     if (mint === "So11111111111111111111111111111111111111112") {
-      push("ai", "⚠️ Native SOL cannot be locked directly. Please use an SPL token like **USDC** or **JUP** instead.");
+      push("ai", "Note: Native SOL cannot be locked directly. Please use an SPL token like **USDC** or **JUP** instead.");
       setLockStatus(null);
       return;
     }
@@ -3097,7 +3103,7 @@ function JupChatInner() {
       setSendStatus("done");
       push("ai",
         `Send submitted ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n` +
-        `🔗 **Invite link:**\n\`${inviteLink}\`\n\n` +
+        `**Invite link:**\n\`${inviteLink}\`\n\n` +
         `Share this link — recipient claims via **Jupiter Mobile** (no wallet needed upfront). ` +
         `Tokens auto-return to you on expiry if unclaimed.\n\n` +
         `Transaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`
@@ -3166,12 +3172,12 @@ function JupChatInner() {
       setSendTxSig(sig);
       setSendStatus("done");
       push("ai",
-        `✅ **Sent ${amount} ${token}** to \`${recipient.slice(0,6)}…${recipient.slice(-4)}\`\n\n` +
+        `**Sent ${amount} ${token}** to \`${recipient.slice(0,6)}…${recipient.slice(-4)}\`\n\n` +
         `[View on Solscan →](https://solscan.io/tx/${sig})`
       );
     } catch (err) {
       setSendStatus("error");
-      push("ai", `❌ Direct send failed: ${err?.message || "Unknown error"}. Check your balance and try again.`);
+      push("ai", `Direct send failed: ${err?.message || "Unknown error"}. Check your balance and try again.`);
     }
   };
 
@@ -3336,7 +3342,7 @@ function JupChatInner() {
       setBetStatus("error");
       const msg = err?.message || "Unknown error";
       if (msg.includes("unsupported_region") || msg.includes("Trading is not available in your region") || msg.includes("geo") || msg.includes("region")) {
-        push("ai", `⚠️ Jupiter Prediction markets returned a **geo-restriction error**.\n\nThis can happen if the ChatFi server (not your device) is deployed in a restricted region. If you've successfully used prediction markets before or know your country is supported, this is a server-side issue.\n\n**Try:**\n• Reconnect your wallet and try again\n• If the issue persists, the server may need to be re-deployed to a US/EU region\n\n*Note: Jupiter supports US, UK, EU and most regions — this is rarely a user restriction.*`);
+        push("ai", `Note: Jupiter Prediction markets returned a **geo-restriction error**.\n\nThis can happen if the ChatFi server (not your device) is deployed in a restricted region. If you've successfully used prediction markets before or know your country is supported, this is a server-side issue.\n\n**Try:**\n• Reconnect your wallet and try again\n• If the issue persists, the server may need to be re-deployed to a US/EU region\n\n*Note: Jupiter supports US, UK, EU and most regions — this is rarely a user restriction.*`);
       } else {
         push("ai", `Prediction bet failed. Details: ${msg}`);
       }
@@ -3465,7 +3471,7 @@ function JupChatInner() {
       }
       // Only reach here if tx actually succeeded
       setMultiplyStatus("done");
-      push("ai", `Multiply position opened ✓\n\n**${leverage}x ${vault.collateral}/${vault.debt}**\nCollateral: **${colAmount} ${vault.collateral}**\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})\n\n⚠️ Monitor your position at [jup.ag/lend/multiply](https://jup.ag/lend/multiply) — your Position NFT is in your wallet.`);
+      push("ai", `Multiply position opened\n\n**${leverage}x ${vault.collateral}/${vault.debt}**\nCollateral: **${colAmount} ${vault.collateral}**\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})\n\nNote:️ Monitor your position at [jup.ag/lend/multiply](https://jup.ag/lend/multiply) — your Position NFT is in your wallet.`);
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
@@ -3498,13 +3504,13 @@ function JupChatInner() {
       }
       let multiplyHint = "\n\nOpen [jup.ag/lend/multiply](https://jup.ag/lend/multiply) to check your positions.";
       if (msg.includes("6011") || msg.includes("InvalidPositionId")) {
-        multiplyHint = "\n\n💡 This vault requires opening your first position directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply). Once the position NFT is created, you can manage it here.";
+        multiplyHint = "\n\nTip: This vault requires opening your first position directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply). Once the position NFT is created, you can manage it here.";
       } else if (msg.includes("6025") || msg.includes("SlippageExceeded")) {
-        multiplyHint = "\n\n💡 Slippage exceeded during the flashloan swap. Try reducing leverage (e.g. 2x instead of 3x), a smaller collateral amount, or wait for calmer market conditions.";
+        multiplyHint = "\n\nTip: Slippage exceeded during the flashloan swap. Try reducing leverage (e.g. 2x instead of 3x), a smaller collateral amount, or wait for calmer market conditions.";
       } else if (msg.includes("6001") || msg.includes("insufficient") || msg.includes("balance") || msg.includes("funds")) {
-        multiplyHint = "\n\n💡 Insufficient balance. Make sure you have enough of the collateral token in your wallet.";
+        multiplyHint = "\n\nTip: Insufficient balance. Make sure you have enough of the collateral token in your wallet.";
       } else if (msg.includes("rent") || msg.includes("fee") || msg.includes("lamport")) {
-        multiplyHint = "\n\n💡 Not enough SOL for transaction fees. You need at least 0.01 SOL.";
+        multiplyHint = "\n\nTip: Not enough SOL for transaction fees. You need at least 0.01 SOL.";
       }
       push("ai", `Multiply failed: ${decodedErr}${multiplyHint}`);
     }
@@ -3639,12 +3645,12 @@ function JupChatInner() {
       setBorrowStatus("done");
       setShowBorrow(false);
       push("ai",
-        "Borrow successful ✓\n\n" +
-        "📥 **" + colAmount + " " + collateral + "** deposited as collateral\n" +
-        "💸 **" + borrowAmount + " " + debt + "** borrowed to your wallet\n\n" +
+        "Borrow successful\n\n" +
+        ""Deposited: **" + colAmount + " " + collateral + "** deposited as collateral\n" +
+        ""Borrowed: **" + borrowAmount + " " + debt + "** borrowed to your wallet\n\n" +
         "Position NFT is in your wallet.\nTx: `" + signature.slice(0,20) + "…`\n" +
         "[View on Solscan →](https://solscan.io/tx/" + signature + ")\n\n" +
-        "⚠️ Monitor your LTV at [jup.ag/lend](https://jup.ag/lend) to avoid liquidation."
+        "Note: Monitor your LTV at [jup.ag/lend](https://jup.ag/lend) to avoid liquidation."
       )
       try { const updated = await fetchSolanaBalances(walletFull); setPortfolio(updated); } catch {}
     } catch (err) {
@@ -3663,9 +3669,9 @@ function JupChatInner() {
         if (msg.includes(String(code))) { decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`; break; }
       }
       let hint = "\n\nManage positions at [jup.ag/lend](https://jup.ag/lend).";
-      if (msg.includes("insufficient") || msg.includes("balance")) hint = "\n\n💡 Insufficient balance — make sure you hold the collateral token.";
-      else if (msg.includes("SOL") || msg.includes("fee") || msg.includes("rent")) hint = "\n\n💡 Not enough SOL for fees. You need at least 0.01 SOL.";
-      else if (msg.includes("LTV") || msg.includes("liquidat")) hint = "\n\n💡 Borrow amount exceeds your collateral LTV limit. Reduce the borrow amount.";
+      if (msg.includes("insufficient") || msg.includes("balance")) hint = "\n\nTip: Insufficient balance — make sure you hold the collateral token.";
+      else if (msg.includes("SOL") || msg.includes("fee") || msg.includes("rent")) hint = "\n\nTip: Not enough SOL for fees. You need at least 0.01 SOL.";
+      else if (msg.includes("LTV") || msg.includes("liquidat")) hint = "\n\nTip: Borrow amount exceeds your collateral LTV limit. Reduce the borrow amount.";
       push("ai", "Borrow failed: " + decodedErr + hint);
     }
     setBorrowStatus(null);
@@ -3756,7 +3762,7 @@ function JupChatInner() {
           if (!sig) throw new Error(rpcRes?.error?.message || "Send failed.");
           const payoutUsd = (parseInt(pos.payoutUsd || 0) / 1_000_000).toFixed(2);
           const title = pos.marketMetadata?.title || pos.marketId || "market";
-          push("ai", `✓ Claimed **$${payoutUsd} USDC** from _${title.slice(0, 50)}_\n[View on Solscan →](https://solscan.io/tx/${sig})`);
+          push("ai", `Claimed **$${payoutUsd} USDC** from _${title.slice(0, 50)}_\n[View on Solscan →](https://solscan.io/tx/${sig})`);
           claimed++;
         } catch (e) {
           push("ai", `Failed to claim position ${pos.pubkey?.slice(0, 12)}…: ${e?.message || "Unknown error"}`);
@@ -3798,12 +3804,12 @@ function JupChatInner() {
               });
               const sig = rpcRes?.result;
               if (sig) {
-                push("ai", `✓ Claimed ASR reward: **${parseFloat(asr.amount || 0).toFixed(4)} ${token}**\n[View on Solscan →](https://solscan.io/tx/${sig})`);
+                push("ai", `Claimed ASR reward: **${parseFloat(asr.amount || 0).toFixed(4)} ${token}**\n[View on Solscan →](https://solscan.io/tx/${sig})`);
                 asrClaimed++;
               }
             } else {
               // No on-chain tx available — inform user
-              push("ai", `🏅 You have **${totalAsr.toFixed(4)} ${token}** in unclaimed JUP ASR (Active Staking Rewards).\n\nClaim them at [vote.jup.ag/asr](https://vote.jup.ag/asr) — connect your wallet there to claim.`);
+              push("ai", `You have **${totalAsr.toFixed(4)} ${token}** in unclaimed JUP ASR (Active Staking Rewards).\n\nClaim them at [vote.jup.ag/asr](https://vote.jup.ag/asr) — connect your wallet there to claim.`);
               break;
             }
           } catch { /* skip individual ASR epoch errors */ }
@@ -4272,7 +4278,7 @@ function JupChatInner() {
     for (const sw of stdWallets) {
       list.push({
         name:      sw.name,
-        icon:      sw.icon || "💳",
+        icon:      sw.icon || "",
         detected:  true,
         connect:   async () => wrapStandardWallet(sw),
         type:      "standard",
@@ -4307,7 +4313,7 @@ function JupChatInner() {
     if (genericSolana && typeof genericSolana.connect === "function" && !solanaProviderClaimed) {
       // Try to identify by known flags
       let name = "Solana Wallet";
-      let icon = "💎";
+      let icon = "";
       if (genericSolana.isJupiter)   { name = "Jupiter";      icon = WALLET_LOGOS["Jupiter"]; }
       else if (genericSolana.isPhantom)  { name = "Phantom";  icon = WALLET_LOGOS["Phantom"]; }
       else if (genericSolana.isSolflare) { name = "Solflare"; icon = WALLET_LOGOS["Solflare"]; }
@@ -4760,9 +4766,9 @@ function JupChatInner() {
       const msg = err?.message || "Unknown error";
       let hint = "";
       if (msg.includes("message signing") || msg.includes("signMessage")) {
-        hint = "\n\n💡 Trigger orders require wallet message signing for JWT auth. Use Phantom or Solflare browser extension. Alternatively, swap first then set a limit order once funds are in your wallet.";
+        hint = "\n\nTip: Trigger orders require wallet message signing for JWT auth. Use Phantom or Solflare browser extension. Alternatively, swap first then set a limit order once funds are in your wallet.";
       } else if (msg.includes("vault") || msg.includes("deposit")) {
-        hint = "\n\n💡 Your trigger vault may need to be funded first. The system tried to deposit automatically.";
+        hint = "\n\nTip: Your trigger vault may need to be funded first. The system tried to deposit automatically.";
       }
       push("ai", "Trigger order failed: " + msg + hint);
     }
@@ -5015,7 +5021,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       setWalletFull(null);
       setConnectedWalletName(null);
       setPortfolio({});
-      push("ai", "👋 Wallet disconnected. Connect again anytime to access your portfolio and trading features.");
+      push("ai", "Wallet disconnected. Connect again anytime to access your portfolio and trading features.");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reownConnected, reownAddress, reownProvider, privyMode]);
@@ -5030,7 +5036,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       const walletDump = privyWallets.map(w =>
         `addr:${(w.address||"?").slice(0,6)} client:${w.walletClientType||"?"} chain:${w.chainType||"?"} type:${w.type||"?"}`
       ).join(" | ") || "none";
-      push("ai", `⚠️ Signed in but no Solana wallet found yet.\n\nWallets seen: \`${walletDump}\`\n\nPlease share this with support.`);
+      push("ai", `Note: Signed in but no Solana wallet found yet.\n\nWallets seen: \`${walletDump}\`\n\nPlease share this with support.`);
       return;
     }
     if (privyAuthed && privyEmbeddedWallet) {
@@ -5088,7 +5094,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       setWalletFull(null);
       setConnectedWalletName(null);
       setPortfolio({});
-      push("ai", "👋 Signed out. Connect again anytime.");
+      push("ai", "Signed out. Connect again anytime.");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [privyReady, privyAuthed, privyEmbeddedWallet, privyUser]);
@@ -5340,7 +5346,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         setPredCategory(cat || query || null);
         setShowPredList(true);
         if (result.markets?.length === 0) {
-          push("ai", "⚠️ No prediction markets returned. This may be a server-region issue (the ChatFi proxy may be in a restricted region). The markets API itself is working — try again or check [jup.ag/prediction](https://jup.ag/prediction) directly.");
+          push("ai", "Note: No prediction markets returned. This may be a server-region issue (the ChatFi proxy may be in a restricted region). The markets API itself is working — try again or check [jup.ag/prediction](https://jup.ag/prediction) directly.");
         }
 
       } else if (action === "FETCH_EARN") {
@@ -5415,7 +5421,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       } else if (action === "SHOW_TRIGGER_V2") {
         if (!walletFull) { push("ai", text + "\n\nConnect your wallet first to place a trigger order."); }
         else if (getActiveProvider()?.isWalletConnect) {
-          push("ai", `⚠️ **Trigger orders require wallet message signing**, which isn't supported by WalletConnect on mobile.\n\n**Alternatives:**\n• Use a **Limit order** instead (same price trigger, no message signing needed)\n• Use **Phantom or Solflare browser extension** on desktop for full trigger support\n\nWould you like to set up a Limit order instead?`);
+          push("ai", `Note: **Trigger orders require wallet message signing**, which isn't supported by WalletConnect on mobile.\n\n**Alternatives:**\n• Use a **Limit order** instead (same price trigger, no message signing needed)\n• Use **Phantom or Solflare browser extension** on desktop for full trigger support\n\nWould you like to set up a Limit order instead?`);
         }
         else {
           const fromSym = (actionData?.from || "USDC").toUpperCase();
@@ -5545,12 +5551,12 @@ Order: \`${orderKey.slice(0,20)}…\`
             push("ai", text + `\n\nCould not retrieve verification status for **${sym}**. Try again shortly.`);
           } else {
             let vText = `\n\n**${sym?.toUpperCase()} — Express Verification Status**`;
-            vText += `\nToken exists on-chain: ${result.tokenExists ? "✅ Yes" : "❌ No"}`;
-            vText += `\nAlready verified: ${result.isVerified ? "✅ Yes" : "No"}`;
-            vText += `\nCan submit verification: ${result.canVerify ? "✅ Yes" : "❌ No"}`;
-            vText += `\nCan update metadata: ${result.canMetadata ? "✅ Yes" : "❌ No"}`;
-            if (result.verificationError) vText += `\n⚠ Verify blocked: ${result.verificationError}`;
-            if (result.metadataError)     vText += `\n⚠ Metadata blocked: ${result.metadataError}`;
+            vText += `\nToken exists on-chain: ${result.tokenExists ? "Yes" : "No"}`;
+            vText += `\nAlready verified: ${result.isVerified ? "Yes" : "No"}`;
+            vText += `\nCan submit verification: ${result.canVerify ? "Yes" : "No"}`;
+            vText += `\nCan update metadata: ${result.canMetadata ? "Yes" : "No"}`;
+            if (result.verificationError) vText += `\nVerify blocked: ${result.verificationError}`;
+            if (result.metadataError)     vText += `\nMetadata blocked: ${result.metadataError}`;
             if (result.canVerify) vText += `\n\nTo proceed, use the Jupiter token verification portal: https://developers.jup.ag/docs/tokens/verification`;
             push("ai", text + vText);
           }
@@ -5714,7 +5720,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           const updated = [...priceAlerts, newAlert];
           setPriceAlerts(updated);
           try { localStorage.setItem("chatfi-alerts", JSON.stringify(updated)); } catch {}
-          push("ai", text + `\n\n🔔 Alert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**\nI'll notify you in chat when it triggers. You can set multiple alerts.`);
+          push("ai", text + `\n\nAlert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**\nI'll notify you in chat when it triggers. You can set multiple alerts.`);
         }
 
       // ── SHOW_TRADE_JOURNAL ─────────────────────────────────────────────────
@@ -5840,7 +5846,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           }));
 
           const invalid = initialOrders.filter(o => !o.ok);
-          invalid.forEach(o => { failed++; push("ai", `❌ ${o.meta.fromSym}→${o.meta.toSym}: ${o.err}`); });
+          invalid.forEach(o => { failed++; push("ai", `Failed: ${o.meta.fromSym}→${o.meta.toSym}: ${o.err}`); });
           const validOrders = initialOrders.filter(o => o.ok);
 
           if (validOrders.length === 0) {
@@ -5863,7 +5869,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               for (const tx of batchTxObjects) batchSignedTxs.push(await provider.signTransaction(tx));
             }
           } catch(e) {
-            validOrders.forEach(o => { failed++; push("ai", `❌ ${o.meta.fromSym}→${o.meta.toSym}: ${e?.message || "signing cancelled"}`); });
+            validOrders.forEach(o => { failed++; push("ai", `Failed: ${o.meta.fromSym}→${o.meta.toSym}: ${e?.message || "signing cancelled"}`); });
             push("ai", `**Basket done** — ${done} succeeded, ${failed} failed`);
             setTyping(false);
             return;
@@ -5927,7 +5933,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               logTrade({ type:"swap", from:m.fromSym, to:m.toSym, amount:m.inUnits.toFixed(4), out:outAmt, tx:sig });
             } catch(e) {
               failed++;
-              push("ai", `[swap-card|${m.fromSym}|${m.toSym}|${m.inUnits?.toFixed(4)||"?"}|—|—|—|err]\n❌ ${m.fromSym}→${m.toSym}: ${e?.message || "failed"}`);
+              push("ai", `[swap-card|${m.fromSym}|${m.toSym}|${m.inUnits?.toFixed(4)||"?"}|—|—|—|err]\nFailed: ${m.fromSym}→${m.toSym}: ${e?.message || "failed"}`);
             }
           }
           const summaryStr = basketTrades.map(t=>`${t.from||"USDC"}→${t.to}`).join(", ");
@@ -6057,7 +6063,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                 <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                   <button onClick={() => setSidebarOpen(o=>!o)}
                     style={{ background:"none", border:"none", cursor:"pointer", color:T.text2, fontSize:20, padding:"4px 6px", lineHeight:1, borderRadius:8 }}
-                    className="hov-btn">☰</button>
+                    className="hov-btn" style={{ fontSize:18, fontFamily:"monospace" }}>&#9776;</button>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                     <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1, letterSpacing:"-0.2px" }}>ChatFi</span>
                   </div>
@@ -6361,7 +6367,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                           {/* Tips callout */}
                           {post.tips?.length > 0 && (
                             <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, padding:"14px 16px", marginTop:8 }}>
-                              <div style={{ fontSize:11, fontWeight:700, color:T.text3, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:10 }}>💡 Quick Tips</div>
+                              <div style={{ fontSize:11, fontWeight:700, color:T.text3, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:10 }}>Tip: Quick Tips</div>
                               {post.tips.map((tip, i) => (
                                 <div key={i} style={{ display:"flex", gap:8, marginBottom: i < post.tips.length - 1 ? 8 : 0 }}>
                                   <span style={{ color:T.accent, fontWeight:700, flexShrink:0, fontSize:13 }}>→</span>
@@ -6416,66 +6422,135 @@ Order: \`${orderKey.slice(0,20)}…\`
                     ? <svg width="13" height="13" viewBox="0 0 24 24" fill="#5865F2"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
                     : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.text2} strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>;
 
+                  // Token logo map for common tokens
+                  const TOKEN_LOGOS_WC = {
+                    SOL:  "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+                    USDC: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png",
+                    USDT: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png",
+                    JUP:  "https://static.jup.ag/jup/icon.png",
+                    BONK: "https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q89kGzNb39cE",
+                    WIF:  "https://bafkreibk3covs5ltyqxa272uodhkulxv5vdrdebf7m5b6vc6qoibkqhzm.ipfs.nftstorage.link",
+                  };
+                  const addrShort = wc.address ? wc.address.slice(0,6) + "…" + wc.address.slice(-6) : "";
+                  const providerLabel = wc.provider ? wc.provider.charAt(0).toUpperCase() + wc.provider.slice(1) : "Social";
+
                   return (
-                    <div>
-                      {/* Header row */}
-                      <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:12 }}>
-                        <div style={{ width:22, height:22, borderRadius:"50%", background:`${T.accent}22`, border:`1px solid ${T.accent}55`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                        </div>
-                        <span style={{ fontSize:13, fontWeight:700, color:T.accent }}>Wallet Ready</span>
-                        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:4, background:`${T.accent}18`, border:`1px solid ${T.accent}33`, borderRadius:20, padding:"2px 8px" }}>
-                          {providerIcon}
-                          <span style={{ fontSize:10, fontWeight:600, color:T.text2, textTransform:"capitalize" }}>{wc.provider}</span>
-                        </div>
-                      </div>
+                    <div style={{ width:"100%" }}>
 
-                      {/* Account */}
-                      <div style={{ fontSize:12, color:T.text3, marginBottom:3 }}>Signed in as</div>
-                      <div style={{ fontSize:13, fontWeight:600, color:T.text1, marginBottom:12, wordBreak:"break-all" }}>{wc.emailLabel}</div>
+                      {/* ── Premium wallet card ─────────────────────────── */}
+                      <div style={{
+                        borderRadius:16,
+                        overflow:"hidden",
+                        border:`1px solid ${T.accent}33`,
+                        marginBottom:10,
+                        background:`linear-gradient(135deg, #0e1c0e 0%, #111d11 40%, #0d1a18 100%)`,
+                        boxShadow:`0 0 32px ${T.accent}18, 0 2px 8px rgba(0,0,0,0.5)`,
+                        position:"relative",
+                      }}>
+                        {/* Decorative glow rings */}
+                        <div style={{ position:"absolute", top:-40, right:-40, width:120, height:120, borderRadius:"50%", background:`${T.accent}08`, pointerEvents:"none" }}/>
+                        <div style={{ position:"absolute", bottom:-30, left:-20, width:90, height:90, borderRadius:"50%", background:`${T.accent}06`, pointerEvents:"none" }}/>
 
-                      {/* Wallet address card */}
-                      <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:12, padding:"10px 12px", marginBottom:10 }}>
-                        <div style={{ fontSize:10, color:T.text3, letterSpacing:"0.06em", textTransform:"uppercase", marginBottom:6 }}>Embedded Solana Wallet</div>
-                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                          <div style={{ flex:1, fontFamily:"monospace", fontSize:11, color:T.text1, wordBreak:"break-all", letterSpacing:"0.03em", lineHeight:1.5 }}>
-                            {wc.address}
+                        {/* Card top: provider badge + status */}
+                        <div style={{ padding:"12px 16px 0", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:6, background:"rgba(0,0,0,0.3)", borderRadius:20, padding:"4px 10px 4px 6px", border:`1px solid ${T.accent}22` }}>
+                            <div style={{ width:18, height:18, borderRadius:"50%", background:`${T.accent}22`, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                              {providerIcon}
+                            </div>
+                            <span style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:"uppercase", letterSpacing:"0.07em" }}>{providerLabel}</span>
                           </div>
-                          <button
-                            onClick={() => { navigator.clipboard.writeText(wc.address).catch(()=>{}); }}
-                            style={{ flexShrink:0, background:`${T.accent}22`, border:`1px solid ${T.accent}44`, borderRadius:8, padding:"5px 8px", cursor:"pointer", display:"flex", alignItems:"center", gap:4, color:T.accent, fontSize:11, fontWeight:600, whiteSpace:"nowrap" }}>
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                          <div style={{ display:"flex", alignItems:"center", gap:5, background:`${T.accent}18`, borderRadius:20, padding:"4px 10px", border:`1px solid ${T.accent}44` }}>
+                            <div style={{ width:6, height:6, borderRadius:"50%", background:T.accent, boxShadow:`0 0 6px ${T.accent}` }}/>
+                            <span style={{ fontSize:10, fontWeight:700, color:T.accent, letterSpacing:"0.05em" }}>ACTIVE</span>
+                          </div>
+                        </div>
+
+                        {/* Main balance area */}
+                        <div style={{ padding:"14px 16px 12px" }}>
+                          {/* SOL logo + balance */}
+                          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
+                            <img src={TOKEN_LOGOS_WC.SOL} alt="SOL"
+                              style={{ width:32, height:32, borderRadius:"50%", border:`2px solid ${T.accent}33`, flexShrink:0 }}
+                              onError={e => e.currentTarget.style.display="none"} />
+                            <div>
+                              <div style={{ fontSize:26, fontWeight:800, color:T.text1, letterSpacing:"-0.5px", lineHeight:1.1 }}>
+                                {wc.solBalance} <span style={{ fontSize:14, fontWeight:600, color:T.text3 }}>SOL</span>
+                              </div>
+                              {wc.solUSD && (
+                                <div style={{ fontSize:12, color:T.text3, marginTop:1 }}>≈ <span style={{ color:T.accent, fontWeight:600 }}>${wc.solUSD}</span></div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Email */}
+                          <div style={{ fontSize:11, color:T.text3, marginTop:6 }}>
+                            <span style={{ color:T.text2 }}>{wc.emailLabel}</span>
+                          </div>
+                        </div>
+
+                        {/* Divider */}
+                        <div style={{ height:1, background:`linear-gradient(90deg, transparent, ${T.accent}33, transparent)` }}/>
+
+                        {/* Wallet address row */}
+                        <div style={{ padding:"10px 16px", display:"flex", alignItems:"center", gap:8 }}>
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontSize:9, color:T.text3, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:3 }}>Embedded Solana Wallet</div>
+                            <div style={{ fontFamily:"monospace", fontSize:11, color:T.text2, letterSpacing:"0.02em" }}>{addrShort}</div>
+                          </div>
+                          <button onClick={() => navigator.clipboard.writeText(wc.address).catch(()=>{})}
+                            style={{ flexShrink:0, background:"rgba(0,0,0,0.3)", border:`1px solid ${T.accent}33`, borderRadius:8, padding:"5px 10px", cursor:"pointer", display:"flex", alignItems:"center", gap:5, color:T.accent, fontSize:10, fontWeight:700, whiteSpace:"nowrap", transition:"all 0.15s" }}
+                            className="hov-btn">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                             Copy
                           </button>
+                          <a href={`https://solscan.io/account/${wc.address}`} target="_blank" rel="noreferrer"
+                            style={{ flexShrink:0, background:"rgba(0,0,0,0.3)", border:`1px solid ${T.border}`, borderRadius:8, padding:"5px 10px", textDecoration:"none", display:"flex", alignItems:"center", gap:5, color:T.text3, fontSize:10, fontWeight:600, whiteSpace:"nowrap" }}>
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                            Explorer
+                          </a>
                         </div>
+
+                        {/* Token holdings row */}
+                        {wc.tokens?.length > 0 && (<>
+                          <div style={{ height:1, background:`linear-gradient(90deg, transparent, ${T.border}, transparent)` }}/>
+                          <div style={{ padding:"10px 16px", display:"flex", flexWrap:"wrap", gap:6 }}>
+                            {wc.tokens.map(t => (
+                              <div key={t.symbol} style={{ display:"flex", alignItems:"center", gap:5, background:"rgba(0,0,0,0.3)", border:`1px solid ${T.border}`, borderRadius:8, padding:"4px 10px" }}>
+                                {TOKEN_LOGOS_WC[t.symbol] && (
+                                  <img src={TOKEN_LOGOS_WC[t.symbol]} alt={t.symbol}
+                                    style={{ width:14, height:14, borderRadius:"50%", flexShrink:0 }}
+                                    onError={e => e.currentTarget.style.display="none"} />
+                                )}
+                                <span style={{ fontSize:11, fontWeight:700, color:T.text1 }}>{t.amount}</span>
+                                <span style={{ fontSize:10, color:T.text3 }}>{t.symbol}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </>)}
                       </div>
 
-                      {/* Balance */}
-                      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom: wc.tokens?.length ? 8 : 12 }}>
-                        <div style={{ flex:1, background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"8px 12px" }}>
-                          <div style={{ fontSize:10, color:T.text3, marginBottom:2 }}>SOL Balance</div>
-                          <div style={{ fontSize:15, fontWeight:700, color:T.text1 }}>{wc.solBalance} SOL</div>
-                          {wc.solUSD && <div style={{ fontSize:11, color:T.text3 }}>≈ ${wc.solUSD}</div>}
-                        </div>
-                        <a href={`https://solscan.io/account/${wc.address}`} target="_blank" rel="noreferrer"
-                          style={{ flexShrink:0, padding:"8px 12px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:11, fontWeight:600, textDecoration:"none", display:"flex", alignItems:"center", gap:4 }}>
-                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                          Solscan
-                        </a>
+                      {/* Quick action buttons */}
+                      <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                        {[
+                          { label:"Send", icon:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>, action:"send tokens" },
+                          { label:"Swap", icon:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>, action:"swap tokens" },
+                          { label:"Portfolio", icon:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>, action:"my portfolio" },
+                          { label:"Earn", icon:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>, action:"earn yield" },
+                        ].map(btn => (
+                          <button key={btn.label}
+                            onClick={() => {
+                              const inputEl = document.querySelector("input[placeholder*='prices']") || document.querySelector("textarea");
+                              if (inputEl) { inputEl.value = btn.action; inputEl.dispatchEvent(new Event("input", {bubbles:true})); }
+                            }}
+                            style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4, padding:"8px 4px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, cursor:"pointer", color:T.text2, fontSize:10, fontWeight:600, transition:"all 0.15s" }}
+                            className="hov-btn">
+                            {btn.icon}
+                            {btn.label}
+                          </button>
+                        ))}
                       </div>
 
-                      {/* Other tokens if any */}
-                      {wc.tokens?.length > 0 && (
-                        <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 }}>
-                          {wc.tokens.map(t => (
-                            <div key={t.symbol} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"4px 10px", fontSize:11, color:T.text2 }}>
-                              <span style={{ fontWeight:600, color:T.text1 }}>{t.amount}</span> {t.symbol}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      <div style={{ fontSize:12, color:T.text3 }}>What would you like to do?</div>
+                      <div style={{ fontSize:11, color:T.text3, textAlign:"center", paddingTop:2 }}>What would you like to do?</div>
                     </div>
                   );
                 })() : <div dangerouslySetInnerHTML={{ __html:fmt(m.text) }} />}
@@ -6579,7 +6654,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                               Verified
                             </span>
                           )}
-                          {isSus && <span style={{ fontSize:10, fontWeight:700, color:T.red, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:20, padding:"1px 7px" }}>🚨 Sus</span>}
+                          {isSus && <span style={{ fontSize:10, fontWeight:700, color:T.red, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:20, padding:"1px 7px" }}>Sus</span>}
                         </div>
                         <div style={{ fontSize:12, color:T.text3, marginTop:2 }}>{info.symbol} · <span style={{ fontFamily:"monospace", fontSize:11 }}>{mint.slice(0,8)}…{mint.slice(-4)}</span></div>
                       </div>
@@ -6687,9 +6762,9 @@ Order: \`${orderKey.slice(0,20)}…\`
                         )}
                         <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
                           {verified && <span style={{ fontSize:11, color:T.green }}>✓ Verified</span>}
-                          {hasFreeze && <span style={{ fontSize:11, color:"#f6ad55" }}>⚠ Freeze auth</span>}
-                          {hasMintAuth && <span style={{ fontSize:11, color:"#f6ad55" }}>⚠ Mint auth</span>}
-                          {isSus && <span style={{ fontSize:11, color:T.red, fontWeight:700 }}>🚨 Flagged suspicious</span>}
+                          {hasFreeze && <span style={{ fontSize:11, color:"#f6ad55" }}>Freeze auth</span>}
+                          {hasMintAuth && <span style={{ fontSize:11, color:"#f6ad55" }}>Mint auth</span>}
+                          {isSus && <span style={{ fontSize:11, color:T.red, fontWeight:700 }}>Flagged suspicious</span>}
                           {info.topHoldersPercentage != null && <span style={{ fontSize:11, color:T.text3 }}>Top holders: {info.topHoldersPercentage.toFixed(1)}%</span>}
                           {info.devMints != null && <span style={{ fontSize:11, color:T.text3 }}>Dev mints: {info.devMints}</span>}
                         </div>
@@ -6730,9 +6805,9 @@ Order: \`${orderKey.slice(0,20)}…\`
                     <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                       {[
                         { key:"twitter",  label:"Twitter / X", icon:"𝕏", url:info.twitter },
-                        { key:"website",  label:"Website",     icon:"🌐", url:info.website },
-                        { key:"telegram", label:"Telegram",    icon:"✈️", url:info.telegram },
-                        { key:"discord",  label:"Discord",     icon:"🎮", url:info.discord },
+                        { key:"website",  label:"Website",     icon:"Web", url:info.website },
+                        { key:"telegram", label:"Telegram",    icon:"Telegram", url:info.telegram },
+                        { key:"discord",  label:"Discord",     icon:"Discord", url:info.discord },
                       ].filter(s => s.url).map(s => (
                         <a key={s.key} href={s.url} target="_blank" rel="noopener noreferrer"
                           style={{ display:"flex", alignItems:"center", gap:5, padding:"7px 13px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, textDecoration:"none", fontSize:12, fontWeight:500 }}>
@@ -6786,7 +6861,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               </div>
               {(!swapCfg.fromMint || !swapCfg.toMint) && (
                 <div style={{ fontSize:12, color:T.red, marginBottom:8 }}>
-                  ⚠ Token not found in popular list — use "🔍 Search any token…" dropdown to find it on Jupiter.
+                  Note: Token not found in popular list — use "Search any token…" dropdown to find it on Jupiter.
                 </div>
               )}
               <input type="number" placeholder="Amount" value={swapCfg.amount}
@@ -6881,6 +6956,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                     <input type="number" min="0" placeholder="e.g. 150"
                       value={trigV2Cfg.triggerPriceUsd}
                       onChange={e => setTrigV2Cfg(c=>({...c, triggerPriceUsd:e.target.value}))}
+                      onBlur={() => setTimeout(() => setDirectTokenOpen(false), 180)}
                       style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
                     />
                   </div>
@@ -6935,7 +7011,7 @@ Order: \`${orderKey.slice(0,20)}…\`
 
               {/* Auth note */}
               <div style={{ fontSize:11, color:T.text3, marginBottom:10 }}>
-                ⚡ Placing will prompt a message-sign for authentication, then a deposit transaction.
+                Placing will prompt a message-sign for authentication, then a deposit transaction.
               </div>
 
               <div style={{ display:"flex", gap:8 }}>
@@ -7252,13 +7328,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                         {evtSubtitle && <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontStyle:"italic" }}>{evtSubtitle}</div>}
                         {/* Meta row */}
                         <div style={{ fontSize:11, color:T.text3, display:"flex", flexWrap:"wrap", gap:10, marginBottom:10 }}>
-                          {cat && <span>📂 {cat}</span>}
+                          {cat && <span>{cat}</span>}
                           {closeTs && (
                             <span style={{ color: closeSoon ? T.red : T.text3 }}>
-                              🕐 {closeSoon ? "Closes " : ""}{new Date(typeof closeTs==="number"?closeTs*1000:closeTs).toLocaleDateString()}
+                              {closeSoon ? "Closes " : ""}{new Date(typeof closeTs==="number"?closeTs*1000:closeTs).toLocaleDateString()}
                             </span>
                           )}
-                          {volFmt && <span>💰 {volFmt} vol</span>}
+                          {volFmt && <span>{volFmt} vol</span>}
                         </div>
                         {/* One row per market/outcome — each has its own YES + NO price */}
                         {displayMarkets.length > 0 ? (
@@ -7354,7 +7430,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{pred.league}{pred.league&&pred.sport?" · ":""}{pred.sport}</div>
               {pred.analysis && <div style={{ fontSize:13, color:T.text2, marginBottom:16, lineHeight:1.6, padding:"10px 12px", background:T.bg, borderRadius:8 }}>{pred.analysis}</div>}
               <div style={{ fontSize:12, color:T.text3, marginBottom:12, padding:"8px 12px", background:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:8 }}>
-                💡 This is AI analysis. To place a real on-chain bet, ask <em>"Show prediction markets"</em> and pick from live Jupiter markets below.
+                Note: This is AI analysis. To place a real on-chain bet, ask <em>"Show prediction markets"</em> and pick from live Jupiter markets below.
               </div>
               <button onClick={() => { setShowPred(false); send("Show prediction markets"); }}
                 style={{ padding:"8px 16px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:500, cursor:"pointer", marginRight:8 }} className="hov-btn">
@@ -7389,7 +7465,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                   </div>
                   {noBalance && (
                     <div style={{ fontSize:12, color:T.red, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, padding:"8px 12px", marginBottom:12 }}>
-                      ⚠ You need at least $5 USDC or JupUSD to place a bet.
+                      Note: You need at least $5 USDC or JupUSD to place a bet.
                       <button onClick={() => { setShowBet(false); send("Swap SOL to USDC"); }}
                         style={{ marginLeft:8, padding:"3px 10px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:11, cursor:"pointer" }}>
                         Swap SOL → USDC →
@@ -7561,7 +7637,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           {showBorrow && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>🏦 Borrow from Jupiter Lend</div>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Borrow from Jupiter Lend</div>
                 <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>COLLATERAL</span>
                 <span style={{ fontSize:10, padding:"2px 7px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, color:T.accent, fontWeight:600 }}>COMING SOON</span>
               </div>
@@ -7603,19 +7679,19 @@ Order: \`${orderKey.slice(0,20)}…\`
               {/* Info box */}
               {borrowCfg.colAmount && (
                 <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
-                  📥 Deposit <strong>{borrowCfg.colAmount} {borrowCfg.collateral}</strong> · 💸 Borrow <strong>{borrowCfg.borrowAmount || "?"} {borrowCfg.debt}</strong><br/>
+                  Deposit <strong>{borrowCfg.colAmount} {borrowCfg.collateral}</strong> · Borrow <strong>{borrowCfg.borrowAmount || "?"} {borrowCfg.debt}</strong><br/>
                   <span style={{ fontSize:11, color:T.text3 }}>Max LTV: {(MULTIPLY_VAULTS.find(v=>v.vaultId===borrowCfg.vaultId)||MULTIPLY_VAULTS[0]).ltv} · Position NFT created automatically · positionId:0</span>
                 </div>
               )}
 
               {/* Warning */}
               <div style={{ fontSize:11, color:T.text3, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
-                ⚠️ Borrowing accrues interest. Keep LTV below the liquidation threshold or your collateral may be sold.
+                Note: Borrowing accrues interest. Keep LTV below the liquidation threshold or your collateral may be sold.
               </div>
 
               {/* Coming Soon notice */}
               <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, padding:"14px 16px", marginBottom:12, textAlign:"center" }}>
-                <div style={{ fontSize:13, fontWeight:700, color:T.accent, marginBottom:4 }}>🚧 In-App Borrow — Coming Soon</div>
+                <div style={{ fontSize:13, fontWeight:700, color:T.accent, marginBottom:4 }}>In-App Borrow — Coming Soon</div>
                 <div style={{ fontSize:11, color:T.text2, marginBottom:12, lineHeight:1.6 }}>
                   The Jupiter Lend Borrow API is not yet publicly available.<br/>
                   Use the Jupiter app to open or manage borrow positions.
@@ -7637,12 +7713,12 @@ Order: \`${orderKey.slice(0,20)}…\`
           {showSend && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>📤 Send Tokens</div>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Send Tokens</div>
               </div>
 
               {/* Mode toggle */}
               <div style={{ display:"flex", gap:4, background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:3, marginBottom:14 }}>
-                {[["invite","🔗 Invite Link"],["direct","💸 Direct Transfer"]].map(([mode, label]) => (
+                {[["invite","Invite Link"],["direct","Direct Transfer"]].map(([mode, label]) => (
                   <button key={mode} onClick={() => { setSendMode(mode); setSendStatus(null); setSendLink(""); setSendTxSig(""); }}
                     style={{ flex:1, padding:"7px", borderRadius:8, border:"none", background: sendMode===mode ? T.accent : "none", color: sendMode===mode ? "#0d1117" : T.text2, fontSize:12, fontWeight:700, cursor:"pointer", transition:"all 0.15s" }}>
                     {label}
@@ -7655,7 +7731,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                   Send tokens to anyone — recipient doesn't need a wallet. They claim via the link. You can claw back unclaimed tokens anytime.
                 </div>
                 <div style={{ fontSize:11, color:"#f6ad55", background:"#2e1f0a", border:"1px solid #f6ad5544", borderRadius:8, padding:"7px 10px", marginBottom:10 }}>
-                  ⚠️ Jupiter Send only supports <strong>SOL</strong> and <strong>USDC</strong>. Other tokens will fail at the claim step.
+                  Note: Jupiter Send only supports <strong>SOL</strong> and <strong>USDC</strong>. Other tokens will fail at the claim step.
                 </div>
                 <div style={{ display:"flex", gap:8, marginBottom:10 }}>
                   <div style={{ flex:1 }}>
@@ -7679,38 +7755,39 @@ Order: \`${orderKey.slice(0,20)}…\`
                     <input type="number" min="0" placeholder="e.g. 1"
                       value={sendCfg.amount}
                       onChange={e => setSendCfg(c => ({ ...c, amount:e.target.value }))}
+                      onBlur={() => setTimeout(() => setDirectTokenOpen(false), 180)}
                       style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
                     />
                   </div>
                 </div>
                 {sendCfg.amount && (
                   <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
-                    📤 Sending <strong>{sendCfg.amount} {sendCfg.token}</strong> via invite link<br/>
+                    Sending <strong>{sendCfg.amount} {sendCfg.token}</strong> via invite link<br/>
                     <span style={{ fontSize:11, color:T.text3 }}>From: {walletFull?.slice(0,4)}…{walletFull?.slice(-4)} · Unclaimed tokens auto-clawable</span>
                   </div>
                 )}
                 <div style={{ fontSize:11, color:T.text3, background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
-                  💡 The invite link is generated on-chain. Share it via any app — the recipient creates a wallet when claiming.
+                  The invite link is generated on-chain. Share it via any app — the recipient creates a wallet when claiming.
                 </div>
                 <button onClick={doSend}
                   disabled={!sendCfg.amount || parseFloat(sendCfg.amount) <= 0 || sendStatus === "signing"}
                   style={{ width:"100%", padding:"11px", background: (!sendCfg.amount || sendStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
-                  {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `📤 Send ${sendCfg.amount||""} ${sendCfg.token} via Invite Link`}
+                  {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `Send ${sendCfg.amount||""} ${sendCfg.token} via Invite Link`}
                 </button>
                 {sendStatus === "done" && sendLink && (
                   <div style={{ marginTop:4, marginBottom:8, background:T.tealBg, border:`1px solid ${T.teal}44`, borderRadius:10, padding:"12px 14px" }}>
-                    <div style={{ fontSize:12, fontWeight:700, color:T.teal, marginBottom:6 }}>✅ Invite link ready — share to recipient</div>
+                    <div style={{ fontSize:12, fontWeight:700, color:T.teal, marginBottom:6 }}>Invite link ready — share to recipient</div>
                     <div style={{ fontSize:11, color:T.text2, wordBreak:"break-all", background:T.bg, borderRadius:6, padding:"6px 10px", marginBottom:8, fontFamily:"monospace" }}>
                       {sendLink}
                     </div>
                     <div style={{ display:"flex", gap:8 }}>
                       <button onClick={() => navigator.clipboard.writeText(sendLink)}
                         style={{ flex:1, padding:"8px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                        📋 Copy Link
+                        Copy Link
                       </button>
                       <button onClick={() => { const code = sendLink.split("code=")[1]; if (code) doClawback(code); }}
                         style={{ flex:1, padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
-                        ↩ Claw Back
+                        Claw Back
                       </button>
                     </div>
                   </div>
@@ -7733,23 +7810,77 @@ Order: \`${orderKey.slice(0,20)}…\`
 
                 {/* Token + Amount */}
                 <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-                  <div style={{ flex:1 }}>
+                  <div style={{ flex:1, position:"relative" }}>
                     <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token</div>
-                    <select value={sendCfg.token}
-                      onChange={e => {
-                        const sym = e.target.value;
-                        const mint = tokenCacheRef.current[sym] || TOKEN_MINTS[sym] || TOKEN_MINTS.SOL;
-                        setSendCfg(c => ({ ...c, token: sym, mint }));
+                    <input
+                      value={directTokenQuery}
+                      placeholder="Search any token…"
+                      onFocus={() => {
+                        setDirectTokenOpen(true);
+                        if (directTokenQuery) {
+                          // trigger search on focus
+                          clearTimeout(directTokenTimerRef.current);
+                          directTokenTimerRef.current = setTimeout(async () => {
+                            setDirectTokenLoading(true);
+                            try {
+                              const q = directTokenQuery.toUpperCase();
+                              const res = await fetch(`https://tokens.jup.ag/tokens/search?query=${encodeURIComponent(q)}&limit=8`);
+                              const data = await res.json();
+                              setDirectTokenResults(Array.isArray(data) ? data.slice(0,8) : []);
+                            } catch { setDirectTokenResults([]); }
+                            setDirectTokenLoading(false);
+                          }, 0);
+                        }
                       }}
-                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, cursor:"pointer" }}>
-                      {["SOL","USDC","USDT","JUP","BONK","WIF"].map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                      onChange={e => {
+                        const q = e.target.value;
+                        setDirectTokenQuery(q);
+                        setDirectTokenOpen(true);
+                        clearTimeout(directTokenTimerRef.current);
+                        if (!q) { setDirectTokenResults([]); return; }
+                        directTokenTimerRef.current = setTimeout(async () => {
+                          setDirectTokenLoading(true);
+                          try {
+                            const res = await fetch(`https://tokens.jup.ag/tokens/search?query=${encodeURIComponent(q)}&limit=8`);
+                            const data = await res.json();
+                            setDirectTokenResults(Array.isArray(data) ? data.slice(0,8) : []);
+                          } catch { setDirectTokenResults([]); }
+                          setDirectTokenLoading(false);
+                        }, 350);
+                      }}
+                      onBlur={() => setTimeout(() => setDirectTokenOpen(false), 180)}
+                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                    />
+                    {directTokenOpen && (directTokenResults.length > 0 || directTokenLoading) && (
+                      <div style={{ position:"absolute", top:"100%", left:0, right:0, zIndex:200, background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, marginTop:2, maxHeight:220, overflowY:"auto", boxShadow:"0 4px 16px rgba(0,0,0,0.4)" }}>
+                        {directTokenLoading && <div style={{ padding:"8px 12px", fontSize:12, color:T.text3 }}>Searching…</div>}
+                        {directTokenResults.map(t => (
+                          <button key={t.address} onClick={() => {
+                            setSendCfg(c => ({ ...c, token: t.symbol, mint: t.address }));
+                            tokenCacheRef.current[t.symbol] = t.address;
+                            tokenDecimalsRef.current[t.symbol] = t.decimals ?? 6;
+                            setDirectTokenQuery(t.symbol);
+                            setDirectTokenOpen(false);
+                          }}
+                            style={{ width:"100%", display:"flex", alignItems:"center", gap:8, padding:"7px 12px", background:"none", border:"none", borderBottom:`1px solid ${T.border}44`, cursor:"pointer", textAlign:"left" }}
+                            className="hov-btn">
+                            {t.logoURI && <img src={t.logoURI} alt="" style={{ width:22, height:22, borderRadius:"50%", objectFit:"cover", flexShrink:0 }} onError={e=>e.currentTarget.style.display="none"}/>}
+                            <div>
+                              <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{t.symbol}</div>
+                              <div style={{ fontSize:10, color:T.text3 }}>{(t.name||"").slice(0,28)}</div>
+                            </div>
+                            {t.tags?.includes("verified") && <span style={{ marginLeft:"auto", fontSize:9, color:T.green, border:`1px solid ${T.green}44`, borderRadius:4, padding:"1px 5px" }}>verified</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div style={{ flex:1 }}>
                     <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount</div>
                     <input type="number" min="0" placeholder="e.g. 1"
                       value={sendCfg.amount}
                       onChange={e => setSendCfg(c => ({ ...c, amount:e.target.value }))}
+                      onBlur={() => setTimeout(() => setDirectTokenOpen(false), 180)}
                       style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
                     />
                   </div>
@@ -7758,7 +7889,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                 {/* Preview */}
                 {sendCfg.amount && sendRecipient && (
                   <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
-                    💸 Sending <strong>{sendCfg.amount} {sendCfg.token}</strong> directly to<br/>
+                    Sending <strong>{sendCfg.amount} {sendCfg.token}</strong> directly to<br/>
                     <span style={{ fontFamily:"monospace", fontSize:11, color:T.text2, wordBreak:"break-all" }}>{sendRecipient}</span>
                   </div>
                 )}
@@ -7766,23 +7897,23 @@ Order: \`${orderKey.slice(0,20)}…\`
                 <button onClick={doDirectSend}
                   disabled={!sendCfg.amount || !sendRecipient || parseFloat(sendCfg.amount) <= 0 || sendStatus === "signing"}
                   style={{ width:"100%", padding:"11px", background:(!sendCfg.amount || !sendRecipient || sendStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
-                  {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `💸 Send ${sendCfg.amount||""} ${sendCfg.token} Directly`}
+                  {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `Send ${sendCfg.amount||""} ${sendCfg.token} Directly`}
                 </button>
 
                 {sendStatus === "done" && sendTxSig && (
                   <div style={{ marginBottom:8, background:T.tealBg, border:`1px solid ${T.teal}44`, borderRadius:10, padding:"12px 14px" }}>
-                    <div style={{ fontSize:12, fontWeight:700, color:T.teal, marginBottom:6 }}>✅ Transfer confirmed on-chain</div>
+                    <div style={{ fontSize:12, fontWeight:700, color:T.teal, marginBottom:6 }}>Transfer confirmed on-chain</div>
                     <div style={{ fontSize:11, color:T.text2, wordBreak:"break-all", fontFamily:"monospace", background:T.bg, borderRadius:6, padding:"6px 10px", marginBottom:8 }}>{sendTxSig}</div>
                     <button onClick={() => window.open(`https://solscan.io/tx/${sendTxSig}`, "_blank")}
                       style={{ width:"100%", padding:"8px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                      🔍 View on Solscan
+                      View on Solscan
                     </button>
                   </div>
                 )}
 
                 {sendStatus === "error" && (
                   <div style={{ fontSize:12, color:T.red, background:`${T.red}18`, border:`1px solid ${T.red}44`, borderRadius:8, padding:"8px 12px", marginBottom:8 }}>
-                    ❌ Transaction failed. Check your balance and recipient address.
+                    Transaction failed. Check your balance and recipient address.
                   </div>
                 )}
               </>)}
@@ -8087,13 +8218,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                             <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${claimable ? T.greenBd : T.border}`, borderRadius:10, fontSize:12 }}>
                               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
                                 <span style={{ fontSize:11, fontWeight:700, padding:"2px 7px", borderRadius:6, background: side==="YES" ? T.greenBg : T.redBg, color: side==="YES" ? T.green : T.red }}>{side}</span>
-                                <span style={{ fontWeight:600, color: claimable ? T.green : T.text3 }}>{claimable ? `🏆 ${payout || "Claimable"}` : cost}</span>
+                                <span style={{ fontWeight:600, color: claimable ? T.green : T.text3 }}>{claimable ? `${payout || "Claimable"}` : cost}</span>
                               </div>
                               <div style={{ color:T.text2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginBottom: claimable ? 6 : 0 }}>{title.slice(0,42)}</div>
                               {claimable && (
                                 <button onClick={() => doClaimPayouts()} className="hov-btn"
                                   style={{ width:"100%", padding:"6px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:11, fontWeight:700, cursor:"pointer", transition:"all 0.15s" }}>
-                                  🏆 Claim Payout
+                                  Claim Payout
                                 </button>
                               )}
                             </div>
@@ -8119,7 +8250,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                           return (
                             <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
                               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
-                                <span style={{ fontWeight:700, color:T.text1 }}>{side==="long"?"📈":"📉"} {side.toUpperCase()} {mkt}</span>
+                                <span style={{ fontWeight:700, color:T.text1 }}>{side==="long"?"Long":"Short"} {side.toUpperCase()} {mkt}</span>
                                 {p.sizeUsd && <span style={{ fontWeight:700, color:T.text1 }}>${parseFloat(p.sizeUsd).toFixed(2)}</span>}
                               </div>
                               <div style={{ display:"flex", flexWrap:"wrap", gap:"3px 10px", color:T.text3, fontSize:11 }}>
@@ -8130,7 +8261,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                               </div>
                               <button onClick={() => doClosePerp(p)} disabled={!!closingPerp} className="hov-btn"
                                 style={{ marginTop:8, width:"100%", padding:"5px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:7, color:T.red, fontSize:11, fontWeight:600, cursor:"pointer" }}>
-                                {closingPerp === p.positionKey ? <><span className="spinner" style={{borderTopColor:T.red, display:"inline-block", marginRight:4}}/> Closing…</> : "⚡ Close Position"}
+                                {closingPerp === p.positionKey ? <><span className="spinner" style={{borderTopColor:T.red, display:"inline-block", marginRight:4}}/> Closing…</> : "Close Position"}
                               </button>
                             </div>
                           );
@@ -8216,7 +8347,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                               </div>
                               <button onClick={() => { setShowPortfolio(false); setInput("claim my JUP ASR governance rewards"); setTimeout(() => send(), 80); }} className="hov-btn"
                                 style={{ width:"100%", padding:"6px", background:"rgba(246,173,85,0.1)", border:`1px solid rgba(246,173,85,0.35)`, borderRadius:8, color:"#f6ad55", fontSize:11, fontWeight:700, cursor:"pointer", transition:"all 0.15s" }}>
-                                🏅 Claim ASR Reward
+                                Claim ASR Reward
                               </button>
                             </div>
                           );
@@ -8244,7 +8375,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
                                 <span style={{ fontWeight:700, color:T.text1 }}>{lk.totalAmount} {lk.symbol}</span>
                                 <span style={{ fontSize:10, padding:"2px 7px", background: claimable ? T.greenBg : cliffNotPassed ? T.redBg : T.border, borderRadius:6, color: claimable ? T.green : cliffNotPassed ? T.red : T.text3, fontWeight:700 }}>
-                                  {cliffNotPassed ? "🔒 Locked" : `${lk.vestedPercent}% vested`}
+                                  {cliffNotPassed ? "Locked" : `${lk.vestedPercent}% vested`}
                                 </span>
                               </div>
                               {claimable && (
@@ -8345,7 +8476,7 @@ Order: \`${orderKey.slice(0,20)}…\`
             return (
               <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>
-                  ⚡ Jupiter Perps
+                  Jupiter Perps
                 </div>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:16 }}>Up to 100x leverage · SOL, BTC, ETH</div>
 
@@ -8368,11 +8499,11 @@ Order: \`${orderKey.slice(0,20)}…\`
                   <div style={{ display:"flex", gap:8 }}>
                     <button onClick={() => setPerpCfg(c=>({...c,side:"long"}))}
                       style={{ flex:1, padding:"8px", background: perpCfg.side==="long" ? T.greenBg : T.bg, border:`1px solid ${perpCfg.side==="long" ? T.greenBd : T.border}`, borderRadius:8, color: perpCfg.side==="long" ? T.green : T.text2, fontSize:13, fontWeight:perpCfg.side==="long"?700:400, cursor:"pointer" }}>
-                      📈 Long
+                      Long
                     </button>
                     <button onClick={() => setPerpCfg(c=>({...c,side:"short"}))}
                       style={{ flex:1, padding:"8px", background: perpCfg.side==="short" ? T.redBg : T.bg, border:`1px solid ${perpCfg.side==="short" ? T.redBd : T.border}`, borderRadius:8, color: perpCfg.side==="short" ? T.red : T.text2, fontSize:13, fontWeight:perpCfg.side==="short"?700:400, cursor:"pointer" }}>
-                      📉 Short
+                      Short
                     </button>
                   </div>
                 </div>
@@ -8421,7 +8552,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                 </div>
 
                 <div style={{ fontSize:11, color:"#f59e0b", marginBottom:12 }}>
-                  ⚠️ Perps carry liquidation risk. At {perpCfg.leverage}x, a ~{(100/parseFloat(perpCfg.leverage||1)).toFixed(0)}% move against you triggers liquidation.
+                  Note: Perps carry liquidation risk. At {perpCfg.leverage}x, a ~{(100/parseFloat(perpCfg.leverage||1)).toFixed(0)}% move against you triggers liquidation.
                 </div>
 
                 <div style={{ display:"flex", gap:8 }}>
@@ -8441,7 +8572,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           {/* ── Perps Positions panel ─────────────────────────────────── */}
           {showPerpsPos && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>📊 Open Perps Positions</div>
+              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>Open Position Open Perps Positions</div>
               {perpsLoading ? (
                 <div style={{ fontSize:12, color:T.text3 }}>Loading positions…</div>
               ) : perpPositions.length === 0 ? (
@@ -8464,7 +8595,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                     const liq    = p.liquidationPrice ? `$${parseFloat(p.liquidationPrice).toFixed(2)}` : "—";
                     const entryP = p.entryPrice ? `$${parseFloat(p.entryPrice).toFixed(2)}` : "—";
                     const lev    = p.leverage ? `${parseFloat(p.leverage).toFixed(1)}x` : "—";
-                    const icon   = side === "long" ? "📈" : "📉";
+                    const icon   = side === "long" ? "Long" : "Short";
                     const pnlColor = pnlRaw >= 0 ? T.green : T.red;
                     const posKey = p.positionKey || p.publicKey || p.id || i;
                     const isClosing = closingPerp === posKey;
@@ -8482,7 +8613,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                         </div>
                         <button onClick={() => doClosePerp(p)} disabled={!!closingPerp} className="hov-btn"
                           style={{ width:"100%", padding:"8px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:700, cursor: closingPerp ? "default" : "pointer" }}>
-                          {isClosing ? <><span className="spinner" style={{ borderTopColor:T.red, display:"inline-block", marginRight:6 }}/> Closing…</> : "⚡ Close Position"}
+                          {isClosing ? <><span className="spinner" style={{ borderTopColor:T.red, display:"inline-block", marginRight:6 }}/> Closing…</> : "Close Position"}
                         </button>
                       </div>
                     );
@@ -8499,7 +8630,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           {/* ── Lend Positions panel ──────────────────────────────────── */}
           {showLendPos && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>🏦 My Jupiter Lend Positions</div>
+              <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>My Jupiter Lend Positions</div>
               {lendPosLoading ? (
                 <div style={{ fontSize:12, color:T.text3 }}>Loading positions…</div>
               ) : lendPositions.length === 0 ? (
@@ -8520,7 +8651,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                       <div key={`earn-${i}`} style={{ padding:"12px 14px", border:`1px solid ${T.green}44`, borderRadius:10, background:`${T.green}08` }}>
                         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                           <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>
-                            📈 {sym} Earn Deposit
+                            {sym} Earn Deposit
                           </div>
                           {matchVault && <span style={{ fontSize:12, fontWeight:700, color:T.green }}>{matchVault.apyDisplay} APY</span>}
                         </div>
@@ -8562,8 +8693,8 @@ Order: \`${orderKey.slice(0,20)}…\`
                           {pos.isLiquidated && <span style={{ fontSize:10, color:T.red, fontWeight:700 }}>LIQUIDATED</span>}
                         </div>
                         <div style={{ fontSize:11, color:T.text3, marginBottom:8, display:"flex", flexWrap:"wrap", gap:10 }}>
-                          <span>📥 Collateral: <strong style={{ color:T.text1 }}>{supplyNum.toFixed(4)}</strong></span>
-                          <span>💸 Debt: <strong style={{ color:T.red }}>{borrowNum.toFixed(4)}</strong></span>
+                          <span>Collateral: <strong style={{ color:T.text1 }}>{supplyNum.toFixed(4)}</strong></span>
+                          <span>Debt: <strong style={{ color:T.red }}>{borrowNum.toFixed(4)}</strong></span>
                         </div>
                         <div style={{ marginBottom:10 }}>
                           <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, marginBottom:3 }}>
@@ -8578,11 +8709,11 @@ Order: \`${orderKey.slice(0,20)}…\`
                           <div style={{ display:"flex", gap:8 }}>
                             <button onClick={() => doUnwind(pos, false)} disabled={!!unwindStatus} className="hov-btn"
                               style={{ flex:1, padding:"8px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                              {isUnwinding ? <><span className="spinner" style={{ borderTopColor:T.red }}/> Closing…</> : "⚡ Close Full Position"}
+                              {isUnwinding ? <><span className="spinner" style={{ borderTopColor:T.red }}/> Closing…</> : "Close Full Position"}
                             </button>
                             <button onClick={() => { setMultiplyPos({ vault: MULTIPLY_VAULTS.find(v=>v.vaultId===pos.vaultId)||{vaultId:pos.vaultId}, colAmount:"", leverage:"2" }); setShowMultiplyForm(true); setShowLendPos(false); }} className="hov-btn"
                               style={{ padding:"8px 12px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
-                              ➕ Add
+                              Add
                             </button>
                           </div>
                         )}
@@ -8603,7 +8734,7 @@ Order: \`${orderKey.slice(0,20)}…\`
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               {/* Header */}
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>⚡ Jupiter Multiply</div>
+                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Jupiter Multiply</div>
                 <span style={{ fontSize:10, padding:"2px 7px", background:T.purpleBg, border:`1px solid ${T.purple}33`, borderRadius:10, color:T.purple, fontWeight:600 }}>LEVERAGE</span>
               </div>
               {/* How it works box */}
@@ -8618,12 +8749,12 @@ Order: \`${orderKey.slice(0,20)}…\`
                   5. You now hold 3x–10x amplified exposure to yield
                 </div>
                 <div style={{ marginTop:8, padding:"6px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:6, color:T.red, fontSize:11 }}>
-                  ⚠ Risk: Liquidation if LTV breached. High borrow rate may erode yield. Start conservative at 2x–3x. Monitor at jup.ag/lend.
+                  Risk: Liquidation if LTV breached. High borrow rate may erode yield. Start conservative at 2x–3x. Monitor at jup.ag/lend.
                 </div>
               </div>
               {/* Coming Soon notice */}
               <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, padding:"14px 16px", marginBottom:14, textAlign:"center" }}>
-                <div style={{ fontSize:13, fontWeight:700, color:T.accent, marginBottom:4 }}>🚧 In-App Multiply — Coming Soon</div>
+                <div style={{ fontSize:13, fontWeight:700, color:T.accent, marginBottom:4 }}>In-App Multiply — Coming Soon</div>
                 <div style={{ fontSize:11, color:T.text2, marginBottom:12, lineHeight:1.6 }}>
                   The Jupiter Multiply API is not yet publicly available for in-app transactions.<br/>
                   Use the vault links below to open or manage positions directly on Jupiter.
@@ -8690,7 +8821,7 @@ Order: \`${orderKey.slice(0,20)}…\`
             return (
               <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:2, color:T.text1, display:"flex", alignItems:"center", gap:10 }}>
-                  ⚡ {v.collateral}/{v.debt} Multiply
+                  {v.collateral}/{v.debt} Multiply
                   <span style={{ fontSize:10, padding:"2px 7px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, color:T.accent, fontWeight:600 }}>COMING SOON</span>
                 </div>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>
@@ -8736,7 +8867,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                     <div>Collateral: <strong style={{ color:T.text1 }}>{col.toFixed(4)} {v.collateral}</strong></div>
                     <div>Total exposure: <strong style={{ color:T.accent }}>{exposure.toFixed(4)} {v.collateral}</strong></div>
                     <div>Debt to borrow: <strong style={{ color:T.red }}>{debt.toFixed(4)} {v.debt}</strong></div>
-                    <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>⚠ Position tracked as NFT. Monitor at jup.ag/lend.</div>
+                    <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Note: Position tracked as NFT. Monitor at jup.ag/lend.</div>
                   </div>
                 )}
 
@@ -8897,8 +9028,8 @@ Order: \`${orderKey.slice(0,20)}…\`
                 <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Launch Preset</div>
                 <div style={{ display:"flex", gap:8 }}>
                   {[
-                    { id:"meme", label:"🐸 Meme", desc:"16K→69K MC, raises ~18K USDC" },
-                    { id:"indie", label:"🚀 Indie", desc:"32K→240K MC, raises ~58K USDC + vesting" },
+                    { id:"meme", label:"Meme", desc:"16K→69K MC, raises ~18K USDC" },
+                    { id:"indie", label:"Indie", desc:"32K→240K MC, raises ~58K USDC + vesting" },
                   ].map(p => (
                     <button key={p.id} onClick={() => setStudioCfg(c=>({...c,preset:p.id}))}
                       style={{ flex:1, padding:"8px 10px", borderRadius:8, border:`1px solid ${studioCfg.preset===p.id ? T.accent : T.border}`, background: studioCfg.preset===p.id ? T.accentBg : T.bg, color: studioCfg.preset===p.id ? T.accent : T.text2, fontSize:12, cursor:"pointer", textAlign:"left" }}>
@@ -9020,7 +9151,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                       disabled={!studioCfg.name.trim() || !studioCfg.symbol.trim() || !studioImage || studioStatus==="signing" || !walletFull}
                       className="hov-btn"
                       style={{ flex:1, padding:"10px", background: (!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accentBg, border:`1px solid ${(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.border:T.accent}`, borderRadius:8, color:(!studioCfg.name.trim()||!studioCfg.symbol.trim()||!studioImage||studioStatus==="signing"||!walletFull)?T.text3:T.accent, fontSize:14, fontWeight:600, cursor:"pointer" }}>
-                      {studioStatus==="signing" ? "Launching…" : "🚀 Launch Token"}
+                      {studioStatus==="signing" ? "Launching…" : "Launch Token"}
                     </button>
                     <button onClick={() => setShowStudio(false)}
                       style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
@@ -9108,7 +9239,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               </div>
               {lockCfg.cliffDays && lockCfg.vestingDays && (
                 <div style={{ padding:"8px 12px", background:T.tealBg, border:`1px solid ${T.border}`, borderRadius:8, fontSize:11, color:T.text2, marginBottom:12 }}>
-                  📅 Unlocks start after <strong style={{ color:T.teal }}>{lockCfg.cliffDays} days</strong>, then vest linearly over <strong style={{ color:T.teal }}>{lockCfg.vestingDays} days</strong> total.
+                  Unlocks start after <strong style={{ color:T.teal }}>{lockCfg.cliffDays} days</strong>, then vest linearly over <strong style={{ color:T.teal }}>{lockCfg.vestingDays} days</strong> total.
                 </div>
               )}
               {lockStatus === "done" && lockResult && (
@@ -9123,7 +9254,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               )}
               {lockCfg.mint === "So11111111111111111111111111111111111111112" && (
                 <div style={{ padding:"8px 12px", background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:8, fontSize:11, color:"#ef4444", marginBottom:8 }}>
-                  ⚠️ Native SOL cannot be locked. Switch to an SPL token like USDC or JUP.
+                  Note: Native SOL cannot be locked. Switch to an SPL token like USDC or JUP.
                 </div>
               )}
               <div style={{ display:"flex", gap:8 }}>
@@ -9131,7 +9262,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                   disabled={!lockCfg.mint || !lockCfg.amount || parseFloat(lockCfg.amount)<=0 || lockStatus==="signing" || !walletFull || lockCfg.mint==="So11111111111111111111111111111111111111112"}
                   className="hov-btn"
                   style={{ flex:1, padding:"10px", background:T.purpleBg, border:`1px solid ${T.purple}`, borderRadius:8, color:T.purple, fontSize:14, fontWeight:600, cursor:"pointer" }}>
-                  {lockStatus==="signing" ? "Signing…" : "🔒 Create Lock"}
+                  {lockStatus==="signing" ? "Signing…" : "Create Lock"}
                 </button>
                 <button onClick={() => setShowLock(false)}
                   style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
@@ -9340,7 +9471,7 @@ Order: \`${orderKey.slice(0,20)}…\`
           <div style={{ margin:"0 16px 16px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <span style={{ fontSize:15 }}>📋</span>
+                <span style={{ fontSize:15 }}><SvgBlog size={15} color="currentColor"/></span>
                 <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>
                   Copy Trade — <span style={{ fontFamily:T.mono, fontSize:12, color:T.text3 }}>{copyTradeData.wallet.slice(0,8)}…{copyTradeData.wallet.slice(-4)}</span>
                 </span>
@@ -9382,7 +9513,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         {priceAlerts.filter(a => !a.triggered).length > 0 && (
           <div style={{ margin:"0 16px 8px", padding:"8px 14px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
             <span style={{ fontSize:12, color:T.text2 }}>
-              🔔 <strong>{priceAlerts.filter(a=>!a.triggered).length}</strong> active alert{priceAlerts.filter(a=>!a.triggered).length>1?"s":""}: {priceAlerts.filter(a=>!a.triggered).map(a=>`${a.token} ${a.condition} $${a.target.toLocaleString()}`).join(" · ")}
+              <strong>{priceAlerts.filter(a=>!a.triggered).length}</strong> active alert{priceAlerts.filter(a=>!a.triggered).length>1?"s":""}: {priceAlerts.filter(a=>!a.triggered).map(a=>`${a.token} ${a.condition} $${a.target.toLocaleString()}`).join(" · ")}
             </span>
             <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem("chatfi-alerts",JSON.stringify(cleared));}catch{} }}
               style={{ background:"none", border:"none", color:T.text3, fontSize:12, cursor:"pointer", flexShrink:0 }}>Clear all</button>
