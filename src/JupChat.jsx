@@ -7,7 +7,7 @@ import { SolanaAdapter } from "@reown/appkit-adapter-solana";
 import { solana as solanaMainnet } from "@reown/appkit/networks";
 
 // ── Privy (social / email login with embedded Solana wallet) ─────────────────
-import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
+import { PrivyProvider, usePrivy, useWallets, useCreateWallet } from "@privy-io/react-auth";
 
 // ── SVG Icon Components ─────────────────────────────────────────────────────
 const SvgChat = ({size=16,color="currentColor"}) => (
@@ -1157,6 +1157,7 @@ function JupChatInner() {
   const { ready: privyReady, authenticated: privyAuthed, user: privyUser,
           login: privyLogin, logout: privyLogout } = usePrivy();
   const { wallets: privyWallets } = useWallets();
+  const { createWallet: privyCreateWallet } = useCreateWallet();
   // Find the Privy-managed embedded wallet (Solana)
   const privyEmbeddedWallet = privyWallets.find(w => w.walletClientType === "privy" && w.chainType === "solana") || null;
   // Track whether Privy is the active auth method
@@ -4996,6 +4997,13 @@ Order: \`${orderKey.slice(0,20)}…\`
   // ── Privy connection sync ─────────────────────────────────────────────────
   useEffect(() => {
     if (!privyReady) return;
+    // Race fix: user authenticated but Solana embedded wallet not yet created
+    // (happens on first login after switching from ETH → Solana config).
+    // Calling createWallet updates privyWallets, which re-triggers this effect.
+    if (privyAuthed && !privyEmbeddedWallet) {
+      privyCreateWallet({ createAdditional: false }).catch(() => {});
+      return;
+    }
     if (privyAuthed && privyEmbeddedWallet) {
       const address = privyEmbeddedWallet.address;
       const justConnected = !privyMode;
@@ -5047,7 +5055,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       push("ai", "👋 Signed out. Connect again anytime.");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [privyReady, privyAuthed, privyEmbeddedWallet, privyUser]);
+  }, [privyReady, privyAuthed, privyEmbeddedWallet, privyUser, privyCreateWallet]);
 
   // ── Send message to Claude ──────────────────────────────────────────────────
   // ── Mirror-trade event: triggered by Copy Trade "Mirror" button ─────────────
