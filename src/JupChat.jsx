@@ -416,6 +416,7 @@ Available actions:
 - "SHOW_LOCK"       → actionData: { "token": "JUP", "amount": "1000", "cliffDays": "90", "vestingDays": "365", "recipient": "" } — lock SPL tokens with cliff+vesting schedule. NOTE: Native SOL cannot be locked — if user asks to lock SOL, suggest USDC or JUP instead. recipient blank = connected wallet. Pre-fill fields from user message.
 - "FETCH_LOCKS"     → actionData: {} — view all token locks where user is creator or recipient. Shows claimable amounts.
 - "SHOW_ROUTE"      → actionData: { "from": "SOL", "to": "USDC", "amount": "1" } — show full DEX route breakdown for this swap: AMMs used, split percentages, price impact per hop.
+- "FETCH_XSTOCKS"   → actionData: { "limit": 15, "sort": "volume" } — tokenized real-world stocks (xStocks / RWA stocks) on Solana. sort: "volume"|"price_change"|"market_cap". Default limit 15.
 
 Rules:
 - "buy X" / "swap X to Y" / "exchange" → SHOW_SWAP — use EXACT symbol user mentioned even if unknown meme coin
@@ -423,6 +424,7 @@ Rules:
 - "is X safe?" / "research X" / token info → FETCH_TOKEN_INFO — always attempt, UI searches Jupiter live; shows full metadata
 - "show verified tokens" / "list verified" / "show LST tokens" / "liquid staking tokens" → FETCH_TOKEN_TAG
 - "trending tokens" / "top trending" / "top traded" / "best organic score" / "hot tokens" → FETCH_TOKEN_CATEGORY
+- "top stocks" / "xstocks" / "x stocks" / "tokenized stocks" / "stock tokens" / "rwa stocks" / "spy token" / "qqq" / "backed finance" / "real world assets stocks" → FETCH_XSTOCKS
 - "new tokens" / "recently listed" / "new listings" / "just launched" → FETCH_TOKEN_RECENT
 - "can I verify X?" / "verify eligibility" / "submit X for verification" → CHECK_TOKEN_VERIFY
 - "my portfolio" / "my wallet" / "my positions" / "my orders" / "my bets" → FETCH_PORTFOLIO
@@ -462,7 +464,7 @@ const SUGGESTION_GROUPS = [
   {
     label: "Market",
     color: "#c7f284",
-    items: ["What's the SOL price?", "Top trending tokens today", "Show swap route: SOL → USDC"],
+    items: ["What's the SOL price?", "Top trending tokens today", "Top xStocks", "Show swap route: SOL → USDC"],
   },
   {
     label: "Trade",
@@ -574,14 +576,15 @@ const fmt = (text = "") => {
             ? `<img src="${logoSrc}" alt="${sym}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid #1e2d3d;" onerror="this.style.display='none'">`
             : `<div style="width:28px;height:28px;border-radius:50%;background:#1e2d3d;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#4d6a7a">${sym.slice(0,2)}</div>`;
 
-          html += `<div style="display:flex;align-items:center;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;">
+          const cleanSym = sym.replace(/✓/g,"").trim();
+          html += `<div onclick="window.__chatfiSend && window.__chatfiSend('${cleanSym} info')" style="display:flex;align-items:center;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;cursor:pointer;transition:border-color 0.15s,background 0.15s;" onmouseenter="this.style.borderColor='#c7f284';this.style.background='#1a2618'" onmouseleave="this.style.borderColor='#1e2d3d';this.style.background='#161e27'">
             <div style="width:3px;align-self:stretch;background:${rankNum<=3 ? rankColor : "#1e2d3d"};flex-shrink:0"></div>
             <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;flex:1;min-width:0">
               <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;flex-shrink:0">${item.num}</span>
               ${logoHtml}
               <div style="flex:1;min-width:0;overflow:hidden">
                 <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
-                  <span style="font-size:13px;font-weight:700;color:#e8f4f0;letter-spacing:-0.2px">${sym.replace(/✓/g,"").trim()}</span>
+                  <span style="font-size:13px;font-weight:700;color:#e8f4f0;letter-spacing:-0.2px">${cleanSym}</span>
                   ${isVerified ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="#c7f284" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ""}
                   <span style="font-size:11px;color:#4d6a7a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name.replace(/✓/g,"").trim()}</span>
                 </div>
@@ -591,13 +594,17 @@ const fmt = (text = "") => {
                 </div>
               </div>
               ${scoreNum ? `<div style="text-align:center;flex-shrink:0;padding-left:4px"><div style="font-size:9px;color:#4d6a7a;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:1px">score</div><div style="font-size:14px;font-weight:800;color:${scoreColor};line-height:1">${scoreNum}</div></div>` : ""}
+              <span style="font-size:9px;color:#2d4a5a;flex-shrink:0;padding-left:2px">›</span>
             </div>
           </div>`;
         } else {
           // Generic numbered item — clean pill
           const rankNum = parseInt(item.num);
           const rankColor = rankNum === 1 ? "#f6d860" : rankNum === 2 ? "#c0c0c0" : rankNum === 3 ? "#cd7f32" : "#2d4a5a";
-          html += `<div style="display:flex;align-items:flex-start;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;">
+          // Extract first bold word or plain first word as click target
+          const genericSym = (content.match(/^\*\*([^*]+)\*\*/) || content.match(/^([A-Za-z][A-Za-z0-9]+)/))?.[1] || "";
+          const clickAttr = genericSym ? `onclick="window.__chatfiSend && window.__chatfiSend('${genericSym} info')" style="cursor:pointer;"` : "";
+          html += `<div ${clickAttr} style="display:flex;align-items:flex-start;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;${genericSym ? "cursor:pointer;" : ""}" ${genericSym ? 'onmouseenter="this.style.borderColor=\'#c7f284\'" onmouseleave="this.style.borderColor=\'#1e2d3d\'"' : ""}>
             <div style="width:3px;align-self:stretch;background:${rankNum<=3 ? rankColor : "#1e2d3d"};flex-shrink:0"></div>
             <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;flex:1">
               <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;padding-top:2px;flex-shrink:0">${item.num}</span>
@@ -1204,6 +1211,15 @@ function JupChatInner() {
     }
   }, [input]);
 
+  // Expose send() globally so HTML-rendered token cards can trigger it on click
+  useEffect(() => {
+    window.__chatfiSend = (query) => {
+      setInput("");
+      send(query);
+    };
+    return () => { delete window.__chatfiSend; };
+  });
+
   // Render WalletConnect QR code when URI is ready
   useEffect(() => {
     if (wcStatus !== "waiting" || !wcUri) return;
@@ -1417,6 +1433,34 @@ function JupChatInner() {
       const data = await jupFetch(`${JUP_TOKEN_CAT}/${category}/${interval}?limit=${limit}`);
       return Array.isArray(data) ? data : (data?.tokens || data?.data || []);
     } catch { return []; }
+  };
+
+  // ── xStocks — tokenized real-world stocks on Solana ────────────────────────
+  const XSTOCK_SYMBOLS = [
+    "SPYx","QQQx","TSLAx","COINx","AAPLx","NVDAx","MSFTx","GOOGx","AMZNx","METAx",
+    "NKEx","AMDx","INTCx","ARKKx","GDx","SLVx","GOLDx","BRKx","TSMx","SOFIx",
+  ];
+  const fetchXStocks = async (limit = 15) => {
+    // 1. Try Jupiter tag API with various possible stock tags
+    for (const tag of ["xstocks", "tokenized-stocks", "stocks", "rwa"]) {
+      try {
+        const data = await jupFetch(`${JUP_TOKEN_TAG}?query=${tag}&limit=${limit}`);
+        const tokens = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
+        if (tokens.length >= 3) return tokens.slice(0, limit);
+      } catch {}
+    }
+    // 2. Fallback: search each known xStock symbol
+    const results = [];
+    for (const sym of XSTOCK_SYMBOLS) {
+      if (results.length >= limit) break;
+      try {
+        const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(sym)}&limit=5`);
+        const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
+        const match = list.find(t => t.symbol?.toLowerCase() === sym.toLowerCase());
+        if (match) results.push(match);
+      } catch {}
+    }
+    return results;
   };
 
   // ── Token Recent — newly listed tokens (first pool just created) ────────────
@@ -4944,6 +4988,32 @@ Order: \`${orderKey.slice(0,20)}…\`
           push("ai", text + "\n\nCould not fetch recently listed tokens right now.");
         } else {
           push("ai", text + `\n\n**Recently Listed Tokens** (${tokens.length} found, newest first):\n${fmtTokenList(tokens, limit)}`);
+        }
+
+      } else if (action === "FETCH_XSTOCKS") {
+        const limit  = Math.min(Math.max(parseInt(actionData?.limit) || 15, 1), 50);
+        const tokens = await fetchXStocks(limit);
+        if (!tokens.length) {
+          push("ai", text + "
+
+Could not fetch xStock tokens right now. Try searching a specific one like **SPYx** or **QQQx**.");
+        } else {
+          const lines = tokens.map((t, i) => {
+            const sym   = t.symbol || "?";
+            const name  = t.name ? ` — ${t.name.slice(0,28)}` : "";
+            const price = t.usdPrice ? ` $${t.usdPrice < 1 ? t.usdPrice.toFixed(4) : t.usdPrice.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "";
+            const chg   = t.stats24h?.priceChange != null ? ` (${t.stats24h.priceChange > 0 ? "+" : ""}${t.stats24h.priceChange.toFixed(2)}%)` : "";
+            const vol   = t.stats24h ? ` · vol $${((t.stats24h.buyVolume||0)+(t.stats24h.sellVolume||0)).toLocaleString("en-US",{maximumFractionDigits:0})}` : "";
+            const ver   = t.isVerified ? " ✓" : "";
+            const logo  = t.icon || t.logoURI || (t.id ? `https://img.jup.ag/tokens/${t.id}` : "");
+            const logoTag = logo ? `[img:${logo}]` : "";
+            return `${i+1}. ${logoTag}**${sym}**${name}${ver}${price}${chg}${vol}`;
+          }).join("
+");
+          push("ai", text + `
+
+**Tokenized Stocks (xStocks)** on Solana — ${tokens.length} found:
+${lines}`);
         }
 
       } else if (action === "CHECK_TOKEN_VERIFY") {
