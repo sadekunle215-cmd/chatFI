@@ -163,6 +163,7 @@ const SPL_PROGRAM      = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 // JupUSD mint for prediction market deposits
 const JUPUSD_MINT      = "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD";
 const USDC_MINT        = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const CHATFI_REFERRAL  = "Rn8Z59LMmF3hxKbiCkgKoTYxvwTAerfDPPbq6H41PBw"; // ChatFi referral account — fees accrue here
 
 // Popular tokens — expands dynamically as user searches
 const TOKEN_MINTS = {
@@ -3839,7 +3840,7 @@ function JupChatInner() {
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals || 9));
     setQF(true); setSwapQuote(null);
     try {
-      const data = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&taker=${walletFull || ""}`);
+      const data = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&taker=${walletFull || ""}&referral=${CHATFI_REFERRAL}`);
       if (data && !data.error && data.outAmount) setSwapQuote(data);
       else setSwapQuote(null);
     } catch { setSwapQuote(null); }
@@ -4503,7 +4504,7 @@ function JupChatInner() {
     try {
       const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals || 9));
       // v2 /order: no slippageBps = auto RTSE slippage + auto gasless if <0.01 SOL
-      const orderData = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&taker=${walletFull}`);
+      const orderData = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&taker=${walletFull}&referral=${CHATFI_REFERRAL}`);
       if (orderData.error) throw new Error(typeof orderData.error==="object"?JSON.stringify(orderData.error):orderData.error);
       if (!orderData.transaction) throw new Error("No transaction returned from Jupiter — check your balance.");
 
