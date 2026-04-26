@@ -6,93 +6,8 @@ import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDiscon
 import { SolanaAdapter } from "@reown/appkit-adapter-solana";
 import { solana as solanaMainnet } from "@reown/appkit/networks";
 
-// ── Privy loaded dynamically — no npm package needed ─────────────────────────
-// We use Privy's UMD bundle from CDN so we don't need to change package.json.
-// usePrivyAuth() below wraps window.Privy once the script loads.
-let _privyClient = null;
-let _privyListeners = [];
-const notifyPrivyListeners = () => _privyListeners.forEach(fn => fn());
-
-const loadPrivySDK = () =>
-  new Promise((resolve) => {
-    if (window.__PrivyLoaded) { resolve(); return; }
-    // Privy doesn't publish a UMD bundle — we use their iframe-based hosted auth instead.
-    // The approach: open privy's hosted login URL in a popup, receive address via postMessage.
-    window.__PrivyLoaded = true;
-    resolve();
-  });
-
-// Minimal Privy hook — uses Privy's hosted OAuth popup flow via postMessage
-const usePrivyAuth = () => {
-  const PRIVY_APP_ID = import.meta.env.VITE_PRIVY_APP_ID || "";
-
-  const [authed, setAuthed]       = useState(false);
-  const [user, setUser]           = useState(null);
-  const [wallet, setWallet]       = useState(null); // { address, signTransaction }
-  const [ready, setReady]         = useState(true); // always ready (no SDK to load)
-  const popupRef                  = useRef(null);
-
-  // Listen for messages from Privy hosted auth popup
-  useEffect(() => {
-    const handler = async (e) => {
-      // Privy sends { type:"privy:authenticated", user:{id,email,...}, wallet:{address} }
-      if (!e.data || e.data.type !== "privy:authenticated") return;
-      const { user: u, embeddedWallet } = e.data;
-      if (!embeddedWallet?.address) return;
-      popupRef.current?.close();
-
-      // Build a signTransaction shim using Privy's iframe signing endpoint
-      const privySignTx = async (tx) => {
-        // Serialize the tx to base64 and send to Privy's signing iframe via postMessage.
-        // For the embedded wallet, Privy handles key management server-side.
-        // We use their REST signing API with the session token received at login.
-        const sessionToken = e.data.sessionToken;
-        const serialized = tx.serialize ? Buffer.from(tx.serialize()).toString("base64")
-          : Buffer.from(tx.serialize()).toString("base64");
-        const res = await fetch(`https://auth.privy.io/api/v1/embedded-wallet/sign-transaction`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "privy-app-id": PRIVY_APP_ID,
-            "Authorization": `Bearer ${sessionToken}`,
-          },
-          body: JSON.stringify({ address: embeddedWallet.address, transaction: serialized, encoding: "base64" }),
-        });
-        const data = await res.json();
-        if (!data.signed_transaction) throw new Error(data.error || "Privy signing failed");
-        const bytes = Uint8Array.from(atob(data.signed_transaction), c => c.charCodeAt(0));
-        // Return the same tx type
-        try { return VersionedTransaction.deserialize(bytes); }
-        catch { return Transaction.from(bytes); }
-      };
-
-      setAuthed(true);
-      setUser(u);
-      setWallet({ address: embeddedWallet.address, signTransaction: privySignTx });
-    };
-    window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
-  }, [PRIVY_APP_ID]);
-
-  const login = () => {
-    if (!PRIVY_APP_ID) {
-      alert("Privy App ID not set. Add VITE_PRIVY_APP_ID to Vercel environment variables.");
-      return;
-    }
-    // Privy's hosted login page — correct endpoint for social/email login
-    const url = `https://auth.privy.io/api/v1/embedded-wallet/login?privy_app_id=${PRIVY_APP_ID}&login_method=google&redirect_uri=${encodeURIComponent(window.location.origin)}`;
-    const popup = window.open(url, "privy-login", "width=480,height=640,scrollbars=yes,left=" + Math.max(0,(screen.width-480)/2) + ",top=" + Math.max(0,(screen.height-640)/2));
-    popupRef.current = popup;
-  };
-
-  const logout = () => {
-    setAuthed(false);
-    setUser(null);
-    setWallet(null);
-  };
-
-  return { ready, authenticated: authed, user, embeddedWallet: wallet, login, logout };
-};
+// ── Privy (social / email login with embedded Solana wallet) ─────────────────
+import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
 
 // ── SVG Icon Components ─────────────────────────────────────────────────────
 const SvgChat = ({size=16,color="currentColor"}) => (
@@ -949,7 +864,7 @@ const BLOG_POSTS = [
     title: "What is ChatFi? Your AI Trading Copilot on Solana",
     category: "Overview",
     readTime: "4 min read",
-    date: "Jun 2025",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
     summary: "ChatFi is the first AI-native trading interface built on Jupiter — the largest DEX aggregator on Solana. Learn what it is, how it works, and why it's different.",
     sections: [
       {
@@ -984,7 +899,7 @@ const BLOG_POSTS = [
     title: "How to Swap Any Token on Solana Instantly",
     category: "Guide",
     readTime: "3 min read",
-    date: "Jun 2025",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
     summary: "A step-by-step guide to swapping tokens with ChatFi — from simple SOL→USDC trades to swapping obscure meme coins by contract address.",
     sections: [
       {
@@ -1019,7 +934,7 @@ const BLOG_POSTS = [
     title: "Basket Swaps: Trade Multiple Tokens in One Command",
     category: "Feature",
     readTime: "4 min read",
-    date: "Jun 2025",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
     summary: "Basket swaps let you execute multiple trades simultaneously with a single chat message. Buy a portfolio of tokens, or sell multiple holdings to USDC — all at once.",
     sections: [
       {
@@ -1055,7 +970,7 @@ const BLOG_POSTS = [
     title: "Automate Your Trades: Limit Orders, DCA & Recurring Buys",
     category: "Guide",
     readTime: "5 min read",
-    date: "Jun 2025",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
     summary: "Stop watching charts 24/7. ChatFi lets you set limit orders, take-profit/stop-loss brackets, and scheduled recurring buys — all through conversational commands.",
     sections: [
       {
@@ -1091,7 +1006,7 @@ const BLOG_POSTS = [
     title: "Earn Passive Yield on Your Solana Assets",
     category: "Feature",
     readTime: "4 min read",
-    date: "Jun 2025",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
     summary: "Your idle USDC and SOL can be earning yield right now. ChatFi connects to Jupiter Earn and Lend to let you deposit, multiply, and withdraw — all in one chat.",
     sections: [
       {
@@ -1127,7 +1042,7 @@ const BLOG_POSTS = [
     title: "Prediction Markets: Bet on Sports & Crypto Events",
     category: "Feature",
     readTime: "3 min read",
-    date: "Jun 2025",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
     summary: "Jupiter's prediction markets let you stake USDC on real-world outcomes — football matches, crypto price targets, elections, and more. Here's how to use them via ChatFi.",
     sections: [
       {
@@ -1163,7 +1078,7 @@ const BLOG_POSTS = [
     title: "Understanding Your Solana Portfolio in ChatFi",
     category: "Guide",
     readTime: "3 min read",
-    date: "Jun 2025",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
     summary: "ChatFi gives you a unified view of everything in your wallet — spot balances, DeFi positions, yield, perps, and your trade history — without leaving the chat.",
     sections: [
       {
@@ -1240,8 +1155,10 @@ function JupChatInner() {
 
   // ── Privy hooks (social login + embedded wallet) ───────────────────────────
   const { ready: privyReady, authenticated: privyAuthed, user: privyUser,
-          embeddedWallet: privyEmbeddedWallet,
-          login: privyLogin, logout: privyLogout } = usePrivyAuth();
+          login: privyLogin, logout: privyLogout } = usePrivy();
+  const { wallets: privyWallets } = useWallets();
+  // Find the Privy-managed embedded wallet (Solana)
+  const privyEmbeddedWallet = privyWallets.find(w => w.walletClientType === "privy") || null;
   // Track whether Privy is the active auth method
   const [privyMode, setPrivyMode] = useState(false);
 
@@ -5010,7 +4927,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       const display = address.slice(0,4) + "…" + address.slice(-4);
       setWallet(display);
       setWalletFull(address);
-      setConnectedWalletName(privyUser?.email?.address || privyUser?.google?.email || "Social Account");
+      setConnectedWalletName(privyUser?.email?.address || privyUser?.google?.email || privyUser?.twitter?.username || "Social Account");
       // Build provider shim using Privy embedded wallet's signTransaction
       const privyProvider = {
         signTransaction: async (tx) => privyEmbeddedWallet.signTransaction(tx),
@@ -5022,7 +4939,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         if (justConnected) {
           fetchPrices().then(live => {
             const solUSD = balances.SOL && live.SOL ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})` : "";
-            const emailLabel = privyUser?.email?.address || privyUser?.google?.email || "your account";
+            const emailLabel = privyUser?.email?.address || privyUser?.google?.email || privyUser?.twitter?.username || "your account";
             push("ai",
               `Wallet ready ✓ — signed in as **${emailLabel}**\n\n` +
               `Your embedded Solana wallet: \`${display}\`\n\n` +
@@ -9293,5 +9210,36 @@ Order: \`${orderKey.slice(0,20)}…\`
 
 // ─── Root export ─────────────────────────────────────────────────────────────
 export default function JupChat() {
-  return <JupChatInner />;
+  const appId = import.meta.env.VITE_PRIVY_APP_ID || "";
+  return (
+    <PrivyProvider
+      appId={appId}
+      config={{
+        loginMethods: ["email", "google", "twitter", "discord"],
+        appearance: {
+          theme: "dark",
+          accentColor: "#c8f255",
+          logo: "https://chatfi.pro/favicon.ico",
+          showWalletLoginFirst: false,
+        },
+        embeddedWallets: {
+          createOnLogin: "users-without-wallets",
+          noPromptOnSignature: false,
+          requireUserPasswordOnCreate: false,
+        },
+        // Solana mainnet — required for embedded Solana wallets
+        defaultChain: {
+          id: 1399811149,
+          name: "Solana",
+          nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 },
+          rpcUrls: { default: { http: [import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com"] } },
+        },
+        solanaClusters: [
+          { name: "mainnet-beta", rpcUrl: import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com" },
+        ],
+      }}
+    >
+      <JupChatInner />
+    </PrivyProvider>
+  );
 }
