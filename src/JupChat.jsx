@@ -4169,7 +4169,6 @@ function JupChatInner() {
           if (typeof reownProvider.signTransaction === "function") {
             return reownProvider.signTransaction(tx);
           }
-          // Reown wraps the wallet — reach into the injected provider as fallback
           const injected =
             window?.phantom?.solana || window?.backpack?.solana ||
             window?.solflare || window?.solana || null;
@@ -5493,16 +5492,18 @@ Order: \`${orderKey.slice(0,20)}…\`
           }
 
           // Now fire all order requests in parallel — no per-order price fetch
+          // slippageBps=50 (0.5%) gives enough room for sequential pool impacts
+          const BASKET_SLIPPAGE_BPS = 50;
           const orders = await Promise.all(tradeMeta.map(async (m) => {
             try {
               if (!m.fromMint || !m.toMint) return { err: "unknown token", fromSym: m.fromSym, toSym: m.toSym };
               const inUnits   = m.needsPrice ? m.usd / (priceMap[m.fromMint] || 1) : m.rawAmt;
               const atomicAmt = Math.floor(inUnits * Math.pow(10, m.fromDec));
-              const orderRes  = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${m.fromMint}&outputMint=${m.toMint}&amount=${atomicAmt}&taker=${walletFull}`);
+              const orderRes  = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${m.fromMint}&outputMint=${m.toMint}&amount=${atomicAmt}&taker=${walletFull}&slippageBps=${BASKET_SLIPPAGE_BPS}`);
               if (orderRes?.error) return { err: typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error, fromSym: m.fromSym, toSym: m.toSym };
               if (!orderRes?.transaction) return { err: `No transaction — ${JSON.stringify(orderRes).slice(0,150)}`, fromSym: m.fromSym, toSym: m.toSym };
               const vTx = VersionedTransaction.deserialize(Uint8Array.from(atob(orderRes.transaction), c=>c.charCodeAt(0)));
-              return { ok: true, vTx, requestId: orderRes.requestId, fromSym: m.fromSym, toSym: m.toSym, inUnits, toDec: m.toDec };
+              return { ok: true, vTx, requestId: orderRes.requestId, fromSym: m.fromSym, toSym: m.toSym, inUnits, toDec: m.toDec, fromMint: m.fromMint, toMint: m.toMint, atomicAmt };
             } catch(e) {
               return { err: e?.message || "order failed", fromSym: m.fromSym, toSym: m.toSym };
             }
@@ -5540,7 +5541,10 @@ Order: \`${orderKey.slice(0,20)}…\`
             }
           }
 
-          // ── Phase 3: execute & confirm all swaps in parallel, push each card live ─
+          // ── Phase 3: execute sequentially with delay between each swap ──────────
+          // Running in parallel causes 6O23 (Whirlpool slippage) errors because
+          // all txs hit the same pools simultaneously and move the price for each other.
+          // Sequential execution with a 1.2s gap lets each swap settle first.
           const RPC_CONFIRM = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
           const connConfirm = new Connection(RPC_CONFIRM, "confirmed");
 
@@ -5559,11 +5563,27 @@ Order: \`${orderKey.slice(0,20)}…\`
             throw new Error("Timeout — check Solscan for status");
           };
 
-          // Fire all executes in parallel, each pushes its own card when done
-          await Promise.all(signedTxs.map(async (stx, i) => {
-            const o = valid[i];
+          for (let i = 0; i < signedTxs.length; i++) {
+            const stx = signedTxs[i];
+            const o   = valid[i];
+            // Small delay between swaps — lets pool prices settle so slippage checks pass
+            if (i > 0) await new Promise(r => setTimeout(r, 1200));
             try {
-              const execRes = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: bytesToB64(stx.serialize()), requestId: o.requestId } });
+              let execRes = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: bytesToB64(stx.serialize()), requestId: o.requestId } });
+
+              // 6O23 = Whirlpool slippage / pool moved. Re-fetch fresh order + re-sign once.
+              const errStr = execRes?.error ? JSON.stringify(execRes.error) : "";
+              if (errStr.includes("6O23") || errStr.includes("6023")) {
+                try {
+                  const retryOrder = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${o.fromMint}&outputMint=${o.toMint}&amount=${o.atomicAmt}&taker=${walletFull}&slippageBps=${BASKET_SLIPPAGE_BPS}`);
+                  if (retryOrder?.transaction && !retryOrder?.error) {
+                    const retryTx     = VersionedTransaction.deserialize(Uint8Array.from(atob(retryOrder.transaction), c=>c.charCodeAt(0)));
+                    const retrySignedTx = await provider.signTransaction(retryTx);
+                    execRes = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: bytesToB64(retrySignedTx.serialize()), requestId: retryOrder.requestId } });
+                  }
+                } catch { /* retry failed — fall through to error handling below */ }
+              }
+
               if (execRes?.error) throw new Error(typeof execRes.error === "object" ? JSON.stringify(execRes.error) : execRes.error);
               const sig = execRes?.signature || execRes?.txid;
               if (!sig) throw new Error("No signature returned");
@@ -5576,7 +5596,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               failed++;
               push("ai", `[swap-card|${o.fromSym}|${o.toSym}|${o.inUnits?.toFixed(4)||"?"}|—|—|—|err]\n❌ ${o.fromSym}→${o.toSym}: ${e?.message || "failed"}`);
             }
-          }));
+          }
           const summaryStr = basketTrades.map(t=>`${t.from||"USDC"}→${t.to}`).join(", ");
           logTrade({ type:"basket", summary: summaryStr });
           push("ai", `**Basket done** — ${done} succeeded, ${failed} failed`);
