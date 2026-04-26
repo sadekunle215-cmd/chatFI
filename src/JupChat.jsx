@@ -381,9 +381,18 @@ Rules:
 - "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
-- CRITICAL — SHOW_RECURRING is fully supported. When user asks for a recurring/DCA order, you MUST return action:"SHOW_RECURRING" with all fields pre-filled from the user's message. Never tell the user to do it manually.`;
+- CRITICAL — SHOW_RECURRING is fully supported. When user asks for a recurring/DCA order, you MUST return action:"SHOW_RECURRING" with all fields pre-filled from the user's message. Never tell the user to do it manually.
+- "smart entry X" / "best way to enter X" / "how should I buy X" → Power Command (client-side). Return action:null, text:"Running smart entry analysis for **X** — fetching live price, trending rank, and swap quote…"
+- "exit my X" / "best way to exit X" / "exit strategy X" → Power Command (client-side). Return action:null, text:"Analysing exit strategy for **X** — checking price momentum, balance, and best route…"
+- "deep dive X" / "full analysis X" / "research X" / "analyse X" / "tell me everything about X" → Power Command (client-side). Return action:null, text:"Running full deep dive on **X** — pulling metadata, organic score, safety flags, and liquidity depth…"
+- "morning briefing" / "portfolio pulse" / "how is my portfolio doing" / "daily brief" → Power Command (client-side). Return action:null, text:"Pulling your portfolio pulse — checking balances, earn positions, and open orders in parallel…"`;
 
 const SUGGESTION_GROUPS = [
+  {
+    label: "⚡ Power",
+    color: "#a78bfa",
+    items: ["Smart entry SOL", "Exit my JUP", "Deep dive BONK", "Morning briefing"],
+  },
   {
     label: "Market",
     color: "#c7f284",
@@ -5113,9 +5122,296 @@ Order: \`${orderKey.slice(0,20)}…\`
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // ── POWER COMMANDS — parallel multi-API orchestrator ─────────────────────
+  // Each command fires 3-4 Jupiter API calls via Promise.allSettled, then asks
+  // Claude to synthesise the results into one sharp message + action buttons.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  const POWER_COMMANDS = [
+    { trigger: /^(smart[\s-]?entry|best[\s-]?entry|how[\s-]?(should|do)[\s-]?i[\s-]?buy|best[\s-]?way[\s-]?(to[\s-]?)?enter|best[\s-]?way[\s-]?(to[\s-]?)?buy)\s+(\w+)/i, id: "SMART_ENTRY" },
+    { trigger: /^(exit[\s-]?(my\s+)?|best[\s-]?way[\s-]?(to[\s-]?)?exit\s+|exit[\s-]?strategy[\s-]?)(\w+)/i,                                                               id: "EXIT_STRATEGY" },
+    { trigger: /^(deep[\s-]?dive|full[\s-]?analysis|research|analyse|analyze|tell[\s-]?me[\s-]?everything[\s-]?about|breakdown)\s+(\w+)/i,                                  id: "DEEP_DIVE" },
+    { trigger: /^(morning[\s-]?brief(ing)?|portfolio[\s-]?pulse|how[\s-]?(is|'?s)[\s-]?my[\s-]?portfolio(\s+doing)?|daily[\s-]?brief)/i,                                   id: "PORTFOLIO_PULSE" },
+  ];
+
+  const POWER_STOP_WORDS = new Set(["my","all","i","the","me","to","best","way","enter","exit","should","do","full","about","everything","how","is","analysis","research","brief","briefing","morning","daily","portfolio","pulse","analyse","analyze","strategy","doing"]);
+
+  const detectPowerCommand = (raw) => {
+    for (const cmd of POWER_COMMANDS) {
+      const m = raw.match(cmd.trigger);
+      if (m) {
+        const sym = [...m].reverse().find(g => g && /^[A-Za-z]{2,10}$/.test(g) && !POWER_STOP_WORDS.has(g.toLowerCase()));
+        return { id: cmd.id, token: sym?.toUpperCase() || null };
+      }
+    }
+    return null;
+  };
+
+  const executePowerCommand = async (cmdId, token, rawMsg) => {
+    setTyping(true);
+    push("user", rawMsg);
+    setInput("");
+    histRef.current = [...histRef.current, { role:"user", content:rawMsg }];
+
+    // Resolve token mint
+    let mint = token ? (tokenCacheRef.current[token] || TOKEN_MINTS[token]) : null;
+    if (token && !mint) {
+      const r = await resolveToken(token);
+      if (r) { mint = r.mint; tokenCacheRef.current[token] = r.mint; tokenDecimalsRef.current[token] = r.decimals; }
+    }
+
+    try {
+      let gathered = {};
+
+      // ── SMART ENTRY: price + metadata + trending rank + swap quote ────────
+      if (cmdId === "SMART_ENTRY" && token) {
+        const [priceRes, tokenRes, trendRes, quoteRes] = await Promise.allSettled([
+          fetch(`${JUP_PRICE_API}?ids=${mint||token}&showExtraInfo=true`).then(r=>r.json()),
+          fetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(token)}&limit=1`).then(r=>r.json()),
+          fetch(`${JUP_TOKEN_CAT}/toptrending/24h?limit=50`).then(r=>r.json()),
+          (() => {
+            const toMint = mint || TOKEN_MINTS[token] || "";
+            if (!toMint) return Promise.resolve(null);
+            return fetch(`${JUP_SWAP_ORDER}?inputMint=${TOKEN_MINTS.USDC}&outputMint=${toMint}&amount=${100*1e6}&taker=${walletFull||""}`).then(r=>r.json());
+          })(),
+        ]);
+
+        const priceData  = priceRes.status==="fulfilled"  ? priceRes.value  : null;
+        const tokenArr   = tokenRes.status==="fulfilled"  ? (Array.isArray(tokenRes.value) ? tokenRes.value : tokenRes.value?.tokens||tokenRes.value?.data||[]) : [];
+        const trendArr   = trendRes.status==="fulfilled"  ? (Array.isArray(trendRes.value) ? trendRes.value : trendRes.value?.tokens||trendRes.value?.data||[]) : [];
+        const quoteData  = quoteRes.status==="fulfilled"  ? quoteRes.value  : null;
+
+        const priceInfo  = priceData?.[mint] || priceData?.[Object.keys(priceData||{})[0]] || null;
+        const meta       = tokenArr[0] || null;
+        const trendRank  = trendArr.findIndex(t=>t.symbol?.toUpperCase()===token||t.mint===mint)+1||null;
+        const outDecimals = tokenDecimalsRef.current[token]||9;
+        const outAmt     = quoteData?.outAmount ? (parseInt(quoteData.outAmount)/Math.pow(10,outDecimals)).toFixed(4) : null;
+
+        gathered = {
+          type:"SMART_ENTRY", token,
+          price:       priceInfo?.usdPrice || priceInfo?.price,
+          change24h:   priceInfo?.priceChange24h ?? priceInfo?.extraInfo?.priceChange24h,
+          isVerified:  meta?.isVerified,
+          organicScore:meta?.organicScore,
+          isSus:       meta?.audit?.isSus,
+          trendRank,   trendTotal: trendArr.length,
+          outAmt,      quoteValid: !!quoteData && !quoteData.error,
+        };
+      }
+
+      // ── EXIT STRATEGY: price + trending + sell quote + route breakdown ────
+      else if (cmdId === "EXIT_STRATEGY" && token) {
+        const userBal    = portfolio[token]||0;
+        const inDecimals = tokenDecimalsRef.current[token]||9;
+        const amtRaw     = userBal>0 ? Math.floor(userBal*Math.pow(10,inDecimals)) : Math.pow(10,inDecimals);
+        const fromMint   = mint || TOKEN_MINTS[token] || "";
+
+        const [priceRes, trendRes, quoteRes, routeRes] = await Promise.allSettled([
+          fetch(`${JUP_PRICE_API}?ids=${mint||token}&showExtraInfo=true`).then(r=>r.json()),
+          fetch(`${JUP_TOKEN_CAT}/toptrading/24h?limit=50`).then(r=>r.json()),
+          fromMint ? fetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${TOKEN_MINTS.USDC}&amount=${amtRaw}&taker=${walletFull||""}`).then(r=>r.json()) : Promise.resolve(null),
+          fromMint ? fetch(`${JUP_ROUTE_API}?inputMint=${fromMint}&outputMint=${TOKEN_MINTS.USDC}&amount=${Math.pow(10,inDecimals)}&slippageBps=50`).then(r=>r.json()) : Promise.resolve(null),
+        ]);
+
+        const priceData  = priceRes.status==="fulfilled" ? priceRes.value : null;
+        const trendArr   = trendRes.status==="fulfilled" ? (Array.isArray(trendRes.value) ? trendRes.value : trendRes.value?.tokens||trendRes.value?.data||[]) : [];
+        const quoteData  = quoteRes.status==="fulfilled" ? quoteRes.value : null;
+        const routeData  = routeRes.status==="fulfilled" ? routeRes.value : null;
+
+        const priceInfo  = priceData?.[mint]||priceData?.[Object.keys(priceData||{})[0]]||null;
+        const price      = priceInfo?.usdPrice||priceInfo?.price;
+        const trendRank  = trendArr.findIndex(t=>t.symbol?.toUpperCase()===token||t.mint===mint)+1||null;
+        const usdcOut    = quoteData?.outAmount ? (parseInt(quoteData.outAmount)/1e6).toFixed(2) : null;
+        const priceImpact= routeData?.priceImpactPct ? (parseFloat(routeData.priceImpactPct)*100).toFixed(3) : null;
+        const dexPath    = routeData?.routePlan?.map(r=>r.swapInfo?.label||r.swapInfo?.ammKey?.slice(0,8)).filter(Boolean).join(" → ")||null;
+
+        gathered = {
+          type:"EXIT_STRATEGY", token, price,
+          change24h:   priceInfo?.priceChange24h ?? priceInfo?.extraInfo?.priceChange24h,
+          userBal, usdcOut, trendRank, priceImpact, dexPath,
+          limitSuggestion: price ? (price*1.03).toFixed(4) : null,
+          quoteValid: !!quoteData && !quoteData.error,
+        };
+      }
+
+      // ── DEEP DIVE: metadata + price + organic rank + route/liquidity ──────
+      else if (cmdId === "DEEP_DIVE" && token) {
+        const [infoRes, priceRes, trendRes, routeRes] = await Promise.allSettled([
+          fetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(token)}&limit=1`).then(r=>r.json()),
+          fetch(`${JUP_PRICE_API}?ids=${mint||token}&showExtraInfo=true`).then(r=>r.json()),
+          fetch(`${JUP_TOKEN_CAT}/toporganicscore/24h?limit=100`).then(r=>r.json()),
+          (() => {
+            const toMint = mint||TOKEN_MINTS[token]||"";
+            if (!toMint) return Promise.resolve(null);
+            return fetch(`${JUP_ROUTE_API}?inputMint=${TOKEN_MINTS.USDC}&outputMint=${toMint}&amount=${100*1e6}&slippageBps=50`).then(r=>r.json());
+          })(),
+        ]);
+
+        const tokenArr   = infoRes.status==="fulfilled"  ? (Array.isArray(infoRes.value) ? infoRes.value : infoRes.value?.tokens||infoRes.value?.data||[]) : [];
+        const priceData  = priceRes.status==="fulfilled"  ? priceRes.value  : null;
+        const trendArr   = trendRes.status==="fulfilled"  ? (Array.isArray(trendRes.value) ? trendRes.value : trendRes.value?.tokens||trendRes.value?.data||[]) : [];
+        const routeData  = routeRes.status==="fulfilled"  ? routeRes.value  : null;
+
+        const meta       = tokenArr[0]||null;
+        const priceInfo  = priceData?.[mint]||priceData?.[Object.keys(priceData||{})[0]]||null;
+        const price      = priceInfo?.usdPrice||priceInfo?.price;
+        const organicRank= trendArr.findIndex(t=>t.symbol?.toUpperCase()===token||t.mint===mint)+1||null;
+        const priceImpact= routeData?.priceImpactPct ? (parseFloat(routeData.priceImpactPct)*100).toFixed(3) : null;
+        const dexPath    = routeData?.routePlan?.map(r=>r.swapInfo?.label).filter(Boolean).join(" → ")||null;
+
+        gathered = {
+          type:"DEEP_DIVE", token, price,
+          change24h:   priceInfo?.priceChange24h,
+          isVerified:  meta?.isVerified,
+          organicScore:meta?.organicScore,
+          isSus:       meta?.audit?.isSus,
+          freezeAuth:  !!meta?.freezeAuthority,
+          mintAuth:    !!meta?.mint_authority,
+          holders:     meta?.holderCount,
+          liquidity:   meta?.liquidity,
+          mcap:        meta?.market_cap,
+          fdv:         meta?.fdv,
+          dailyVol:    meta?.daily_volume,
+          buys24h:     meta?.numBuys24h,
+          sells24h:    meta?.numSells24h,
+          organicRank, totalInRank: trendArr.length,
+          priceImpact, dexPath,
+          tags:        meta?.tags||[],
+        };
+
+        // Open token card alongside
+        if (meta) { setTokenCardData({ ...meta, usdPrice:price, priceChange24h:priceInfo?.priceChange24h }); setShowTokenCard(true); }
+      }
+
+      // ── PORTFOLIO PULSE: portfolio + earn positions + open DCA orders ─────
+      else if (cmdId === "PORTFOLIO_PULSE") {
+        if (!walletFull) {
+          push("ai","Connect your wallet first — then ask for your portfolio pulse.");
+          setTyping(false);
+          return;
+        }
+
+        const [portRes, earnRes, recurRes] = await Promise.allSettled([
+          fetch(`${JUP_PORTFOLIO}/positions/${walletFull}`).then(r=>r.json()),
+          fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`).then(r=>r.json()),
+          fetch(`${JUP_RECUR_BASE}/getRecurringOrders?user=${walletFull}&orderStatus=active`).then(r=>r.json()),
+        ]);
+
+        const portItems  = portRes.status==="fulfilled"  ? (Array.isArray(portRes.value) ? portRes.value : portRes.value?.data||portRes.value?.elements||[]) : [];
+        const earnArr    = earnRes.status==="fulfilled"  ? (Array.isArray(earnRes.value) ? earnRes.value : earnRes.value?.data||earnRes.value?.positions||[]) : [];
+        const recurArr   = recurRes.status==="fulfilled" ? (Array.isArray(recurRes.value) ? recurRes.value : recurRes.value?.data||recurRes.value?.orders||[]) : [];
+
+        const totalUSD   = portItems.reduce((s,el)=>s+(parseFloat(el.value)||0),0);
+        const activeEarn = earnArr.filter(e=>parseFloat(e.underlyingAssets||e.amount||e.value||0)>0);
+        const spotTokens = Object.entries(portfolio)
+          .filter(([,v])=>v>0)
+          .map(([sym,amt])=>({ sym, amt, usd:prices[sym]?(amt*prices[sym]).toFixed(2):null }))
+          .sort((a,b)=>parseFloat(b.usd||0)-parseFloat(a.usd||0))
+          .slice(0,6);
+        const idleTotal  = (portfolio.USDC||0)+(portfolio.USDT||0);
+
+        gathered = {
+          type:"PORTFOLIO_PULSE",
+          totalUSD:    totalUSD.toFixed(2),
+          spotTokens,
+          activeEarn:  activeEarn.length,
+          openDCA:     recurArr.length,
+          idleStable:  idleTotal>5 ? idleTotal.toFixed(2) : null,
+        };
+      }
+
+      // ── Claude synthesis: turn raw data into one sharp message ─────────────
+      const synthPrompt = buildPowerSynthesisPrompt(cmdId, gathered, token);
+      const synthRes = await fetch("/api/claude", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({
+          model:"claude-sonnet-4-20250514",
+          max_tokens:500,
+          system:`You are ChatFi, a sharp DeFi AI on Jupiter/Solana. Write a concise synthesis of live data pulled from Jupiter's APIs. Use **bold** for numbers and token names. Use bullet points sparingly. Max 180 words. No hype. No emojis. Plain text only — no JSON.`,
+          messages:[{ role:"user", content:synthPrompt }],
+        }),
+      });
+      const synthData = await synthRes.json();
+      const synthesis = synthData?.content?.[0]?.text || "Here's what I found:";
+
+      histRef.current = [...histRef.current, { role:"assistant", content:synthesis }];
+      try { sessionStorage.setItem("chatfi-hist", JSON.stringify(histRef.current.slice(-40))); } catch {}
+
+      push("ai", synthesis, { powerCommand:{ id:cmdId, token, gathered } });
+
+    } catch(err) {
+      push("ai", `Power command failed: ${err?.message||"Unknown error"}. Try again.`);
+    }
+    setTyping(false);
+  };
+
+  const buildPowerSynthesisPrompt = (cmdId, d, token) => {
+    if (cmdId==="SMART_ENTRY") return `
+Live Jupiter data for ${token} smart entry:
+- Price: ${d.price!=null?`$${Number(d.price).toFixed(d.price<1?6:4)}`:"unavailable"}
+- 24h change: ${d.change24h!=null?`${d.change24h>0?"+":""}${d.change24h.toFixed(2)}%`:"unavailable"}
+- Jupiter verified: ${d.isVerified?"Yes":"No"}
+- Organic score: ${d.organicScore!=null?d.organicScore:"unavailable"}
+- Suspicious flags: ${d.isSus?"Yes — caution":"None"}
+- Trending rank: ${d.trendRank?`#${d.trendRank} of ${d.trendTotal} trending`:"not in top 50"}
+- $100 USDC buys: ${d.outAmt?`${d.outAmt} ${token}`:"quote unavailable"}
+
+Write a sharp smart entry analysis (max 150 words). Should they market buy, set a limit order below current price, or DCA? Give a concrete recommendation. End with: "Options: market buy now · set a limit order · DCA in"`;
+
+    if (cmdId==="EXIT_STRATEGY") return `
+Live Jupiter data for ${token} exit strategy:
+- Price: ${d.price!=null?`$${Number(d.price).toFixed(d.price<1?6:4)}`:"unavailable"}
+- 24h momentum: ${d.change24h!=null?`${d.change24h>0?"+":""}${d.change24h.toFixed(2)}%`:"unavailable"}
+- User holds: ${d.userBal>0?`${d.userBal.toFixed(4)} ${token}`:"unknown / zero"}
+- Market sell value: ${d.usdcOut?`$${d.usdcOut} USDC`:"unavailable"}
+- Price impact: ${d.priceImpact?`${d.priceImpact}%`:"unavailable"}
+- Route: ${d.dexPath||"unavailable"}
+- Trending rank: ${d.trendRank?`#${d.trendRank} in top traded`:"not trending"}
+- Limit sell suggestion (+3%): ${d.limitSuggestion?`$${d.limitSuggestion}`:"unavailable"}
+
+Write a sharp exit analysis (max 150 words). Is momentum good or bad? Market sell, limit sell at a higher price, or hold? End with: "Options: market sell · limit sell +3% · OCO bracket"`;
+
+    if (cmdId==="DEEP_DIVE") return `
+Full Jupiter data for ${token} deep dive:
+- Price: ${d.price!=null?`$${Number(d.price).toFixed(d.price<1?6:4)}`:"N/A"} | 24h: ${d.change24h!=null?`${d.change24h>0?"+":""}${d.change24h.toFixed(2)}%`:"N/A"}
+- Verified: ${d.isVerified?"Yes":"No"} | Suspicious: ${d.isSus?"Yes — caution!":"No"}
+- Freeze authority: ${d.freezeAuth?"Active (risk)":"Disabled"} | Mint authority: ${d.mintAuth?"Active (risk)":"Disabled"}
+- Organic score: ${d.organicScore!=null?`${d.organicScore}/100`:"N/A"} | Organic rank: ${d.organicRank?`#${d.organicRank} of ${d.totalInRank}`:"outside top 100"}
+- Liquidity: ${d.liquidity?`$${Number(d.liquidity).toLocaleString()}`:"N/A"}
+- Market cap: ${d.mcap?`$${Number(d.mcap).toLocaleString()}`:"N/A"} | FDV: ${d.fdv?`$${Number(d.fdv).toLocaleString()}`:"N/A"}
+- 24h volume: ${d.dailyVol?`$${Number(d.dailyVol).toLocaleString()}`:"N/A"}
+- Holders: ${d.holders?Number(d.holders).toLocaleString():"N/A"}
+- Buys/Sells 24h: ${d.buys24h||"N/A"} / ${d.sells24h||"N/A"}
+- Price impact ($100): ${d.priceImpact?`${d.priceImpact}%`:"N/A"} via ${d.dexPath||"N/A"}
+- Tags: ${d.tags.join(", ")||"none"}
+
+Write a sharp, honest deep dive (max 170 words). Cover safety verdict, price momentum, liquidity health, and overall verdict (Buy / Watch / Avoid). End with: "Options: buy · set price alert · show swap route"`;
+
+    if (cmdId==="PORTFOLIO_PULSE") return `
+Live portfolio snapshot for connected wallet:
+- Estimated DeFi value: $${d.totalUSD}
+- Top holdings: ${d.spotTokens.map(t=>`${t.sym} ${Number(t.amt).toFixed?Number(t.amt).toFixed(2):t.amt}${t.usd?` ($${t.usd})`:""}`).join(", ")||"none"}
+- Active earn positions: ${d.activeEarn}
+- Open DCA orders: ${d.openDCA}
+- Idle stablecoins: ${d.idleStable?`$${d.idleStable} USDC/USDT sitting idle`:"none detected"}
+
+Write a sharp portfolio pulse (max 150 words): total value, biggest positions, orders status, idle capital. If idle stables detected, flag it as an opportunity. End with: "Options: deposit idle to earn · view full portfolio · check open orders"`;
+
+    return `Summarise this live data for the user in 100 words: ${JSON.stringify(d)}`;
+  };
+
   const send = async (override) => {
     const raw = (override ?? input).trim();
     if (!raw || typing) return;
+
+    // ── Power Command intercept (runs before Claude call) ────────────────────
+    const powerCmd = detectPowerCommand(raw);
+    if (powerCmd) {
+      await executePowerCommand(powerCmd.id, powerCmd.token, raw);
+      return;
+    }
 
     // ── Keyword shortcuts — handled client-side, never sent to Claude ─────────
     const lower = raw.toLowerCase().trim();
@@ -6583,6 +6879,43 @@ Order: \`${orderKey.slice(0,20)}…\`
                     ))}
                   </div>
                 )}
+                {m.powerCommand && (() => {
+                  const { id, token, gathered } = m.powerCommand;
+                  const btns = [];
+                  if (id==="SMART_ENTRY" && token) {
+                    btns.push({ label:`Buy ${token} now`,          action:()=>send(`swap $100 USDC to ${token}`) });
+                    btns.push({ label:`Limit order ${token}`,      action:()=>send(`limit order buy ${token} below ${gathered.price?(gathered.price*0.98).toFixed(gathered.price<1?6:4):"market"}`) });
+                    btns.push({ label:`DCA into ${token}`,         action:()=>send(`DCA $20 USDC into ${token} daily for 5 days`) });
+                  }
+                  if (id==="EXIT_STRATEGY" && token) {
+                    btns.push({ label:`Market sell ${token}`,      action:()=>send(`swap all my ${token} to USDC`) });
+                    btns.push({ label:`Limit sell +3%`,            action:()=>send(`limit order sell ${token} above ${gathered.limitSuggestion||"current price"}`) });
+                    btns.push({ label:`OCO bracket`,               action:()=>send(`OCO on ${token} TP ${gathered.limitSuggestion} SL ${gathered.price?(gathered.price*0.95).toFixed(gathered.price<1?6:4):"market"}`) });
+                  }
+                  if (id==="DEEP_DIVE" && token) {
+                    btns.push({ label:`Buy ${token}`,              action:()=>send(`swap $100 USDC to ${token}`) });
+                    btns.push({ label:`Price alert`,               action:()=>send(`alert me when ${token} is above ${gathered.price?(gathered.price*1.1).toFixed(gathered.price<1?6:4):"current price"}`) });
+                    btns.push({ label:`Show swap route`,           action:()=>send(`show route USDC to ${token}`) });
+                  }
+                  if (id==="PORTFOLIO_PULSE") {
+                    if (gathered.idleStable) btns.push({ label:`Earn yield on idle $${gathered.idleStable}`, action:()=>send("show earn vaults") });
+                    btns.push({ label:`Full portfolio`,            action:()=>send("my portfolio") });
+                    btns.push({ label:`Open DCA orders`,           action:()=>send("my recurring orders") });
+                  }
+                  if (!btns.length) return null;
+                  return (
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:7, marginTop:12 }}>
+                      {btns.map((b,i) => (
+                        <button key={i} onClick={b.action}
+                          style={{ fontSize:12, fontWeight:600, color:T.accent, background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:20, padding:"6px 14px", cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap" }}
+                          onMouseEnter={e=>{ e.currentTarget.style.background=T.accent; e.currentTarget.style.color="#0d1117"; }}
+                          onMouseLeave={e=>{ e.currentTarget.style.background=T.accentBg; e.currentTarget.style.color=T.accent; }}>
+                          {b.label}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           ))}
