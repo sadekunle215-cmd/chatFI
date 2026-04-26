@@ -10010,31 +10010,34 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         {/* ── Top Wallets Leaderboard — live, ranked by 7d PnL via Helius ──── */}
         {!showCopyTrade && (
           <div style={{ margin:"0 16px 12px" }}>
-            {/* Header row — always visible, acts as toggle */}
-            <div
-              onClick={() => { if (leaderboard.length) setLeaderboardExpanded(e => !e); }}
-              style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: leaderboardExpanded ? 8 : 0, cursor: leaderboard.length ? "pointer" : "default" }}>
+            {/* Header row */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: leaderboardExpanded ? 8 : 0 }}>
               <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:11, color:T.text3, letterSpacing:"0.07em", textTransform:"uppercase" }}>
                 <SvgBarChart size={11} color={T.text3}/> Top Wallets — Live 7d PnL
-                {leaderboard.length > 0 && (
-                  <span style={{ fontSize:9, color:T.text3 }}>
-                    {leaderboardExpanded ? "▲" : "▼"}
-                  </span>
-                )}
               </div>
-              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                 {leaderboardCachedAt && leaderboardExpanded && (
                   <span style={{ fontSize:9, color:T.text3 }}>
                     Updated {Math.round((Date.now() - leaderboardCachedAt) / 60000)}m ago
                   </span>
                 )}
                 <button
-                  onClick={e => { e.stopPropagation(); fetchLeaderboard(); }}
+                  onClick={() => fetchLeaderboard()}
                   disabled={leaderboardLoading}
                   className="hov-btn"
                   style={{ padding:"3px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text3, fontSize:10, cursor:"pointer" }}>
                   {leaderboardLoading ? "Loading…" : leaderboard.length ? "Refresh" : "Load"}
                 </button>
+                {/* Fold / expand button — always visible once list has data */}
+                {leaderboard.length > 0 && (
+                  <button
+                    onClick={() => setLeaderboardExpanded(e => !e)}
+                    className="hov-btn"
+                    title={leaderboardExpanded ? "Collapse" : "Expand"}
+                    style={{ padding:"3px 8px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:13, lineHeight:1, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>
+                    {leaderboardExpanded ? "⌃" : "⌄"}
+                  </button>
+                )}
               </div>
             </div>
 
