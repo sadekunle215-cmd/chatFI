@@ -266,11 +266,17 @@ const TOKEN_MINTS = {
   ORCA:    "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",
   POPCAT:  "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
   TRUMP:   "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN",
+  // Bridged major assets — prevents meme-token collision on common tickers
+  BTC:     "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",  // Wormhole WBTC
+  WBTC:    "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",
+  ETH:     "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",  // Wormhole ETH
+  WETH:    "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
 };
 
 const TOKEN_DECIMALS = {
   SOL:9, JUP:6, BONK:5, WIF:6, USDC:6, USDT:6, RAY:6, PYTH:6,
   MSOL:9, JITOSOL:9, BSOL:9, SAMO:9, ORCA:6, POPCAT:9, TRUMP:6,
+  BTC:8, WBTC:8, ETH:8, WETH:8,
 };
 
 // Reliable logo URLs — img.jup.ag blocks cross-origin hotlinks from non-jup.ag origins
@@ -290,6 +296,10 @@ const TOKEN_LOGO_URLS = {
   PYTH:    "https://pyth.network/token.svg",
   POPCAT:  "https://bafkreifonkfmn75h5cdxdlkjkjzzgskvifndrpofb3fbgqxdktfzpkiebe.ipfs.nftstorage.link",
   TRUMP:   "https://bafkreia4g6tdumxzs3yuumfyixxwtlzqkjexifb44lprpioexmzblbq4y4.ipfs.nftstorage.link",
+  WBTC:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh/logo.png",
+  BTC:     "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh/logo.png",
+  ETH:     "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png",
+  WETH:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png",
 };
 
 // Jupiter Prediction categories (per official API docs)
@@ -8065,6 +8075,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                             "invariant":   "https://invariant.app/favicon.ico",
                             "dooar":       "https://dooar.com/favicon.ico",
                             "sanctum":     "https://www.sanctum.so/favicon.ico",
+                            "pump":        "https://pump.fun/favicon.ico",
+                            "humidifi":    "https://www.humidifi.io/favicon.ico",
+                            "fluxbeam":    "https://fluxbeam.xyz/favicon.ico",
+                            "stabble":     "https://stabble.org/favicon.ico",
+                            "obric":       "https://obric.xyz/favicon.ico",
+                            "jupiter":     "https://jup.ag/favicon.ico",
+                            "token swap":  "https://jup.ag/favicon.ico",
                           };
                           const dex     = hop.swapInfo?.label || hop.ammKey?.label || hop.marketMeta?.amm?.label || hop.label || hop.dex || `DEX ${i+1}`;
                           const dexKey  = dex.toLowerCase().split(/[\s(]/)[0];
@@ -8075,9 +8092,11 @@ Order: \`${orderKey.slice(0,20)}…\`
                             <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:6, fontSize:12 }}>
                               <span style={{ width:20, height:20, borderRadius:"50%", background:T.accentBg, border:`1px solid ${T.accent}`, display:"flex", alignItems:"center", justifyContent:"center", color:T.accent, fontSize:10, flexShrink:0 }}>{i+1}</span>
                               {logoUrl
-                                ? <img src={logoUrl} alt={dex} style={{ width:18, height:18, borderRadius:4, objectFit:"contain", flexShrink:0, background:"#fff" }} onError={e => { e.currentTarget.style.display="none"; }} />
-                                : <span style={{ width:18, height:18, borderRadius:4, background:T.border, flexShrink:0 }}/>
-                              }
+                                ? <img src={logoUrl} alt={dex} style={{ width:18, height:18, borderRadius:4, objectFit:"contain", flexShrink:0, background:"#fff" }} onError={e => { e.currentTarget.style.display="none"; e.currentTarget.nextSibling.style.display="flex"; }} />
+                                : null}
+                              <span style={{ width:18, height:18, borderRadius:4, background:T.surface, border:`1px solid ${T.border}`, flexShrink:0, display: logoUrl ? "none" : "flex", alignItems:"center", justifyContent:"center", fontSize:8, fontWeight:700, color:T.accent }}>
+                                {dex.slice(0,2).toUpperCase()}
+                              </span>
                               <span style={{ fontWeight:600, color:T.teal, flex:1 }}>{dex}</span>
                               {pct   && <span style={{ color:T.text3 }}>{pct}</span>}
                               {pi    && <span style={{ color: parseFloat(hop.swapInfo?.priceImpactPct ?? hop.priceImpactPct ?? 0)*100 > 1 ? T.red : T.text3 }}>{pi}</span>}
