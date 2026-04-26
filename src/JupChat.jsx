@@ -1485,39 +1485,24 @@ function JupChatInner() {
   const XSTOCK_SYMBOLS = [
     "SPYx","QQQx","TSLAx","COINx","AAPLx","NVDAx","MSFTx","GOOGx","AMZNx","METAx",
     "NKEx","AMDx","INTCx","ARKKx","GDx","SLVx","GOLDx","BRKx","TSMx","SOFIx",
+    "POLYMARKET","OPENAI","ANTHROPIC","SPACEX","NEURALINK","KALSHI",
+    "NVIDIAx","JPMx","BABAx","NOx","UBERx","AIRBNBx","COSTCOx","WMTx",
   ];
   const fetchXStocks = async (limit = 15) => {
-    const seen = new Set();
-    const merged = [];
-
-    const addTokens = (tokens) => {
-      for (const t of tokens) {
-        const key = (t.id || t.address || t.symbol || "").toLowerCase();
-        if (key && !seen.has(key)) { seen.add(key); merged.push(t); }
-      }
-    };
-
-    // 1. Try Jupiter tag API — collect from all tags, don't short-circuit early
-    for (const tag of ["xstocks", "tokenized-stocks", "stocks", "rwa"]) {
-      try {
-        const data = await jupFetch(`${JUP_TOKEN_TAG}?query=${tag}&limit=50`);
-        const tokens = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-        addTokens(tokens);
-      } catch {}
-      if (merged.length >= limit) return merged.slice(0, limit);
-    }
-
-    // 2. Always supplement with known xStock symbols to fill up to limit
-    for (const sym of XSTOCK_SYMBOLS) {
-      if (merged.length >= limit) break;
-      try {
+    // Jupiter tag API only has 2-3 xStocks tagged — skip it.
+    // Instead, search each known symbol in parallel for reliable full results.
+    const symsToFetch = XSTOCK_SYMBOLS.slice(0, Math.max(limit, XSTOCK_SYMBOLS.length));
+    const results = await Promise.allSettled(
+      symsToFetch.map(async (sym) => {
         const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(sym)}&limit=5`);
         const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-        const match = list.find(t => t.symbol?.toLowerCase() === sym.toLowerCase());
-        if (match) addTokens([match]);
-      } catch {}
-    }
-    return merged.slice(0, limit);
+        return list.find(t => t.symbol?.toLowerCase() === sym.toLowerCase()) || null;
+      })
+    );
+    return results
+      .filter(r => r.status === "fulfilled" && r.value)
+      .map(r => r.value)
+      .slice(0, limit);
   };
 
   // ── Token Recent — newly listed tokens (first pool just created) ────────────
