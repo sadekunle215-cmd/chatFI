@@ -2123,7 +2123,7 @@ function JupChatInner() {
             totalAmount: a.amount != null ? parseFloat(a.amount).toFixed(4) : el.value ? parseFloat(el.value).toFixed(2) : "0",
             claimableAmount: a.claimableAmount ? parseFloat(a.claimableAmount).toFixed(4) : "0",
             vestedPercent: "0", cliff: a.cliff || a.cliffTime || null,
-            lockId: a.pubkey || a.id || el.id }]);
+            lockId: a.pubkey || a.id || el.id }));
         });
       }
     } catch {}
@@ -8064,19 +8064,11 @@ Order: \`${orderKey.slice(0,20)}…\`
                             "crema":       "https://crema.finance/favicon.ico",
                             "invariant":   "https://invariant.app/favicon.ico",
                             "dooar":       "https://dooar.com/favicon.ico",
-                            "stepn":       "https://stepn.com/favicon.ico",
-                            "saros":       "https://saros.finance/favicon.ico",
-                            "symmetry":    "https://symmetry.fi/favicon.ico",
                             "sanctum":     "https://www.sanctum.so/favicon.ico",
-                            "stabblefi":   "https://stabble.org/favicon.ico",
-                            "helium":      "https://helium.com/favicon.ico",
-                            "perena":      "https://perena.org/favicon.ico",
                           };
                           const dex     = hop.swapInfo?.label || hop.ammKey?.label || hop.marketMeta?.amm?.label || hop.label || hop.dex || `DEX ${i+1}`;
                           const dexKey  = dex.toLowerCase().split(/[\s(]/)[0];
                           const logoUrl = Object.entries(DEX_LOGOS).find(([k]) => dexKey.includes(k))?.[1] || null;
-                          const inSym  = hop.inputMint  ? `${hop.inAmount ? (parseInt(hop.inAmount)/1e6).toFixed(4)  : ""} ${routeData.fromSym}` : "";
-                          const outSym = hop.outputMint ? `${hop.outAmount ? (parseInt(hop.outAmount)/1e6).toFixed(4) : ""} ${routeData.toSym}`   : "";
                           const pi     = (hop.swapInfo?.priceImpactPct ?? hop.priceImpactPct) ? `${(parseFloat(hop.swapInfo?.priceImpactPct ?? hop.priceImpactPct)*100).toFixed(4)}% impact` : null;
                           const pct    = hop.percent    ? `${hop.percent}%` : null;
                           return (
