@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Transaction, VersionedTransaction, Keypair } from "@solana/web3.js";
 
-// ── Reown AppKit (wallet connection) ────────────────────────────────────────
+// ── Privy (social login + embedded wallets) ──────────────────────────────────
+import { PrivyProvider, usePrivy, useSolanaWallets } from "@privy-io/react-auth";
+
+// ── Reown AppKit (external wallet connect — Phantom, Backpack, etc.) ─────────
 import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect, useWalletInfo } from "@reown/appkit/react";
 import { SolanaAdapter } from "@reown/appkit-adapter-solana";
 import { solana as solanaMainnet } from "@reown/appkit/networks";
@@ -409,6 +412,10 @@ const T = {
   mono:     "'JetBrains Mono',monospace",
 };
 
+// ── Privy App ID ─────────────────────────────────────────────────────────────
+// Get yours free at https://privy.io — replace with your real App ID
+const PRIVY_APP_ID = import.meta.env.VITE_PRIVY_APP_ID || "YOUR_PRIVY_APP_ID";
+
 // ── Reown AppKit Init ────────────────────────────────────────────────────────
 // Get a free projectId at https://cloud.reown.com
 const REOWN_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f"; // replace with your own
@@ -777,8 +784,8 @@ function TokenMiniChart({ mint, T }) {
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
-export default function JupChat() {
+// ─── Main component (inner — wrapped by PrivyProvider below) ─────────────────
+function JupChatInner() {
   const [msgs, setMsgs] = useState([{ id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" }]);
   const [showWalletModal, setShowWalletModal] = useState(false);
   // WalletConnect state
@@ -806,6 +813,15 @@ export default function JupChat() {
   const { walletInfo: reownWalletInfo }                         = useWalletInfo();
   const [connectedWalletIcon, setConnectedWalletIcon]           = useState(null);
   const prevConnectedRef = useRef(false);
+
+  // ── Privy hooks (social login + embedded wallet) ───────────────────────────
+  const { ready: privyReady, authenticated: privyAuthed, user: privyUser,
+          login: privyLogin, logout: privyLogout } = usePrivy();
+  const { wallets: privySolanaWallets } = useSolanaWallets();
+  // The embedded Privy wallet — auto-created on first social login
+  const privyEmbeddedWallet = privySolanaWallets.find(w => w.walletClientType === "privy");
+  // Track whether Privy is the active auth method
+  const [privyMode, setPrivyMode] = useState(false);
 
   // Capture wallet icon from Reown whenever it changes
   useEffect(() => {
@@ -3638,10 +3654,30 @@ export default function JupChat() {
   }, [showWalletModal]);
 
   // ── Wallet connect ──────────────────────────────────────────────────────────
-  // ── Connect wallet — delegates to Reown AppKit modal ───────────────────────
+  // Opens our custom modal which shows social login + external wallets
   const connectWallet = (pendingSwap) => {
     pendingSwapRef.current = pendingSwap || null;
-    reownOpen(); // Reown handles wallet detection, QR, WalletConnect, mobile deep links
+    setShowWalletModal(true);
+  };
+
+  // Connect via Privy social login (email / Google / Twitter / Discord)
+  const connectWithPrivy = () => {
+    setShowWalletModal(false);
+    privyLogin();
+  };
+
+  // Connect via Reown (Phantom, Backpack, WalletConnect, etc.)
+  const connectWithReown = () => {
+    setShowWalletModal(false);
+    reownOpen();
+  };
+
+  const disconnectWallet = () => {
+    if (privyMode) {
+      privyLogout();
+    } else {
+      reownDisconnect();
+    }
   };
 
   // ── Get active provider for signing ─────────────────────────────────────────
@@ -4141,6 +4177,7 @@ Order: \`${orderKey.slice(0,20)}…\`
   // ── Reown connection sync ────────────────────────────────────────────────────
   // Keeps local wallet/walletFull state in sync with Reown's connected account.
   useEffect(() => {
+    if (privyMode) return; // Privy is active — Reown changes should not override
     if (reownConnected && reownAddress) {
       const justConnected = !prevConnectedRef.current;
       prevConnectedRef.current = true;
@@ -4177,7 +4214,66 @@ Order: \`${orderKey.slice(0,20)}…\`
       push("ai", "👋 Wallet disconnected. Connect again anytime to access your portfolio and trading features.");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reownConnected, reownAddress, reownProvider]);
+  }, [reownConnected, reownAddress, reownProvider, privyMode]);
+
+  // ── Privy connection sync ─────────────────────────────────────────────────
+  // When user logs in via Privy (email/Google/etc), their embedded Solana wallet
+  // is auto-created and behaves exactly like any other connected wallet.
+  useEffect(() => {
+    if (!privyReady) return;
+    if (privyAuthed && privyEmbeddedWallet) {
+      const address = privyEmbeddedWallet.address;
+      const justConnected = !privyMode;
+      setPrivyMode(true);
+      prevConnectedRef.current = true;
+      const display = address.slice(0,4) + "…" + address.slice(-4);
+      setWallet(display);
+      setWalletFull(address);
+      setConnectedWalletName(privyUser?.email?.address || privyUser?.google?.email || "Social Account");
+      // Build a provider shim that delegates signing to Privy's embedded wallet
+      const privyProvider = {
+        signTransaction: async (tx) => {
+          // Privy's sendTransaction handles signing + broadcasting internally for versioned txs.
+          // For our pattern (sign-then-broadcast manually), we use signTransaction directly.
+          const { signedTransaction } = await privyEmbeddedWallet.signTransaction(tx);
+          return signedTransaction;
+        },
+        signAllTransactions: async (txs) => {
+          const results = await Promise.all(txs.map(tx => privyEmbeddedWallet.signTransaction(tx)));
+          return results.map(r => r.signedTransaction);
+        },
+      };
+      connectedProviderRef.current = privyProvider;
+      fetchSolanaBalances(address).then(balances => {
+        setPortfolio(balances);
+        if (justConnected) {
+          fetchPrices().then(live => {
+            const solUSD = balances.SOL && live.SOL ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})` : "";
+            const emailLabel = privyUser?.email?.address || privyUser?.google?.email || "your account";
+            push("ai",
+              `Wallet ready ✓ — signed in as **${emailLabel}**\n\n` +
+              `Your embedded Solana wallet: \`${display}\`\n\n` +
+              `Balance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}` +
+              Object.entries(balances).filter(([k])=>k!=="SOL")
+                .map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("") +
+              "\n\nWhat would you like to do?"
+            );
+          }).catch(()=>{});
+        }
+      }).catch(()=>{});
+    } else if (privyMode && !privyAuthed) {
+      // User logged out of Privy
+      setPrivyMode(false);
+      prevConnectedRef.current = false;
+      connectedProviderRef.current = null;
+      setWallet(null);
+      setWalletFull(null);
+      setConnectedWalletName(null);
+      setPortfolio({});
+      push("ai", "👋 Signed out. Connect again anytime.");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [privyReady, privyAuthed, privyEmbeddedWallet, privyUser]);
 
   // ── Send message to Claude ──────────────────────────────────────────────────
   const send = async (override) => {
@@ -4772,10 +4868,16 @@ Order: \`${orderKey.slice(0,20)}…\`
                 </button>
               </div>
             ) : (
-              <button onClick={() => connectWallet(null)} className="hov-btn"
-                style={{ width:"100%", padding:"8px 12px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:500, cursor:"pointer" }}>
-                Connect Wallet
-              </button>
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                <button onClick={connectWithPrivy} className="hov-btn"
+                  style={{ width:"100%", padding:"8px 12px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                  Sign In (Email / Google)
+                </button>
+                <button onClick={connectWithReown} className="hov-btn"
+                  style={{ width:"100%", padding:"7px 12px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
+                  Connect Wallet
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -4887,7 +4989,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                   ) : (
                     <button onClick={() => connectWallet(null)} className="hov-btn"
                       style={{ padding:"6px 14px", background:T.accent, border:"none", borderRadius:20, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer", boxShadow:`0 0 12px ${T.accent}44`, whiteSpace:"nowrap" }}>
-                      Connect Wallet
+                      Sign In
                     </button>
                   )}
                 </div>
@@ -4946,10 +5048,20 @@ Order: \`${orderKey.slice(0,20)}…\`
               <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6 }}>
                 <div dangerouslySetInnerHTML={{ __html:fmt(m.text) }} />
                 {m.showConnectBtn && !wallet && (
-                  <button onClick={() => connectWallet(null)}
-                    style={{ marginTop:12, display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"9px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
-                    <SvgLink size={14} color="#0d1117"/> Connect Wallet
-                  </button>
+                  <div style={{ marginTop:12, display:"flex", flexDirection:"column", gap:8 }}>
+                    {/* ── Social / email login via Privy ── */}
+                    <button onClick={connectWithPrivy}
+                      style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"10px 16px", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:700, cursor:"pointer", width:"100%" }}>
+                      {/* Mail icon */}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0d1117" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+                      Sign in with Email / Google
+                    </button>
+                    {/* ── External wallet (Phantom, Backpack, etc.) via Reown ── */}
+                    <button onClick={connectWithReown}
+                      style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text1, fontSize:13, fontWeight:600, cursor:"pointer", width:"100%" }}>
+                      <SvgLink size={14} color={T.text1}/> Connect Wallet
+                    </button>
+                  </div>
                 )}
                 {m.clawbackItems?.length > 0 && (
                   <div style={{ marginTop:12, display:"flex", flexDirection:"column", gap:6 }}>
@@ -7590,6 +7702,112 @@ Order: \`${orderKey.slice(0,20)}…\`
           </div>
         </div>
       </div>
+
+      {/* ── Connect / Sign In Modal ─────────────────────────────────────────── */}
+      {showWalletModal && (
+        <div style={{
+          position:"fixed", inset:0, zIndex:1000,
+          background:"rgba(0,0,0,0.7)", backdropFilter:"blur(4px)",
+          display:"flex", alignItems:"flex-end", justifyContent:"center",
+          padding:"0 0 env(safe-area-inset-bottom,0)",
+          animation:"fadeUp 0.18s ease",
+        }} onClick={() => setShowWalletModal(false)}>
+          <div style={{
+            width:"100%", maxWidth:480,
+            background:T.surface, borderRadius:"20px 20px 0 0",
+            border:`1px solid ${T.border}`, borderBottom:"none",
+            padding:"20px 20px 32px",
+            animation:"fadeUp 0.22s ease",
+          }} onClick={e => e.stopPropagation()}>
+
+            {/* Header */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20 }}>
+              <div>
+                <div style={{ fontSize:17, fontWeight:700, color:T.text1 }}>Connect</div>
+                <div style={{ fontSize:12, color:T.text3, marginTop:2 }}>Sign in or connect an existing wallet</div>
+              </div>
+              <button onClick={() => setShowWalletModal(false)}
+                style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:"50%", width:30, height:30, color:T.text2, fontSize:14, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
+            </div>
+
+            {/* Social Login section */}
+            <div style={{ fontSize:10, color:T.text3, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:10 }}>Recommended</div>
+            <button onClick={connectWithPrivy}
+              style={{ width:"100%", display:"flex", alignItems:"center", gap:12, padding:"13px 16px", background:T.accentBg, border:`1px solid ${T.accent}55`, borderRadius:14, cursor:"pointer", marginBottom:10, transition:"all 0.15s" }}
+              className="hov-btn">
+              <div style={{ width:36, height:36, borderRadius:10, background:T.accent, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0d1117" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+              </div>
+              <div style={{ textAlign:"left" }}>
+                <div style={{ fontSize:14, fontWeight:700, color:T.text1 }}>Social Login</div>
+                <div style={{ fontSize:11, color:T.text3, marginTop:1 }}>Email, Google, Twitter, Discord — wallet auto-created</div>
+              </div>
+              <div style={{ marginLeft:"auto", fontSize:10, fontWeight:700, color:T.accent, background:`${T.accent}22`, padding:"3px 8px", borderRadius:6 }}>NEW</div>
+            </button>
+
+            {/* Divider */}
+            <div style={{ display:"flex", alignItems:"center", gap:10, margin:"16px 0" }}>
+              <div style={{ flex:1, height:1, background:T.border }}/>
+              <span style={{ fontSize:11, color:T.text3 }}>or use a wallet</span>
+              <div style={{ flex:1, height:1, background:T.border }}/>
+            </div>
+
+            {/* External wallet options */}
+            {[
+              { name:"Phantom",     icon: WALLET_LOGOS["Phantom"] },
+              { name:"Solflare",    icon: WALLET_LOGOS["Solflare"] },
+              { name:"Backpack",    icon: WALLET_LOGOS["Backpack"] },
+              { name:"Coinbase Wallet", icon:"https://www.coinbase.com/favicon.ico" },
+              { name:"Magic Eden", icon:"https://magiceden.io/favicon.ico" },
+              { name:"Trust",       icon: WALLET_LOGOS["Trust Wallet"] },
+            ].map(w => (
+              <button key={w.name} onClick={connectWithReown}
+                style={{ width:"100%", display:"flex", alignItems:"center", gap:12, padding:"11px 14px", background:"none", border:`1px solid ${T.border}`, borderRadius:12, cursor:"pointer", marginBottom:8, transition:"all 0.15s" }}
+                className="hov-btn">
+                <img src={w.icon} alt={w.name}
+                  style={{ width:32, height:32, borderRadius:8, objectFit:"cover", flexShrink:0 }}
+                  onError={e => { e.currentTarget.style.display="none"; }} />
+                <span style={{ fontSize:14, fontWeight:500, color:T.text1 }}>{w.name}</span>
+              </button>
+            ))}
+
+            <div style={{ textAlign:"center", fontSize:11, color:T.text3, marginTop:8 }}>
+              By connecting you agree to our Terms of Service
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// ─── Root export — wraps everything in PrivyProvider ─────────────────────────
+// Privy handles social auth (email, Google, Twitter, Discord) and automatically
+// creates an embedded Solana wallet for every user that logs in socially.
+// Reown AppKit stays active alongside for users who prefer external wallets.
+export default function JupChat() {
+  return (
+    <PrivyProvider
+      appId={PRIVY_APP_ID}
+      config={{
+        // Login methods shown in the Privy modal
+        loginMethods: ["email", "google", "twitter", "discord"],
+        appearance: {
+          theme: "dark",
+          accentColor: "#c7f284",
+          logo: "https://jup.ag/favicon.ico",
+        },
+        // Auto-create a Solana embedded wallet for every new user
+        embeddedWallets: {
+          createOnLogin: "users-without-wallets",
+          requireUserPasswordOnCreate: false,
+          noPromptOnSignature: true,   // sign transactions silently (no extra modal)
+        },
+        // Solana mainnet
+        solanaClusters: [{ name: "mainnet-beta", rpcUrl: import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com" }],
+      }}
+    >
+      <JupChatInner />
+    </PrivyProvider>
   );
 }
