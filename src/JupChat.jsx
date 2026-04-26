@@ -416,7 +416,7 @@ Rules:
 - "new tokens" / "recently listed" / "new listings" / "just launched" → FETCH_TOKEN_RECENT
 - "can I verify X?" / "verify eligibility" / "submit X for verification" → CHECK_TOKEN_VERIFY
 - "my portfolio" / "my wallet" / "my positions" / "my orders" / "my bets" → FETCH_PORTFOLIO
-- "claim" / "claim winnings" / "claim payout" → CLAIM_PAYOUTS
+- "claim" / "claim winnings" / "claim payout" / "claim ASR" / "claim governance rewards" / "claim JUP rewards" → CLAIM_PAYOUTS
 - sports + predict/bet / "EPL" / "Champions League" / specific match → ALWAYS do BOTH: SHOW_PREDICTION then FETCH_PREDICTIONS
 - "predictions" / "show markets" / "what can I bet on" → FETCH_PREDICTIONS
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
@@ -866,8 +866,19 @@ function TokenMiniChart({ mint, T }) {
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
+const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" };
+
 function JupChatInner() {
-  const [msgs, setMsgs] = useState([{ id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" }]);
+  const [msgs, setMsgs] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("chatfi-msgs");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return [INITIAL_MSG];
+  });
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showSignInDropdown, setShowSignInDropdown] = useState(false);
   // WalletConnect state
@@ -1058,7 +1069,7 @@ function JupChatInner() {
   const tokenCacheRef    = useRef({ ...TOKEN_MINTS });
   const tokenDecimalsRef = useRef({ ...TOKEN_DECIMALS });
 
-  const histRef     = useRef([]);
+  const histRef     = useRef((() => { try { const h = sessionStorage.getItem("chatfi-hist"); return h ? JSON.parse(h) : []; } catch { return []; } })());
   const endRef      = useRef(null);
   const textareaRef = useRef(null);
 
@@ -1738,6 +1749,21 @@ function JupChatInner() {
       if (stakedRes && !stakedRes.error) results.stakedJup = stakedRes;
     } catch {}
 
+    // ── 8b. JUP ASR (Active Staking Rewards) ─────────────────────────────────
+    try {
+      // Jupiter ASR: claimable governance rewards for staked JUP holders
+      // epoch-based, claimable at vote.jup.ag/asr
+      const asrRes = await fetch(`https://vote.jup.ag/api/asr/claimable?wallet=${walletAddress}`)
+        .then(r => r.json()).catch(() => null);
+      if (asrRes && !asrRes.error) {
+        // asrRes shape: { claimable: true/false, amount: number, epoch: number, token: "USDC"|"JUP" }
+        // or array of epochs
+        const asrArr = Array.isArray(asrRes) ? asrRes : [asrRes];
+        const claimableEpochs = asrArr.filter(a => a && (a.claimable || parseFloat(a.amount || 0) > 0));
+        if (claimableEpochs.length > 0) results.asrRewards = claimableEpochs;
+      }
+    } catch {}
+
     // ── 9. Perps positions ────────────────────────────────────────────────────
     try {
       const perpData = await jupFetch(`${JUP_PORTFOLIO}/positions/${walletAddress}?platforms=jupiter-perps`);
@@ -1798,14 +1824,26 @@ function JupChatInner() {
           const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
           const totalRaw = lk.totalRaw || lk.totalAmount || lk.amount || lk.depositedAmount || 0;
           const claimRaw = lk.claimableRaw || lk.claimableAmount || lk.unlockedAmount || 0;
+          // Compute claimable: check if cliff has passed and tokens are unvested
+          const cliffTs = lk.cliff || lk.cliffTime || lk.cliffTimestamp || 0;
+          const cliffPassed = cliffTs ? (Date.now() / 1000 > cliffTs) : true;
+          const claimedRaw = lk.claimedAmount || lk.claimedRaw || 0;
+          const unlockedPct = lk.unlockedPercent || lk.vestedPercent || 0;
+          // If claimRaw is 0 but cliff passed and unlockedPct > 0 and totalRaw > 0
+          // → compute from unlockedPercent minus already-claimed
+          let effectiveClaimRaw = claimRaw;
+          if (!effectiveClaimRaw && cliffPassed && unlockedPct > 0 && totalRaw > 0) {
+            effectiveClaimRaw = Math.max(0, (totalRaw * unlockedPct / 100) - claimedRaw);
+          }
           return {
             ...lk,
             lockId:          lk.pubkey || lk.id || lk.address,
             symbol:          sym,
-            claimableAmount: typeof claimRaw === "number" && claimRaw > 1000 ? fmtAmt(claimRaw) : parseFloat(claimRaw || 0).toFixed(4),
+            claimableAmount: typeof effectiveClaimRaw === "number" && effectiveClaimRaw > 1000 ? fmtAmt(effectiveClaimRaw) : parseFloat(effectiveClaimRaw || 0).toFixed(4),
             totalAmount:     typeof totalRaw === "number" && totalRaw > 1000 ? fmtAmt(totalRaw) : parseFloat(totalRaw || 0).toFixed(4),
-            vestedPercent:   totalRaw > 0 ? ((parseFloat(claimRaw) / parseFloat(totalRaw)) * 100).toFixed(1) : "0",
-            cliff:           lk.cliff || lk.cliffTime || lk.cliffTimestamp || null,
+            vestedPercent:   totalRaw > 0 ? ((parseFloat(effectiveClaimRaw + claimedRaw) / parseFloat(totalRaw)) * 100).toFixed(1) : (unlockedPct ? String(unlockedPct) : "0"),
+            cliff:           cliffTs || null,
+            cliffPassed,
           };
         });
       }
@@ -2042,14 +2080,23 @@ function JupChatInner() {
       const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
       const totalRaw = acct.totalRaw || acct.totalAmount || acct.amount || acct.depositedAmount || 0;
       const claimRaw = acct.claimableRaw || acct.claimableAmount || acct.unlockedAmount || 0;
+      const claimedRaw = acct.claimedAmount || acct.claimedRaw || 0;
+      const cliffTs = acct.cliff || acct.cliffTime || acct.cliffTimestamp || 0;
+      const cliffPassed = cliffTs ? (Date.now() / 1000 > cliffTs) : true;
+      const unlockedPct = acct.unlockedPercent || acct.vestedPercent || 0;
+      let effectiveClaimRaw = claimRaw;
+      if (!effectiveClaimRaw && cliffPassed && unlockedPct > 0 && totalRaw > 0) {
+        effectiveClaimRaw = Math.max(0, (totalRaw * unlockedPct / 100) - claimedRaw);
+      }
       return {
         ...acct,
         lockId:          acct.pubkey || acct.id || acct.address,
         symbol:          mintSym,
-        claimableAmount: typeof claimRaw === "number" && claimRaw > 1000 ? fmtAmt(claimRaw) : parseFloat(claimRaw || 0).toFixed(4),
+        claimableAmount: typeof effectiveClaimRaw === "number" && effectiveClaimRaw > 1000 ? fmtAmt(effectiveClaimRaw) : parseFloat(effectiveClaimRaw || 0).toFixed(4),
         totalAmount:     typeof totalRaw === "number" && totalRaw > 1000 ? fmtAmt(totalRaw) : parseFloat(totalRaw || 0).toFixed(4),
-        vestedPercent:   totalRaw > 0 ? ((parseFloat(claimRaw) / parseFloat(totalRaw)) * 100).toFixed(1) : "0",
-        cliff:           acct.cliff || acct.cliffTime || acct.cliffTimestamp || null,
+        vestedPercent:   totalRaw > 0 ? ((parseFloat(effectiveClaimRaw + claimedRaw) / parseFloat(totalRaw)) * 100).toFixed(1) : (unlockedPct ? String(unlockedPct) : "0"),
+        cliff:           cliffTs || null,
+        cliffPassed,
       };
     });
 
@@ -3163,6 +3210,51 @@ function JupChatInner() {
     } catch (err) {
       push("ai", `Could not fetch positions: ${err?.message || "Unknown error"}. Please try again.`);
     }
+
+    // ── Also check ASR governance rewards ──────────────────────────────────
+    try {
+      const asrRes = await fetch(`https://vote.jup.ag/api/asr/claimable?wallet=${walletFull}`).then(r => r.json()).catch(() => null);
+      const asrArr = Array.isArray(asrRes) ? asrRes : (asrRes ? [asrRes] : []);
+      const claimableAsr = asrArr.filter(a => a && (a.claimable || parseFloat(a.amount || 0) > 0));
+      if (claimableAsr.length > 0) {
+        const totalAsr = claimableAsr.reduce((s, a) => s + parseFloat(a.amount || 0), 0);
+        const token = claimableAsr[0]?.token || "JUP";
+        // Try to get claim tx from Jupiter vote API
+        let asrClaimed = 0;
+        for (const asr of claimableAsr) {
+          try {
+            const claimRes = await fetch(`https://vote.jup.ag/api/asr/claim`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ wallet: walletFull, epoch: asr.epoch }),
+            }).then(r => r.json()).catch(() => null);
+            if (claimRes?.transaction) {
+              const provider = getActiveProvider();
+              const bytes  = b64ToBytes(claimRes.transaction);
+              const tx     = VersionedTransaction.deserialize(bytes);
+              const signed = await provider.signTransaction(tx);
+              const rpcRes = await jupFetch(SOLANA_RPC, {
+                method: "POST",
+                body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signed.serialize()), { encoding:"base64", skipPreflight:true }] },
+              });
+              const sig = rpcRes?.result;
+              if (sig) {
+                push("ai", `✓ Claimed ASR reward: **${parseFloat(asr.amount || 0).toFixed(4)} ${token}**\n[View on Solscan →](https://solscan.io/tx/${sig})`);
+                asrClaimed++;
+              }
+            } else {
+              // No on-chain tx available — inform user
+              push("ai", `🏅 You have **${totalAsr.toFixed(4)} ${token}** in unclaimed JUP ASR (Active Staking Rewards).\n\nClaim them at [vote.jup.ag/asr](https://vote.jup.ag/asr) — connect your wallet there to claim.`);
+              break;
+            }
+          } catch { /* skip individual ASR epoch errors */ }
+        }
+        if (asrClaimed > 0) {
+          const updated = await fetchSolanaBalances(walletFull);
+          setPortfolio(updated);
+        }
+      }
+    } catch { /* ASR check non-fatal */ }
   };
 
   // ── Swap quote ──────────────────────────────────────────────────────────────
@@ -4269,7 +4361,11 @@ Order: \`${orderKey.slice(0,20)}…\`
   // ── Push message helper ─────────────────────────────────────────────────────
   const push = (role, text, extra={}) => {
     const id = Date.now() + Math.random();
-    setMsgs(m => [...m, { id, role, text, ...extra }]);
+    setMsgs(m => {
+      const next = [...m, { id, role, text, ...extra }];
+      try { sessionStorage.setItem("chatfi-msgs", JSON.stringify(next.slice(-80))); } catch {}
+      return next;
+    });
     return id;
   };
 
@@ -4367,6 +4463,38 @@ Order: \`${orderKey.slice(0,20)}…\`
   const send = async (override) => {
     const raw = (override ?? input).trim();
     if (!raw || typing) return;
+
+    // ── Keyword shortcuts — handled client-side, never sent to Claude ─────────
+    const lower = raw.toLowerCase().trim();
+
+    // "refresh" / "reload" — save chat then reload page
+    if (lower === "refresh" || lower === "reload" || lower === "refresh page" || lower === "reload page") {
+      setInput("");
+      push("user", raw);
+      push("ai", "Refreshing the page now… Your chat will be restored. 🔄");
+      setTimeout(() => window.location.reload(), 800);
+      return;
+    }
+
+    // "delete chat" / "clear chat" / "new chat" — wipe chat history
+    if (lower === "delete chat" || lower === "clear chat" || lower === "new chat" || lower === "clear conversation" || lower === "delete conversation") {
+      setInput("");
+      push("user", raw);
+      histRef.current = [];
+      try { sessionStorage.removeItem("chatfi-msgs"); } catch {}
+      setMsgs([INITIAL_MSG]);
+      return;
+    }
+
+    // "disconnect wallet" / "disconnect" / "sign out"
+    if (lower === "disconnect wallet" || lower === "disconnect" || lower === "sign out" || lower === "signout" || lower === "logout" || lower === "log out") {
+      setInput("");
+      push("user", raw);
+      disconnectWallet();
+      return;
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     setInput("");
     push("user", raw);
     setTyping(true);
@@ -4376,6 +4504,7 @@ Order: \`${orderKey.slice(0,20)}…\`
     setShowTokenCard(false); setTokenCardData(null);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
+    try { sessionStorage.setItem("chatfi-hist", JSON.stringify(histRef.current.slice(-40))); } catch {}
 
     try {
       const res = await fetch("/api/claude", {
@@ -4402,6 +4531,7 @@ Order: \`${orderKey.slice(0,20)}…\`
 
       const { text, action, actionData } = parsed;
       histRef.current = [...histRef.current, { role:"assistant", content:rawText }];
+      try { sessionStorage.setItem("chatfi-hist", JSON.stringify(histRef.current.slice(-40))); } catch {}
 
       // ── Action handlers ───────────────────────────────────────────────────
       if (action === "FETCH_PRICE") {
@@ -4932,7 +5062,7 @@ Order: \`${orderKey.slice(0,20)}…\`
             )}
           </div>
           <div style={{ padding:"10px 8px" }}>
-            <button onClick={() => { histRef.current=[]; setMsgs([{id:Date.now(),role:"ai",text:"New conversation started. How can I help?"}]); setChatHistory(h=>[{id:Date.now(),title:"New conversation",active:true},...h.map(c=>({...c,active:false}))]); }}
+            <button onClick={() => { histRef.current=[]; try{sessionStorage.removeItem("chatfi-msgs");}catch{} setMsgs([INITIAL_MSG]); setChatHistory(h=>[{id:Date.now(),title:"New conversation",active:true},...h.map(c=>({...c,active:false}))]); }}
               style={{ width:"100%", padding:"8px 12px", background:"transparent", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer", textAlign:"left", display:"flex", alignItems:"center", gap:8 }}
               className="hov-row">
               <span style={{ fontSize:16 }}>+</span> New chat
@@ -6070,7 +6200,7 @@ Order: \`${orderKey.slice(0,20)}…\`
 
           {/* ── On-chain prediction bet panel ────────────────────────────── */}
           {showBet && betMarket && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, minWidth:0, overflow:"hidden" }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:8, color:T.text1 }}>Place Prediction Bet</div>
               <div style={{ fontSize:13, color:T.text2, marginBottom:14, padding:"8px 12px", background:T.bg, borderRadius:8, lineHeight:1.5 }}>{betMarket.title}</div>
 
@@ -6141,18 +6271,20 @@ Order: \`${orderKey.slice(0,20)}…\`
                   })}
                 </div>
               )}
-              <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
+              <div style={{ marginBottom:8 }}>
                 <input type="number" placeholder="Amount (USDC, min $5)" value={betAmount}
                   onChange={e => setBetAmount(e.target.value)}
-                  style={{ flex:1, padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, boxSizing:"border-box" }}
                 />
+              </div>
+              <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:8 }}>
                 <button onClick={doPredictionBet}
                   disabled={!betSide || !betAmount || parseFloat(betAmount) < 5 || betStatus === "signing"} className="hov-btn"
-                  style={{ padding:"8px 18px", background:betSide==="yes"?T.green:betSide==="no"?T.red:T.text3, border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:600, cursor:"pointer", opacity:(!betSide||parseFloat(betAmount)<5)?0.5:1 }}>
+                  style={{ flex:1, padding:"9px 12px", background:betSide==="yes"?T.green:betSide==="no"?T.red:T.text3, border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:600, cursor:"pointer", opacity:(!betSide||parseFloat(betAmount)<5)?0.5:1 }}>
                   {betStatus === "signing" ? <><span className="spinner"/> Signing…</> : `Confirm ${betSide ? betSide.toUpperCase() : "Pick"}`}
                 </button>
                 <button onClick={() => setShowBet(false)}
-                  style={{ padding:"8px 12px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                  style={{ flex:"0 0 auto", padding:"9px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" }}>
                   Cancel
                 </button>
               </div>
@@ -6667,9 +6799,15 @@ Order: \`${orderKey.slice(0,20)}…\`
                                       : parseFloat(e.value||0).toFixed(2);
                             const label = e.label ? ` · ${e.label}` : "";
                             return (
-                              <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
-                                <span style={{ color:T.text2 }}>{sym} <span style={{ fontSize:10, color:T.text3 }}>Earn{label}</span></span>
-                                <span style={{ fontWeight:600, color:"#68d391" }}>{amt}</span>
+                              <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
+                                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                                  <span style={{ color:T.text2 }}>{sym} <span style={{ fontSize:10, color:T.text3 }}>Earn{label}</span></span>
+                                  <span style={{ fontWeight:600, color:"#68d391" }}>{amt}</span>
+                                </div>
+                                <button onClick={() => { setShowPortfolio(false); setInput("show my earn positions"); setTimeout(() => send(), 80); }} className="hov-btn"
+                                  style={{ width:"100%", padding:"5px", background:"rgba(104,211,145,0.08)", border:`1px solid rgba(104,211,145,0.25)`, borderRadius:7, color:"#68d391", fontSize:11, fontWeight:600, cursor:"pointer", transition:"all 0.15s" }}>
+                                  ⬇ Withdraw
+                                </button>
                               </div>
                             );
                           })}
@@ -6805,6 +6943,36 @@ Order: \`${orderKey.slice(0,20)}…\`
                     );
                   })()}
 
+                  {/* ── JUP ASR (Active Staking Rewards) ── */}
+                  {(portfolioData.asrRewards||[]).length > 0 && (
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                        <SvgCoin size={13} color="#f6ad55"/>
+                        <span style={{ fontSize:11, fontWeight:700, color:"#f6ad55", letterSpacing:"0.08em", textTransform:"uppercase" }}>JUP Governance Rewards</span>
+                        <span style={{ fontSize:10, fontWeight:700, color:"#0d1117", background:"#f6ad55", borderRadius:8, padding:"1px 7px" }}>ASR</span>
+                      </div>
+                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                        {portfolioData.asrRewards.map((asr, i) => {
+                          const amt   = parseFloat(asr.amount || asr.claimableAmount || 0);
+                          const token = asr.token || asr.symbol || "JUP";
+                          const epoch = asr.epoch ? `Epoch ${asr.epoch}` : "";
+                          return (
+                            <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1.5px solid #f6ad5555`, borderRadius:10, fontSize:12 }}>
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                                <span style={{ fontWeight:700, color:"#f6ad55" }}>{amt > 0 ? amt.toFixed(4) : "—"} {token}</span>
+                                {epoch && <span style={{ fontSize:10, color:T.text3 }}>{epoch}</span>}
+                              </div>
+                              <button onClick={() => { setShowPortfolio(false); setInput("claim my JUP ASR governance rewards"); setTimeout(() => send(), 80); }} className="hov-btn"
+                                style={{ width:"100%", padding:"6px", background:"rgba(246,173,85,0.1)", border:`1px solid rgba(246,173,85,0.35)`, borderRadius:8, color:"#f6ad55", fontSize:11, fontWeight:700, cursor:"pointer", transition:"all 0.15s" }}>
+                                🏅 Claim ASR Reward
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* ── Lock / Vesting Positions ── */}
                   {(portfolioData.lockPositions||[]).length > 0 && (
                     <div>
@@ -6817,20 +6985,31 @@ Order: \`${orderKey.slice(0,20)}…\`
                         {portfolioData.lockPositions.map((lk, i) => {
                           const claimable = parseFloat(lk.claimableAmount || 0) > 0;
                           const lockId = lk.lockId || lk.pubkey || lk.id;
+                          const cliffNotPassed = lk.cliff && !lk.cliffPassed;
+                          const cliffDate = lk.cliff ? new Date(lk.cliff * 1000).toLocaleDateString() : null;
                           return (
-                            <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${claimable ? T.greenBd : T.border}`, borderRadius:10, fontSize:12 }}>
+                            <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${claimable ? T.greenBd : cliffNotPassed ? T.border : T.border}`, borderRadius:10, fontSize:12 }}>
                               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:3 }}>
                                 <span style={{ fontWeight:700, color:T.text1 }}>{lk.totalAmount} {lk.symbol}</span>
-                                <span style={{ fontSize:10, padding:"2px 7px", background: claimable ? T.greenBg : T.border, borderRadius:6, color: claimable ? T.green : T.text3, fontWeight:700 }}>
-                                  {lk.vestedPercent}% vested
+                                <span style={{ fontSize:10, padding:"2px 7px", background: claimable ? T.greenBg : cliffNotPassed ? T.redBg : T.border, borderRadius:6, color: claimable ? T.green : cliffNotPassed ? T.red : T.text3, fontWeight:700 }}>
+                                  {cliffNotPassed ? "🔒 Locked" : `${lk.vestedPercent}% vested`}
                                 </span>
                               </div>
                               {claimable && (
-                                <div style={{ color:T.green, fontWeight:600, marginBottom:6 }}>
-                                  {lk.claimableAmount} {lk.symbol} claimable
+                                <div style={{ color:T.green, fontWeight:600, marginBottom:4 }}>
+                                  ✓ {lk.claimableAmount} {lk.symbol} ready to claim
                                 </div>
                               )}
-                              {lk.cliff && <div style={{ color:T.text3, fontSize:11, marginTop:2, marginBottom: claimable ? 6 : 0 }}>Cliff: {new Date(lk.cliff * 1000).toLocaleDateString()}</div>}
+                              {cliffNotPassed && cliffDate && (
+                                <div style={{ color:T.text3, fontSize:11, marginBottom:4 }}>
+                                  Unlocks after: <span style={{ color:T.text2 }}>{cliffDate}</span>
+                                </div>
+                              )}
+                              {!cliffNotPassed && cliffDate && !claimable && (
+                                <div style={{ color:T.text3, fontSize:11, marginBottom:4 }}>
+                                  Cliff passed: {cliffDate}
+                                </div>
+                              )}
                               {claimable && lockId && (
                                 <button onClick={() => doClaimLock(lockId)} disabled={claimingLock === lockId} className="hov-btn"
                                   style={{ width:"100%", marginTop:4, padding:"6px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:8, color:T.green, fontSize:11, fontWeight:700, cursor:"pointer", transition:"all 0.15s" }}>
