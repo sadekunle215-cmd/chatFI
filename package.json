@@ -18,7 +18,8 @@
     "@coral-xyz/anchor": "^0.30.1",
     "bn.js": "^5.2.1",
     "@reown/appkit": "^1.7.3",
-    "@reown/appkit-adapter-solana": "^1.7.3"
+    "@reown/appkit-adapter-solana": "^1.7.3",
+    "@privy-io/react-auth": "^2.4.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
