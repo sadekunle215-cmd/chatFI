@@ -5365,7 +5365,8 @@ Order: \`${orderKey.slice(0,20)}…\`
               }
               const atomicAmt = Math.floor(inUnits * Math.pow(10, fromDec));
               const orderRes  = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${atomicAmt}&taker=${walletFull}`);
-              if (!orderRes?.transaction) throw new Error("No transaction returned");
+              if (orderRes?.error) throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
+              if (!orderRes?.transaction) throw new Error(`No transaction returned — API response: ${JSON.stringify(orderRes).slice(0, 200)}`);
               const txBytes  = Uint8Array.from(atob(orderRes.transaction), c=>c.charCodeAt(0));
               const vTx      = VersionedTransaction.deserialize(txBytes);
               const provider = connectedProviderRef.current;
