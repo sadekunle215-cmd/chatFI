@@ -419,7 +419,7 @@ Available actions:
 - "FETCH_XSTOCKS"   → actionData: { "limit": 15, "sort": "volume" } — tokenized real-world stocks (xStocks / RWA stocks) on Solana. sort: "volume"|"price_change"|"market_cap". Default limit 15.
 - "SET_PRICE_ALERT" → actionData: { "token": "SOL", "condition": "above"|"below", "price": "200" } — set an in-session price alert; ChatFi notifies in chat when price crosses the threshold.
 - "SHOW_TRADE_JOURNAL" → actionData: { "period": "all"|"today"|"week" } — show the user's local trade history and estimated PnL.
-- "BASKET_SWAP"     → actionData: { "trades": [{ "from": "USDC", "to": "SOL", "amountUSD": "100" }, { "from": "USDC", "to": "JUP", "amountUSD": "100" }] } — execute multiple swaps in sequence. Use when user says "buy $X each of A B C" or "split $N between A B C".
+- "BASKET_SWAP"     → actionData: { "trades": [...] } — execute multiple swaps in sequence. Each trade supports THREE amount modes (pick one): amountUSD:"100" (spend $100 of from token), amount:"5.4" (native token units — parse k/K suffix as ×1000, m/M as ×1000000), or portion:"all"|"max"|"half"|"quarter"|"N%" (wallet balance fraction). from/to can vary per trade (many-to-one and one-to-many both work). Examples: "buy $100 each of SOL JUP BONK" → [{from:"USDC",to:"SOL",amountUSD:"100"},…]; "swap 5.4 JUP, 158.4k BONK to USDC" → [{from:"JUP",to:"USDC",amount:"5.4"},{from:"BONK",to:"USDC",amount:"158400"}]; "swap max of SOL PENGU to USDC" → [{from:"SOL",to:"USDC",portion:"max"},{from:"PENGU",to:"USDC",portion:"max"}]; "swap half my JUP and all my FARTCOIN to SOL" → [{from:"JUP",to:"SOL",portion:"half"},{from:"FARTCOIN",to:"SOL",portion:"all"}].
 - "COPY_TRADE"      → actionData: { "wallet": "WALLET_ADDRESS", "limit": 5 } — fetch and show recent swaps from another wallet so user can mirror them. limit default 5.
 
 Rules:
@@ -462,7 +462,7 @@ Rules:
 - "show route" / "how is swap routed" / "which DEX" / "route breakdown" / "swap path" / "which AMM" → SHOW_ROUTE
 - "alert me when" / "notify me when" / "price alert" / "tell me when X hits $Y" / "alert when X above/below" → SET_PRICE_ALERT — extract token, condition (above/below), price
 - "my trades" / "trade history" / "trade journal" / "my PnL" / "what have I traded" / "show my swaps" / "trading history" → SHOW_TRADE_JOURNAL
-- "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" → BASKET_SWAP — parse each token and USD amount into trades array; default from:"USDC"
+- "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" / "swap X JUP and Y BONK to USDC" / "swap all these tokens to USDC" / "swap max/all of A B C to X" / "dump all my A B C into X" → BASKET_SWAP — parse each token, amount mode, and direction into trades array; default from:"USDC" when buying, default to:"USDC" when selling/dumping
 - "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
@@ -942,6 +942,260 @@ function TokenMiniChart({ mint, T }) {
   );
 }
 
+// ─── Blog posts data ──────────────────────────────────────────────────────────
+const BLOG_POSTS = [
+  {
+    id: 1,
+    title: "What is ChatFi? Your AI Trading Copilot on Solana",
+    category: "Overview",
+    readTime: "4 min read",
+    date: "Jun 2025",
+    summary: "ChatFi is the first AI-native trading interface built on Jupiter — the largest DEX aggregator on Solana. Learn what it is, how it works, and why it's different.",
+    sections: [
+      {
+        heading: "The Problem With DeFi Today",
+        body: "DeFi is powerful but brutal to use. You need to know which DEX has the best price, understand slippage, manage multiple tabs, and decode transaction errors — all before you've made a single trade. Most people give up, or make costly mistakes trying."
+      },
+      {
+        heading: "What ChatFi Does Differently",
+        body: "ChatFi wraps Jupiter's entire trading suite — swaps, limit orders, DCA, lending, yield, and prediction markets — behind a natural language interface. You just type what you want. \"Swap $50 of SOL to JUP\" or \"buy $100 each of BONK, PENGU, and FARTCOIN\" — ChatFi figures out the rest and executes it on-chain."
+      },
+      {
+        heading: "Built on Jupiter — The #1 Solana DEX",
+        body: "Jupiter processes billions in monthly swap volume and aggregates liquidity from every major Solana DEX: Orca, Raydium, Meteora, Phoenix, and more. When ChatFi executes your swap, it routes through Jupiter to guarantee you get the best possible price across the entire Solana ecosystem — automatically."
+      },
+      {
+        heading: "Non-Custodial & Trustless",
+        body: "ChatFi never holds your funds. Your wallet stays in your control at all times. When you execute a trade, ChatFi prepares the transaction and your wallet (Phantom, Backpack, Solflare, etc.) signs it. Nothing moves without your explicit approval."
+      },
+      {
+        heading: "Who Is It For?",
+        body: "ChatFi is built for anyone who wants to trade smarter on Solana — from first-time DeFi users who find DEX interfaces confusing, to experienced traders who want to automate strategies and manage portfolios faster."
+      }
+    ],
+    tips: [
+      "Connect your wallet in one tap — Phantom, Backpack, Solflare, and social login all supported",
+      "You don't need to know token addresses — just use ticker symbols like SOL, JUP, BONK",
+      "All transactions happen via Jupiter's audited smart contracts — no middleman"
+    ]
+  },
+  {
+    id: 2,
+    title: "How to Swap Any Token on Solana Instantly",
+    category: "Guide",
+    readTime: "3 min read",
+    date: "Jun 2025",
+    summary: "A step-by-step guide to swapping tokens with ChatFi — from simple SOL→USDC trades to swapping obscure meme coins by contract address.",
+    sections: [
+      {
+        heading: "Basic Swaps",
+        body: "To swap tokens, just describe what you want in plain English. ChatFi's AI parses your intent and opens the swap panel pre-filled and ready to confirm. You review, approve in your wallet, and it's done."
+      },
+      {
+        heading: "What You Can Say",
+        body: "\"Swap 1 SOL to USDC\" · \"Buy $50 of JUP\" · \"Exchange half my USDC for SOL\" · \"Sell all my BONK\" · \"Swap 0.5 SOL to WIF\" — any natural phrasing works. You can specify amounts in USD, in native token units, or as a portion of your balance (half, all, 25%, etc.)."
+      },
+      {
+        heading: "Unknown & Meme Tokens",
+        body: "ChatFi uses Jupiter's live token search API to resolve any token — not just the big ones. If you say \"swap $10 to FARTCOIN\", it searches Jupiter's full index, finds the correct mint address, and routes the swap. You can also paste a contract address directly if you want to be precise."
+      },
+      {
+        heading: "Slippage & Price Impact",
+        body: "ChatFi applies sensible slippage defaults (0.5% for most swaps). For low-liquidity meme coins, slippage is auto-adjusted upward to prevent failed transactions. You can always review the price impact in the swap panel before confirming."
+      },
+      {
+        heading: "After the Swap",
+        body: "Once confirmed, ChatFi shows you a receipt card with: what you sent, what you received, the Jupiter route used, and a Solscan link to inspect the transaction on-chain."
+      }
+    ],
+    tips: [
+      "\"Swap all my X\" automatically reads your wallet balance — no need to type the exact amount",
+      "For meme coins with thin liquidity, consider smaller trade sizes to reduce price impact",
+      "Use \"show route for X to Y\" to preview which DEXes Jupiter will route through before swapping"
+    ]
+  },
+  {
+    id: 3,
+    title: "Basket Swaps: Trade Multiple Tokens in One Command",
+    category: "Feature",
+    readTime: "4 min read",
+    date: "Jun 2025",
+    summary: "Basket swaps let you execute multiple trades simultaneously with a single chat message. Buy a portfolio of tokens, or sell multiple holdings to USDC — all at once.",
+    sections: [
+      {
+        heading: "What Is a Basket Swap?",
+        body: "A basket swap bundles multiple individual swaps into a single workflow. ChatFi prepares all the transactions in parallel, requests one batch approval from your wallet, and then executes each trade sequentially on-chain. It's like doing 5 trades at once, with one wallet confirmation."
+      },
+      {
+        heading: "Buying a Basket of Tokens",
+        body: "The most common use case: deploy capital into multiple tokens at once. Say \"buy $100 each of SOL, JUP, BONK, and WIF\" — ChatFi creates 4 swaps from USDC to each token, each worth $100, and submits them for your approval together."
+      },
+      {
+        heading: "Selling Multiple Tokens to USDC",
+        body: "You can also sell specific amounts of multiple tokens at once. \"Swap 5.4 JUP, 113.7 PENGU, and 158.4k BONK to USDC\" — ChatFi recognises each token and amount, resolves their mint addresses, and prepares all three sell orders. You approve once, they execute in sequence."
+      },
+      {
+        heading: "Using Wallet Balance (Max / All)",
+        body: "You don't have to know your exact balance. \"Swap max of SOL, PENGU, and BONK to USDC\" or \"dump all my JUP and FARTCOIN into SOL\" — ChatFi reads your current wallet balance for each token and sizes each swap accordingly. \"Half\", \"all\", \"max\", \"quarter\", or a percentage like \"50%\" all work."
+      },
+      {
+        heading: "Tips for Reliable Execution",
+        body: "Basket swaps execute trades one by one on-chain. If one swap fails (e.g. not enough balance, token not found), the rest still proceed. Failed swaps are reported individually in chat so you know exactly what happened."
+      }
+    ],
+    tips: [
+      "Use \"k\" shorthand for thousands: \"158.4k BONK\" = 158,400 BONK",
+      "Each swap in a basket gets its own slippage protection — meme coins won't sink your entire batch",
+      "To split $500 evenly across 5 tokens: \"buy $100 each of SOL JUP BONK WIF PENGU\"",
+      "Mix and match: some trades by USD, some by amount, some by portion — all in one message"
+    ]
+  },
+  {
+    id: 4,
+    title: "Automate Your Trades: Limit Orders, DCA & Recurring Buys",
+    category: "Guide",
+    readTime: "5 min read",
+    date: "Jun 2025",
+    summary: "Stop watching charts 24/7. ChatFi lets you set limit orders, take-profit/stop-loss brackets, and scheduled recurring buys — all through conversational commands.",
+    sections: [
+      {
+        heading: "Limit Orders",
+        body: "A limit order executes only when a token hits your target price. \"Buy 100 USDC of SOL if it drops below $140\" or \"Sell 5 SOL when it reaches $200\" — ChatFi creates a Jupiter trigger order that sits on-chain and fires automatically when the condition is met."
+      },
+      {
+        heading: "OCO: Take Profit + Stop Loss Together",
+        body: "OCO (One-Cancels-Other) lets you set a take-profit and a stop-loss on the same position at the same time. \"Buy SOL at $150, set TP at $200 and SL at $130\" — if either condition is triggered, the other is automatically cancelled. This is the standard bracket order strategy used by professional traders."
+      },
+      {
+        heading: "DCA / Recurring Buys",
+        body: "Dollar-cost averaging is proven to reduce the impact of volatility over time. \"Buy $10 of SOL every day for 30 days\" — ChatFi schedules 30 recurring orders via Jupiter's DCA engine. Orders execute automatically at your chosen interval: daily, weekly, monthly, or even every minute."
+      },
+      {
+        heading: "Manage Your Open Orders",
+        body: "Say \"show my trigger orders\" or \"show my recurring orders\" to see all active automations with cancel buttons. You can stop a DCA series at any time, and unfilled limit orders can be cancelled individually."
+      },
+      {
+        heading: "Why Use Automation?",
+        body: "Markets move 24/7. You don't. Automation means your strategy executes even when you're offline, asleep, or away from your phone. It also removes emotional decision-making — you set your plan in advance and the protocol follows it precisely."
+      }
+    ],
+    tips: [
+      "Limit orders are free to set — you only pay the swap fee when they execute",
+      "DCA is ideal for entering volatile positions over time rather than all at once",
+      "\"Cancel all my recurring orders\" stops every active DCA series at once",
+      "Orders expire after 7 days by default — mention a specific expiry if you need longer"
+    ]
+  },
+  {
+    id: 5,
+    title: "Earn Passive Yield on Your Solana Assets",
+    category: "Feature",
+    readTime: "4 min read",
+    date: "Jun 2025",
+    summary: "Your idle USDC and SOL can be earning yield right now. ChatFi connects to Jupiter Earn and Lend to let you deposit, multiply, and withdraw — all in one chat.",
+    sections: [
+      {
+        heading: "What Is Jupiter Earn?",
+        body: "Jupiter Earn is a yield aggregator on Solana. When you deposit assets, they're deployed into carefully curated lending protocols and liquidity strategies — automatically optimised for the best APY. You receive jlTokens in return (e.g. jlUSDC), which represent your share of the pool and accrue yield in real time."
+      },
+      {
+        heading: "How to Deposit",
+        body: "\"Earn yield on 100 USDC\" or \"deposit 5 SOL into Earn\" — ChatFi opens the Earn panel showing available vaults, current APY, and deposit limits. Select a vault, confirm the transaction, and your assets start earning immediately. APYs are variable and update continuously based on protocol demand."
+      },
+      {
+        heading: "Withdrawing Your Funds",
+        body: "\"Show my earn positions\" or \"withdraw my USDC from Earn\" — ChatFi pulls up your current positions with live balances and one-click withdraw buttons. Withdrawals are settled on-chain instantly; no lock-up periods."
+      },
+      {
+        heading: "Multiply: Leveraged Yield",
+        body: "For more advanced users, Multiply lets you loop your position using Jupiter Lend flashloans to amplify yield exposure. For example, deposit JupSOL as collateral, borrow SOL, convert to more JupSOL, and repeat — resulting in 2x–5x leveraged staking yield. ChatFi explains the mechanics and manages the loop for you."
+      },
+      {
+        heading: "Borrow Against Your Assets",
+        body: "You can also borrow stablecoins against your SOL or JLP without selling. \"Borrow 200 USDC using 2 SOL as collateral\" — ChatFi opens the Borrow panel with LTV ratios, liquidation prices, and interest rates displayed clearly before you confirm."
+      }
+    ],
+    tips: [
+      "USDC Earn is the lowest-risk option — good for idle stablecoins",
+      "JLP (Jupiter Liquidity Provider) vaults offer higher APY but with market exposure",
+      "Keep your LTV below 70% when borrowing to avoid liquidation risk",
+      "Ask \"what are the highest APY vaults?\" to see currently best-performing options"
+    ]
+  },
+  {
+    id: 6,
+    title: "Prediction Markets: Bet on Sports & Crypto Events",
+    category: "Feature",
+    readTime: "3 min read",
+    date: "Jun 2025",
+    summary: "Jupiter's prediction markets let you stake USDC on real-world outcomes — football matches, crypto price targets, elections, and more. Here's how to use them via ChatFi.",
+    sections: [
+      {
+        heading: "What Are Prediction Markets?",
+        body: "Prediction markets are decentralised betting pools where participants stake on the outcome of future events. Unlike traditional sports betting, there's no bookmaker — payouts come directly from the pool of participants who bet on the losing side. Odds are determined by market demand, not a centrally set spread."
+      },
+      {
+        heading: "What Can You Bet On?",
+        body: "Jupiter predictions cover: football (EPL, Champions League, La Liga), basketball, crypto price targets (\"Will SOL hit $300 by end of month?\"), US elections, esports, and more. Markets are added continuously based on upcoming events."
+      },
+      {
+        heading: "How to Place a Bet",
+        body: "\"Who's playing in the Champions League final?\" or \"Show me EPL predictions\" — ChatFi fetches live markets and displays them with current odds, pool size, and time remaining. \"Bet $10 on Arsenal to win\" — it opens the prediction panel with your position pre-filled. You approve the USDC transaction and your bet is live on-chain."
+      },
+      {
+        heading: "Claiming Winnings",
+        body: "After an event resolves, say \"claim my winnings\" or \"claim payouts\" — ChatFi checks all your prediction positions and shows any claimable amounts with one-click claim buttons. Winnings are paid in USDC directly to your wallet."
+      },
+      {
+        heading: "Risk & Strategy",
+        body: "Markets with large pool sizes have more predictable odds. Early positions often offer better value before the crowd shifts prices. You can place multiple small positions across different markets to spread risk — just like a traditional betting portfolio."
+      }
+    ],
+    tips: [
+      "Check pool size before betting — thin markets can shift dramatically with large positions",
+      "Claim winnings promptly — unclaimed positions may expire after the resolution window",
+      "\"Show crypto predictions\" filters for on-chain price-based markets specifically",
+      "You can track all your open bets under \"my portfolio\" → predictions tab"
+    ]
+  },
+  {
+    id: 7,
+    title: "Understanding Your Solana Portfolio in ChatFi",
+    category: "Guide",
+    readTime: "3 min read",
+    date: "Jun 2025",
+    summary: "ChatFi gives you a unified view of everything in your wallet — spot balances, DeFi positions, yield, perps, and your trade history — without leaving the chat.",
+    sections: [
+      {
+        heading: "Your Wallet Balances",
+        body: "\"Show my portfolio\" or \"what's in my wallet?\" — ChatFi fetches your current SPL token balances, SOL balance, and their USD values in real time. Tokens are sorted by USD value so you see your largest positions first."
+      },
+      {
+        heading: "DeFi Positions",
+        body: "Beyond spot balances, ChatFi pulls your full DeFi footprint: open limit and DCA orders, Jupiter Earn deposits with live APY, Lend borrow positions with LTV health, LP positions with earned fees, staked JUP, and prediction market bets — all in one panel."
+      },
+      {
+        heading: "Perpetuals Positions",
+        body: "If you've opened leveraged perps positions on Jupiter, they appear in your portfolio with unrealised PnL, liquidation price, and position size. You can increase, decrease, or close perps positions directly from the portfolio panel."
+      },
+      {
+        heading: "Trade Journal",
+        body: "\"Show my trade history\" pulls up your Trade Journal — a chronological log of every swap, limit order fill, and basket trade executed through ChatFi. It shows what you bought and sold, at what price, and your rough PnL estimate. Filter by today, this week, or all time."
+      },
+      {
+        heading: "Price Alerts",
+        body: "Set in-session price alerts to monitor tokens without watching charts. \"Alert me when SOL drops below $140\" — ChatFi monitors the price in the background and sends you a notification message in chat when the condition triggers. You can set multiple alerts across different tokens."
+      }
+    ],
+    tips: [
+      "Ask \"what's my total portfolio value?\" for a quick USD summary across all positions",
+      "Portfolio data refreshes each time you open the panel — always live",
+      "\"My pending invites\" shows unclaimed token sends you've sent via invite link",
+      "You can check any wallet's portfolio, not just yours — paste any Solana address"
+    ]
+  },
+];
+
 // ─── Main component ───────────────────────────────────────────────────────────
 const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" };
 
@@ -1157,6 +1411,8 @@ function JupChatInner() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
   const [showSocialsNav, setShowSocialsNav] = useState(false);
+  const [showBlog, setShowBlog]             = useState(false);
+  const [blogPostIndex, setBlogPostIndex]   = useState(null); // null = list, number = open post
 
   // Dynamic token cache — grows as user searches any token
   const tokenCacheRef    = useRef({ ...TOKEN_MINTS });
@@ -5434,7 +5690,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       // ── BASKET_SWAP ────────────────────────────────────────────────────────
       } else if (action === "BASKET_SWAP") {
         const basketTrades = actionData?.trades || [];
-        if (!basketTrades.length) { push("ai", "No trades found in basket. Try: *buy $100 each of SOL, JUP, and BONK*."); }
+        if (!basketTrades.length) { push("ai", "No trades found in basket. Try: *buy $100 each of SOL, JUP, and BONK* or *swap 5.4 JUP and all my BONK to USDC*."); }
         else if (!walletFull) { push("ai", "Connect your wallet first to execute a basket swap."); }
         else {
           push("ai", (text || "") + `\n\nPreparing **${basketTrades.length} swaps** — you'll approve all at once…`);
@@ -5446,9 +5702,42 @@ Order: \`${orderKey.slice(0,20)}…\`
           // ── Phase 1: resolve mints + fetch all orders in parallel ─────────────
           const BASKET_SLIPPAGE_BPS = 50; // 0.5% — enough room for sequential pool impacts
 
+          // ── Pre-process trades: resolve portion → native amount, parse k/M suffixes ──
+          // This runs before mint-resolution so amounts are concrete numbers by Phase 1.
+          const resolvedTrades = basketTrades.map(t => {
+            const fromSym = (t.from || "USDC").toUpperCase();
+            let amount    = t.amount;
+            let amountUSD = t.amountUSD;
+
+            // Parse numeric suffix shorthand: "158.4k" → 158400, "1.5m" → 1500000
+            if (typeof amount === "string") {
+              const kMatch = amount.match(/^([\d.]+)[kK]$/);
+              const mMatch = amount.match(/^([\d.]+)[mM]$/);
+              if (kMatch)      amount = String(parseFloat(kMatch[1]) * 1_000);
+              else if (mMatch) amount = String(parseFloat(mMatch[1]) * 1_000_000);
+            }
+
+            // Resolve portion ("all"/"max"/"half"/"quarter"/"N%") → native wallet balance
+            if (t.portion && !amount) {
+              const p   = (t.portion || "").toLowerCase().trim();
+              const bal = portfolio[fromSym] ?? 0;
+              if (bal > 0) {
+                if      (p === "all" || p === "max") amount = String(bal);
+                else if (p === "half")                amount = (bal / 2).toFixed(9).replace(/\.?0+$/, "");
+                else if (p === "quarter")             amount = (bal / 4).toFixed(9).replace(/\.?0+$/, "");
+                else {
+                  const pct = p.match(/^(\d+(?:\.\d+)?)%$/);
+                  if (pct) amount = (bal * parseFloat(pct[1]) / 100).toFixed(9).replace(/\.?0+$/, "");
+                }
+                if (amount) amountUSD = null; // use native amount path, not price-lookup path
+              }
+            }
+            return { ...t, amount, amountUSD };
+          });
+
           // Pre-resolve any symbols not already cached (e.g. PENGU, FARTCOIN)
           // resolveToken() hits Jupiter's search API and populates tokenCacheRef automatically.
-          const _allBasketSyms = [...new Set(basketTrades.flatMap(t => [
+          const _allBasketSyms = [...new Set(resolvedTrades.flatMap(t => [
             (t.from || "USDC").toUpperCase(),
             (t.to   || "SOL").toUpperCase(),
           ]))];
@@ -5457,7 +5746,7 @@ Order: \`${orderKey.slice(0,20)}…\`
             await Promise.all(_unknownSyms.map(s => resolveToken(s).catch(() => null)));
           }
 
-          const tradeMeta = basketTrades.map(t => {
+          const tradeMeta = resolvedTrades.map(t => {
             const fromSym  = (t.from || "USDC").toUpperCase();
             const toSym    = (t.to   || "SOL").toUpperCase();
             const fromMint = tokenCacheRef.current[fromSym] || TOKEN_MINTS[fromSym];
@@ -5704,7 +5993,6 @@ Order: \`${orderKey.slice(0,20)}…\`
             { label:"Discord",     icon:<SvgDiscord size={15} color="currentColor"/>,  url:"https://discord.gg/jup" },
             { label:"Telegram",    icon:<SvgTelegram size={15} color="currentColor"/>, url:"https://t.me/jupiter_exchange" },
             { label:"GitHub",      icon:<SvgGithub size={15} color="currentColor"/>,   url:"https://github.com/jup-ag" },
-            { label:"Blog",        icon:<SvgBlog size={15} color="currentColor"/>,     url:"https://station.jup.ag/blog" },
           ];
           return (
             <>
@@ -5757,8 +6045,14 @@ Order: \`${orderKey.slice(0,20)}…\`
                             <span>{s.label}</span>
                           </a>
                         ))}
-                        <button onClick={() => setShowSocialsNav(false)}
-                          style={{ display:"none" }}/>
+                        <div style={{ height:1, background:T.border, margin:"6px 10px" }}/>
+                        <button onClick={() => { setShowSocialsNav(false); setBlogPostIndex(null); setShowBlog(true); }}
+                          style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderRadius:9, color:T.text1, fontSize:13, background:"none", border:"none", cursor:"pointer", width:"100%", transition:"background 0.12s" }}
+                          className="hov-row">
+                          <span style={{ fontSize:15, width:20, textAlign:"center" }}><SvgBlog size={15} color="currentColor"/></span>
+                          <span>Blog</span>
+                          <span style={{ marginLeft:"auto", fontSize:10, color:T.accent, fontWeight:700, background:`${T.accent}22`, padding:"2px 7px", borderRadius:5 }}>{BLOG_POSTS.length} posts</span>
+                        </button>
                       </div>
                     )}
                   </div>
@@ -5887,6 +6181,126 @@ Order: \`${orderKey.slice(0,20)}…\`
               {(showSocialsNav || showHowItWorks) && (
                 <div onClick={() => { setShowSocialsNav(false); setShowHowItWorks(false); }}
                   style={{ position:"fixed", inset:0, zIndex:198 }}/>
+              )}
+
+              {/* ── Full-screen Blog Panel ───────────────────────────────────── */}
+              {showBlog && (
+                <div style={{
+                  position:"fixed", inset:0, zIndex:500,
+                  background:"rgba(0,0,0,0.75)", backdropFilter:"blur(6px)",
+                  display:"flex", flexDirection:"column",
+                  animation:"fadeUp 0.2s ease",
+                }} onClick={() => { setShowBlog(false); setBlogPostIndex(null); }}>
+                  <div style={{
+                    position:"absolute", inset:0, top: 0,
+                    background:T.bg, display:"flex", flexDirection:"column",
+                    maxWidth:600, margin:"0 auto", width:"100%",
+                  }} onClick={e => e.stopPropagation()}>
+
+                    {/* Blog header */}
+                    <div style={{
+                      display:"flex", alignItems:"center", justifyContent:"space-between",
+                      padding:"16px 18px", borderBottom:`1px solid ${T.border}`,
+                      flexShrink:0, background:T.surface,
+                    }}>
+                      {blogPostIndex !== null ? (
+                        <button onClick={() => setBlogPostIndex(null)}
+                          style={{ background:"none", border:"none", color:T.accent, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", gap:5 }}>
+                          ← All Posts
+                        </button>
+                      ) : (
+                        <div>
+                          <div style={{ fontSize:16, fontWeight:700, color:T.text1, fontFamily:T.serif }}>ChatFi Blog</div>
+                          <div style={{ fontSize:11, color:T.text3, marginTop:1 }}>Guides, features & what you need to know</div>
+                        </div>
+                      )}
+                      <button onClick={() => { setShowBlog(false); setBlogPostIndex(null); }}
+                        style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:"50%", width:28, height:28, color:T.text2, fontSize:13, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>✕</button>
+                    </div>
+
+                    {/* Blog list */}
+                    {blogPostIndex === null && (
+                      <div style={{ flex:1, overflowY:"auto", padding:"16px 16px 32px" }}>
+                        {BLOG_POSTS.map((post, idx) => (
+                          <div key={post.id} onClick={() => setBlogPostIndex(idx)}
+                            style={{
+                              background:T.surface, border:`1px solid ${T.border}`,
+                              borderRadius:14, padding:"16px", marginBottom:12,
+                              cursor:"pointer", transition:"border-color 0.15s, transform 0.12s",
+                            }}
+                            className="hov-btn">
+                            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+                              <span style={{ fontSize:10, fontWeight:700, color:T.accent, background:`${T.accent}22`, padding:"2px 9px", borderRadius:20, letterSpacing:"0.06em", textTransform:"uppercase" }}>{post.category}</span>
+                              <span style={{ fontSize:10, color:T.text3 }}>{post.readTime}</span>
+                              <span style={{ fontSize:10, color:T.text3, marginLeft:"auto" }}>{post.date}</span>
+                            </div>
+                            <div style={{ fontSize:14, fontWeight:700, color:T.text1, lineHeight:1.4, marginBottom:6 }}>{post.title}</div>
+                            <div style={{ fontSize:12, color:T.text3, lineHeight:1.6 }}>{post.summary}</div>
+                            <div style={{ marginTop:10, fontSize:11, color:T.accent, fontWeight:600 }}>Read more →</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Blog post detail */}
+                    {blogPostIndex !== null && (() => {
+                      const post = BLOG_POSTS[blogPostIndex];
+                      return (
+                        <div style={{ flex:1, overflowY:"auto", padding:"20px 18px 40px" }}>
+                          {/* Post meta */}
+                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:12 }}>
+                            <span style={{ fontSize:10, fontWeight:700, color:T.accent, background:`${T.accent}22`, padding:"2px 9px", borderRadius:20, letterSpacing:"0.06em", textTransform:"uppercase" }}>{post.category}</span>
+                            <span style={{ fontSize:10, color:T.text3 }}>{post.readTime}</span>
+                            <span style={{ fontSize:10, color:T.text3 }}>&middot; {post.date}</span>
+                          </div>
+
+                          {/* Title */}
+                          <div style={{ fontSize:19, fontWeight:800, color:T.text1, lineHeight:1.35, fontFamily:T.serif, marginBottom:10 }}>{post.title}</div>
+
+                          {/* Summary */}
+                          <div style={{ fontSize:13, color:T.accent, lineHeight:1.65, marginBottom:20, padding:"10px 14px", background:`${T.accent}11`, borderRadius:10, borderLeft:`3px solid ${T.accent}` }}>{post.summary}</div>
+
+                          {/* Sections */}
+                          {post.sections.map((sec, i) => (
+                            <div key={i} style={{ marginBottom:20 }}>
+                              <div style={{ fontSize:13, fontWeight:700, color:T.text1, marginBottom:6, fontFamily:T.serif }}>{sec.heading}</div>
+                              <div style={{ fontSize:13, color:T.text2, lineHeight:1.75 }}>{sec.body}</div>
+                            </div>
+                          ))}
+
+                          {/* Tips callout */}
+                          {post.tips?.length > 0 && (
+                            <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, padding:"14px 16px", marginTop:8 }}>
+                              <div style={{ fontSize:11, fontWeight:700, color:T.text3, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:10 }}>💡 Quick Tips</div>
+                              {post.tips.map((tip, i) => (
+                                <div key={i} style={{ display:"flex", gap:8, marginBottom: i < post.tips.length - 1 ? 8 : 0 }}>
+                                  <span style={{ color:T.accent, fontWeight:700, flexShrink:0, fontSize:13 }}>→</span>
+                                  <span style={{ fontSize:12, color:T.text2, lineHeight:1.6 }}>{tip}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Navigation between posts */}
+                          <div style={{ display:"flex", gap:10, marginTop:24 }}>
+                            {blogPostIndex > 0 && (
+                              <button onClick={() => setBlogPostIndex(i => i - 1)}
+                                style={{ flex:1, padding:"10px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:12, cursor:"pointer", textAlign:"left" }}>
+                                ← {BLOG_POSTS[blogPostIndex - 1].title.split(":")[0]}
+                              </button>
+                            )}
+                            {blogPostIndex < BLOG_POSTS.length - 1 && (
+                              <button onClick={() => setBlogPostIndex(i => i + 1)}
+                                style={{ flex:1, padding:"10px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:12, cursor:"pointer", textAlign:"right" }}>
+                                {BLOG_POSTS[blogPostIndex + 1].title.split(":")[0]} →
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
               )}
             </>
           );
