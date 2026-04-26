@@ -5341,44 +5341,69 @@ Order: \`${orderKey.slice(0,20)}…\`
         if (!basketTrades.length) { push("ai", "No trades found in basket. Try: *buy $100 each of SOL, JUP, and BONK*."); }
         else if (!walletFull) { push("ai", "Connect your wallet first to execute a basket swap."); }
         else {
-          push("ai", (text || "") + `\n\nExecuting **${basketTrades.length} swaps** in sequence…`);
+          push("ai", (text || "") + `\n\nPreparing **${basketTrades.length} swaps** — you'll approve all at once…`);
+          const provider = connectedProviderRef.current;
           let done = 0, failed = 0;
           const summary = [];
-          for (const t of basketTrades) {
+
+          // ── Phase 1: fetch all orders in parallel ──────────────────────────────
+          const orders = await Promise.all(basketTrades.map(async (t) => {
             try {
-              const fromSym = (t.from || "USDC").toUpperCase();
-              const toSym   = (t.to || "SOL").toUpperCase();
-              const usd     = parseFloat(t.amountUSD) || 0;
-              const amt     = t.amount || String(usd);
-              // resolve mints
+              const fromSym  = (t.from || "USDC").toUpperCase();
+              const toSym    = (t.to   || "SOL").toUpperCase();
+              const usd      = parseFloat(t.amountUSD) || 0;
               const fromMint = tokenCacheRef.current[fromSym] || TOKEN_MINTS[fromSym];
               const toMint   = tokenCacheRef.current[toSym]   || TOKEN_MINTS[toSym];
-              if (!fromMint || !toMint) { failed++; summary.push(`❌ ${fromSym}→${toSym}: unknown token`); continue; }
-              const fromDec = tokenDecimalsRef.current[fromSym] ?? TOKEN_DECIMALS[fromSym] ?? 6;
-              const toDec   = tokenDecimalsRef.current[toSym]   ?? TOKEN_DECIMALS[toSym]   ?? 9;
-              // get price to convert USD→units if needed
-              let inUnits = parseFloat(amt);
+              if (!fromMint || !toMint) return { err: "unknown token", fromSym, toSym };
+              const fromDec  = tokenDecimalsRef.current[fromSym] ?? TOKEN_DECIMALS[fromSym] ?? 6;
+              const toDec    = tokenDecimalsRef.current[toSym]   ?? TOKEN_DECIMALS[toSym]   ?? 9;
+              let inUnits    = parseFloat(t.amount || String(usd));
               if (t.amountUSD) {
                 const pr = await fetch(`${JUP_PRICE_API}?ids=${fromMint}`).then(r=>r.json()).catch(()=>({}));
-                const p  = pr?.data?.[fromMint]?.price || 1;
-                inUnits  = usd / p;
+                inUnits  = usd / (pr?.data?.[fromMint]?.price || 1);
               }
               const atomicAmt = Math.floor(inUnits * Math.pow(10, fromDec));
               const orderRes  = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${atomicAmt}&taker=${walletFull}`);
-              if (orderRes?.error) throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
-              if (!orderRes?.transaction) throw new Error(`No transaction returned — API response: ${JSON.stringify(orderRes).slice(0, 200)}`);
-              const txBytes  = Uint8Array.from(atob(orderRes.transaction), c=>c.charCodeAt(0));
-              const vTx      = VersionedTransaction.deserialize(txBytes);
-              const provider = connectedProviderRef.current;
-              const signed   = await provider.signTransaction(vTx);
-              const execRes  = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: bytesToB64(signed.serialize()), requestId: orderRes.requestId } });
-              const sig      = execRes?.signature;
-              if (!sig) throw new Error("No signature");
+              if (orderRes?.error) return { err: typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error, fromSym, toSym };
+              if (!orderRes?.transaction) return { err: `No transaction — ${JSON.stringify(orderRes).slice(0,150)}`, fromSym, toSym };
+              const vTx = VersionedTransaction.deserialize(Uint8Array.from(atob(orderRes.transaction), c=>c.charCodeAt(0)));
+              return { ok: true, vTx, requestId: orderRes.requestId, fromSym, toSym, inUnits, toDec };
+            } catch(e) {
+              return { err: e?.message || "order failed", fromSym: (t.from||"?").toUpperCase(), toSym: (t.to||"?").toUpperCase() };
+            }
+          }));
+
+          // ── Phase 2: single wallet confirmation for all valid txs ──────────────
+          const valid   = orders.filter(o => o.ok);
+          const invalid = orders.filter(o => !o.ok);
+          invalid.forEach(o => { failed++; summary.push(`❌ ${o.fromSym}→${o.toSym}: ${o.err}`); });
+
+          let signedTxs = [];
+          if (valid.length > 0) {
+            try {
+              if (provider.signAllTransactions) {
+                signedTxs = await provider.signAllTransactions(valid.map(o => o.vTx));
+              } else {
+                for (const o of valid) signedTxs.push(await provider.signTransaction(o.vTx));
+              }
+            } catch(e) {
+              valid.forEach(o => { failed++; summary.push(`❌ ${o.fromSym}→${o.toSym}: ${e?.message || "signing cancelled"}`); });
+              signedTxs = [];
+            }
+          }
+
+          // ── Phase 3: execute all signed txs sequentially ───────────────────────
+          for (let i = 0; i < signedTxs.length; i++) {
+            const o = valid[i];
+            try {
+              const execRes = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: bytesToB64(signedTxs[i].serialize()), requestId: o.requestId } });
+              const sig     = execRes?.signature;
+              if (!sig) throw new Error("No signature returned");
               done++;
-              const outAmt = execRes?.outputAmount ? (Number(execRes.outputAmount)/Math.pow(10,toDec)).toFixed(4) : "?";
-              summary.push(`✅ **${fromSym}→${toSym}**: ${inUnits.toFixed(4)} ${fromSym} → ~${outAmt} ${toSym}`);
-              logTrade({ type:"swap", from:fromSym, to:toSym, amount:inUnits.toFixed(4), out:outAmt, tx:sig });
-            } catch(e) { failed++; summary.push(`❌ ${t.from||"?"}→${t.to||"?"}: ${e?.message||"failed"}`); }
+              const outAmt = execRes?.outputAmount ? (Number(execRes.outputAmount)/Math.pow(10,o.toDec)).toFixed(4) : "?";
+              summary.push(`✅ **${o.fromSym}→${o.toSym}**: ${o.inUnits.toFixed(4)} ${o.fromSym} → ~${outAmt} ${o.toSym}`);
+              logTrade({ type:"swap", from:o.fromSym, to:o.toSym, amount:o.inUnits.toFixed(4), out:outAmt, tx:sig });
+            } catch(e) { failed++; summary.push(`❌ ${o.fromSym}→${o.toSym}: ${e?.message || "execute failed"}`); }
           }
           const summaryStr = basketTrades.map(t=>`${t.from||"USDC"}→${t.to}`).join(", ");
           logTrade({ type:"basket", summary: summaryStr });
