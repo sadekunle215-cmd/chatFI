@@ -1157,14 +1157,21 @@ function JupChatInner() {
   const { ready: privyReady, authenticated: privyAuthed, user: privyUser,
           login: privyLogin, logout: privyLogout } = usePrivy();
   const { wallets: privyWallets } = useWallets();
-  // Find the Privy-managed embedded wallet (Solana)
-  // Match Privy's SVM chain type — dashboard shows "SVM" not "solana"
-  const privyEmbeddedWallet =
-    privyWallets.find(w => w.walletClientType === "privy" && w.chainType === "solana") ||
-    privyWallets.find(w => w.walletClientType === "privy" && w.chainType === "SVM") ||
-    privyWallets.find(w => w.walletClientType === "privy" && w.type === "solana") ||
-    privyWallets.find(w => w.walletClientType === "privy" && /solana|svm/i.test(w.chainType || w.type || "")) ||
-    null;
+  // Find the Privy-managed Solana embedded wallet.
+  // Solana addresses are base58 (never start with "0x") — use that as the
+  // definitive signal since chainType/walletClientType vary across SDK versions.
+  const privyEmbeddedWallet = (() => {
+    if (!privyWallets?.length) return null;
+    return (
+      privyWallets.find(w => /^solana/i.test(w.chainType || "")) ||
+      privyWallets.find(w => /^svm$/i.test(w.chainType || "")) ||
+      privyWallets.find(w => /^solana/i.test(w.type || "")) ||
+      privyWallets.find(w => /^solana/i.test(w.walletClientType || "")) ||
+      // Most reliable: Solana addresses are base58 and never start with "0x"
+      privyWallets.find(w => w.address && !w.address.startsWith("0x") && w.address.length >= 32) ||
+      null
+    );
+  })();
   // Track whether Privy is the active auth method
   const [privyMode, setPrivyMode] = useState(false);
   const [privyProvider, setPrivyProvider] = useState(null); // "google"|"twitter"|"discord"|"email"
@@ -5015,7 +5022,11 @@ Order: \`${orderKey.slice(0,20)}…\`
     // If authenticated but no Solana wallet found yet, log and wait —
     // Privy creates it async; privyWallets will update and re-trigger this effect.
     if (privyAuthed && !privyEmbeddedWallet) {
-      console.warn("[ChatFi] Authed but no SVM wallet yet. wallets:", privyWallets.map(w => ({ type: w.walletClientType, chain: w.chainType, t: w.type })));
+      // Show wallet debug info in chat so mobile users can report it
+      const walletDump = privyWallets.map(w =>
+        `addr:${(w.address||"?").slice(0,6)} client:${w.walletClientType||"?"} chain:${w.chainType||"?"} type:${w.type||"?"}`
+      ).join(" | ") || "none";
+      push("ai", `⚠️ Signed in but no Solana wallet found yet.\n\nWallets seen: \`${walletDump}\`\n\nPlease share this with support.`);
       return;
     }
     if (privyAuthed && privyEmbeddedWallet) {
