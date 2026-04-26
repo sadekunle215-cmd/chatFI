@@ -1487,26 +1487,37 @@ function JupChatInner() {
     "NKEx","AMDx","INTCx","ARKKx","GDx","SLVx","GOLDx","BRKx","TSMx","SOFIx",
   ];
   const fetchXStocks = async (limit = 15) => {
-    // 1. Try Jupiter tag API with various possible stock tags
+    const seen = new Set();
+    const merged = [];
+
+    const addTokens = (tokens) => {
+      for (const t of tokens) {
+        const key = (t.id || t.address || t.symbol || "").toLowerCase();
+        if (key && !seen.has(key)) { seen.add(key); merged.push(t); }
+      }
+    };
+
+    // 1. Try Jupiter tag API — collect from all tags, don't short-circuit early
     for (const tag of ["xstocks", "tokenized-stocks", "stocks", "rwa"]) {
       try {
-        const data = await jupFetch(`${JUP_TOKEN_TAG}?query=${tag}&limit=${limit}`);
+        const data = await jupFetch(`${JUP_TOKEN_TAG}?query=${tag}&limit=50`);
         const tokens = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-        if (tokens.length >= 3) return tokens.slice(0, limit);
+        addTokens(tokens);
       } catch {}
+      if (merged.length >= limit) return merged.slice(0, limit);
     }
-    // 2. Fallback: search each known xStock symbol
-    const results = [];
+
+    // 2. Always supplement with known xStock symbols to fill up to limit
     for (const sym of XSTOCK_SYMBOLS) {
-      if (results.length >= limit) break;
+      if (merged.length >= limit) break;
       try {
         const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(sym)}&limit=5`);
         const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
         const match = list.find(t => t.symbol?.toLowerCase() === sym.toLowerCase());
-        if (match) results.push(match);
+        if (match) addTokens([match]);
       } catch {}
     }
-    return results;
+    return merged.slice(0, limit);
   };
 
   // ── Token Recent — newly listed tokens (first pool just created) ────────────
