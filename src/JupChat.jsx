@@ -4211,7 +4211,21 @@ function JupChatInner() {
       if (execResult.error) throw new Error(typeof execResult.error==="object"?JSON.stringify(execResult.error):execResult.error);
 
       const signature = execResult.signature || execResult.txid || execResult.transaction;
-      setSwapStatus("done"); setSwapTxid(signature); setShowSwap(false);
+      if (!signature) throw new Error("No signature returned from execute");
+
+      // Stop spinner immediately, then poll confirmation in background
+      setSwapStatus("confirming"); setSwapTxid(signature); setShowSwap(false);
+      const _rpcUrl = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+      const _conn   = new Connection(_rpcUrl, "confirmed");
+      const _start  = Date.now();
+      while (Date.now() - _start < 30000) {
+        const _res = await _conn.getSignatureStatuses([signature], { searchTransactionHistory: true });
+        const _st  = _res?.value?.[0];
+        if (_st?.err) throw new Error("Transaction failed on-chain: " + JSON.stringify(_st.err));
+        if (_st?.confirmationStatus === "confirmed" || _st?.confirmationStatus === "finalized") break;
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      setSwapStatus("done");
       // v2 outAmount field
       const outAmt = orderData?.outAmount ? (parseInt(orderData.outAmount)/Math.pow(10,toDecimals||6)).toFixed(4) : "?";
       const feeBps = orderData?.feeBps ? ` · Fee: ${orderData.feeBps}bps` : "";
@@ -5470,23 +5484,46 @@ Order: \`${orderKey.slice(0,20)}…\`
             }
           }
 
-          // ── Phase 3: execute all signed txs sequentially ───────────────────────
-          for (let i = 0; i < signedTxs.length; i++) {
+          // ── Phase 3: execute & confirm all swaps in parallel, push each card live ─
+          const RPC_CONFIRM = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+          const connConfirm = new Connection(RPC_CONFIRM, "confirmed");
+
+          // Stop the typing spinner now — results will appear as cards in real time
+          setTyping(false);
+
+          const waitConfirmed = async (sig, maxMs = 30000) => {
+            const start = Date.now();
+            while (Date.now() - start < maxMs) {
+              const res = await connConfirm.getSignatureStatuses([sig], { searchTransactionHistory: true });
+              const st  = res?.value?.[0];
+              if (st?.err) throw new Error("On-chain error: " + JSON.stringify(st.err));
+              if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") return st;
+              await new Promise(r => setTimeout(r, 1500));
+            }
+            throw new Error("Timeout — check Solscan for status");
+          };
+
+          // Fire all executes in parallel, each pushes its own card when done
+          await Promise.all(signedTxs.map(async (stx, i) => {
             const o = valid[i];
             try {
-              const execRes = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: bytesToB64(signedTxs[i].serialize()), requestId: o.requestId } });
-              const sig     = execRes?.signature;
+              const execRes = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: bytesToB64(stx.serialize()), requestId: o.requestId } });
+              if (execRes?.error) throw new Error(typeof execRes.error === "object" ? JSON.stringify(execRes.error) : execRes.error);
+              const sig = execRes?.signature || execRes?.txid;
               if (!sig) throw new Error("No signature returned");
+              await waitConfirmed(sig);
               done++;
               const outAmt = execRes?.outputAmount ? (Number(execRes.outputAmount)/Math.pow(10,o.toDec)).toFixed(4) : "?";
-              summary.push(`[swap-card|${o.fromSym}|${o.toSym}|${o.inUnits.toFixed(4)}|~${outAmt}|${execRes?.feeBps ? execRes.feeBps+"bps" : ""}|${sig}|ok]`);
+              push("ai", `[swap-card|${o.fromSym}|${o.toSym}|${o.inUnits.toFixed(4)}|~${outAmt}|${execRes?.feeBps ? execRes.feeBps+"bps" : ""}|${sig}|ok]`);
               logTrade({ type:"swap", from:o.fromSym, to:o.toSym, amount:o.inUnits.toFixed(4), out:outAmt, tx:sig });
-            } catch(e) { failed++; summary.push(`[swap-card|${o.fromSym}|${o.toSym}|${o.inUnits?.toFixed(4)||"?"}|—|—|—|err]`+`\n❌ ${o.fromSym}→${o.toSym}: ${e?.message || "execute failed"}`); }
-          }
+            } catch(e) {
+              failed++;
+              push("ai", `[swap-card|${o.fromSym}|${o.toSym}|${o.inUnits?.toFixed(4)||"?"}|—|—|—|err]\n❌ ${o.fromSym}→${o.toSym}: ${e?.message || "failed"}`);
+            }
+          }));
           const summaryStr = basketTrades.map(t=>`${t.from||"USDC"}→${t.to}`).join(", ");
           logTrade({ type:"basket", summary: summaryStr });
-          const headerLine = `**Basket complete** — ${done} succeeded, ${failed} failed`;
-          push("ai", [headerLine, ...summary].join("\n"));
+          push("ai", `**Basket done** — ${done} succeeded, ${failed} failed`);
         }
 
       // ── COPY_TRADE ──────────────────────────────────────────────────────────
