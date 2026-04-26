@@ -3401,11 +3401,6 @@ function JupChatInner() {
     } catch {}
   };
 
-  const disconnectWallet = () => {
-    // Reown handles session teardown; our sync useEffect clears local state when reownConnected → false
-    reownDisconnect();
-  };
-
   // ── Wallet Standard detection + mobile deep-link registry ───────────────────
   // Detects wallets via the Wallet Standard API (works for extensions + mobile in-app browsers)
   // Falls back to legacy window injection checks, then offers mobile deep links.
