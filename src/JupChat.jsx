@@ -1376,6 +1376,7 @@ function JupChatInner() {
   const [leaderboard, setLeaderboard]     = useState([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   const [leaderboardCachedAt, setLeaderboardCachedAt] = useState(null);
+  const [leaderboardExpanded, setLeaderboardExpanded] = useState(false);
 
   // ── Jupiter official docs — fetched once, injected into AI system prompt ────
   const [jupDocs, setJupDocs] = useState("");
@@ -1914,16 +1915,24 @@ function JupChatInner() {
     return { trades, profile: { tradeCount: trades.length, topTokens, topPairs, tradingStyle, sentiment, avgUsd, buys, sells } };
   };
 
-  // ── Leaderboard — fetch live top 50 profitable wallets from /api/leaderboard ─
+  // ── Leaderboard — fetch up to 40 profitable wallets from /api/leaderboard ──
   const fetchLeaderboard = async () => {
     if (leaderboardLoading) return;
     setLeaderboardLoading(true);
     try {
-      const res  = await fetch("/api/leaderboard");
+      const res  = await fetch("/api/leaderboard?limit=40");
       const data = await res.json();
-      if (data.leaderboard?.length) {
-        setLeaderboard(data.leaderboard);
-        setLeaderboardCachedAt(data.cachedAt);
+      const all  = (data.leaderboard || []).slice(0, 40);
+      if (all.length) {
+        // Show only profitable wallets — these are the ones worth copying.
+        // If none are profitable, still show all sorted descending so list is useful.
+        const profitable = all.filter(w => w.totalPnl > 0).sort((a, b) => b.totalPnl - a.totalPnl);
+        const sorted     = profitable.length
+          ? profitable
+          : [...all].sort((a, b) => b.totalPnl - a.totalPnl);
+        setLeaderboard(sorted.slice(0, 40));
+        setLeaderboardCachedAt(data.cachedAt || Date.now());
+        setLeaderboardExpanded(true); // auto-expand so user sees results
       }
     } catch (e) {
       console.warn("[ChatFi] Leaderboard fetch failed:", e.message);
@@ -10001,19 +10010,26 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         {/* ── Top Wallets Leaderboard — live, ranked by 7d PnL via Helius ──── */}
         {!showCopyTrade && (
           <div style={{ margin:"0 16px 12px" }}>
-            {/* Header row */}
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+            {/* Header row — always visible, acts as toggle */}
+            <div
+              onClick={() => { if (leaderboard.length) setLeaderboardExpanded(e => !e); }}
+              style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: leaderboardExpanded ? 8 : 0, cursor: leaderboard.length ? "pointer" : "default" }}>
               <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:11, color:T.text3, letterSpacing:"0.07em", textTransform:"uppercase" }}>
                 <SvgBarChart size={11} color={T.text3}/> Top Wallets — Live 7d PnL
+                {leaderboard.length > 0 && (
+                  <span style={{ fontSize:9, color:T.text3 }}>
+                    {leaderboardExpanded ? "▲" : "▼"}
+                  </span>
+                )}
               </div>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                {leaderboardCachedAt && (
+                {leaderboardCachedAt && leaderboardExpanded && (
                   <span style={{ fontSize:9, color:T.text3 }}>
                     Updated {Math.round((Date.now() - leaderboardCachedAt) / 60000)}m ago
                   </span>
                 )}
                 <button
-                  onClick={fetchLeaderboard}
+                  onClick={e => { e.stopPropagation(); fetchLeaderboard(); }}
                   disabled={leaderboardLoading}
                   className="hov-btn"
                   style={{ padding:"3px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text3, fontSize:10, cursor:"pointer" }}>
@@ -10025,7 +10041,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             {/* Empty state */}
             {!leaderboardLoading && leaderboard.length === 0 && (
               <div style={{ padding:"12px 14px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, fontSize:12, color:T.text3, textAlign:"center" }}>
-                Hit Load to fetch the top 50 most profitable Solana wallets right now.
+                Hit Load to fetch up to 40 top profitable Solana wallets.
               </div>
             )}
 
@@ -10038,40 +10054,44 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               </div>
             )}
 
-            {/* Live leaderboard rows */}
-            {!leaderboardLoading && leaderboard.map((w, i) => {
-              const pnlColor  = w.totalPnl >= 0 ? T.green : T.red;
-              const pnlBg     = w.totalPnl >= 0 ? T.greenBg : T.redBg;
-              const rankColor = i === 0 ? "#f6d860" : i === 1 ? "#c0c0c0" : i === 2 ? "#cd7f32" : T.text3;
-              const short     = `${w.wallet.slice(0,6)}…${w.wallet.slice(-4)}`;
-              return (
-                <div key={w.wallet} style={{ display:"flex", alignItems:"center", gap:0, background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:6, overflow:"hidden" }}>
-                  <div style={{ width:3, alignSelf:"stretch", background: i < 3 ? rankColor : T.border, flexShrink:0 }}/>
-                  <div style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", flex:1, minWidth:0 }}>
-                    <span style={{ fontSize:10, fontWeight:700, color:rankColor, minWidth:18, textAlign:"center", flexShrink:0 }}>#{w.rank}</span>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ fontSize:12, fontWeight:600, color:T.text1, fontFamily:T.mono }}>{short}</div>
-                      <div style={{ fontSize:10, color:T.text3, marginTop:1 }}>
-                        Vol: ${(w.totalVolume/1000).toFixed(1)}k
-                        {w.winRate != null && <> · Win rate: {w.winRate}%</>}
-                        · {w.txCount} swaps
+            {/* Live leaderboard rows — only when expanded, scrollable */}
+            {!leaderboardLoading && leaderboardExpanded && leaderboard.length > 0 && (
+              <div style={{ maxHeight:360, overflowY:"auto", display:"flex", flexDirection:"column", gap:6 }}>
+                {leaderboard.map((w, i) => {
+                  const pnlColor  = w.totalPnl >= 0 ? T.green : T.red;
+                  const pnlBg     = w.totalPnl >= 0 ? T.greenBg : T.redBg;
+                  const rankColor = i === 0 ? "#f6d860" : i === 1 ? "#c0c0c0" : i === 2 ? "#cd7f32" : T.text3;
+                  const short     = `${w.wallet.slice(0,6)}…${w.wallet.slice(-4)}`;
+                  return (
+                    <div key={w.wallet} style={{ display:"flex", alignItems:"center", gap:0, background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden", flexShrink:0 }}>
+                      <div style={{ width:3, alignSelf:"stretch", background: i < 3 ? rankColor : T.border, flexShrink:0 }}/>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", flex:1, minWidth:0 }}>
+                        <span style={{ fontSize:10, fontWeight:700, color:rankColor, minWidth:18, textAlign:"center", flexShrink:0 }}>#{w.rank || i+1}</span>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:12, fontWeight:600, color:T.text1, fontFamily:T.mono }}>{short}</div>
+                          <div style={{ fontSize:10, color:T.text3, marginTop:1 }}>
+                            Vol: ${(w.totalVolume/1000).toFixed(1)}k
+                            {w.winRate != null && <> · Win rate: {w.winRate}%</>}
+                            · {w.txCount} swaps
+                          </div>
+                        </div>
+                        <div style={{ textAlign:"right", flexShrink:0 }}>
+                          <div style={{ fontSize:12, fontWeight:700, color:pnlColor, background:pnlBg, padding:"2px 8px", borderRadius:5 }}>
+                            {w.totalPnl >= 0 ? "+" : ""}${w.totalPnl.toLocaleString()}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => { window.__chatfiSend && window.__chatfiSend(`copy trades from ${w.wallet}`); }}
+                          className="hov-btn"
+                          style={{ padding:"5px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:10, fontWeight:600, cursor:"pointer", flexShrink:0, marginLeft:4 }}>
+                          Mirror
+                        </button>
                       </div>
                     </div>
-                    <div style={{ textAlign:"right", flexShrink:0 }}>
-                      <div style={{ fontSize:12, fontWeight:700, color:pnlColor, background:pnlBg, padding:"2px 8px", borderRadius:5 }}>
-                        {w.totalPnl >= 0 ? "+" : ""}${w.totalPnl.toLocaleString()}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => { window.__chatfiSend && window.__chatfiSend(`copy trades from ${w.wallet}`); }}
-                      className="hov-btn"
-                      style={{ padding:"5px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:10, fontWeight:600, cursor:"pointer", flexShrink:0, marginLeft:4 }}>
-                      Mirror
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
