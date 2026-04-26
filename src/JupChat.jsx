@@ -7,7 +7,7 @@ import { SolanaAdapter } from "@reown/appkit-adapter-solana";
 import { solana as solanaMainnet } from "@reown/appkit/networks";
 
 // ── Privy (social / email login with embedded Solana wallet) ─────────────────
-import { PrivyProvider, usePrivy, useWallets, useCreateWallet } from "@privy-io/react-auth";
+import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
 
 // ── SVG Icon Components ─────────────────────────────────────────────────────
 const SvgChat = ({size=16,color="currentColor"}) => (
@@ -1152,18 +1152,18 @@ function JupChatInner() {
   const { walletInfo: reownWalletInfo }                         = useWalletInfo();
   const [connectedWalletIcon, setConnectedWalletIcon]           = useState(null);
   const prevConnectedRef = useRef(false);
-  const privyCreatingWalletRef = useRef(false); // prevents duplicate createWallet calls
 
   // ── Privy hooks (social login + embedded wallet) ───────────────────────────
   const { ready: privyReady, authenticated: privyAuthed, user: privyUser,
           login: privyLogin, logout: privyLogout } = usePrivy();
   const { wallets: privyWallets } = useWallets();
-  const { createWallet: privyCreateWallet } = useCreateWallet();
   // Find the Privy-managed embedded wallet (Solana)
-  // Prefer Solana embedded wallet; fall back to any privy-managed wallet for older accounts
-  const privyEmbeddedWallet = 
+  // Match Privy's SVM chain type — dashboard shows "SVM" not "solana"
+  const privyEmbeddedWallet =
     privyWallets.find(w => w.walletClientType === "privy" && w.chainType === "solana") ||
+    privyWallets.find(w => w.walletClientType === "privy" && w.chainType === "SVM") ||
     privyWallets.find(w => w.walletClientType === "privy" && w.type === "solana") ||
+    privyWallets.find(w => w.walletClientType === "privy" && /solana|svm/i.test(w.chainType || w.type || "")) ||
     null;
   // Track whether Privy is the active auth method
   const [privyMode, setPrivyMode] = useState(false);
@@ -5012,21 +5012,10 @@ Order: \`${orderKey.slice(0,20)}…\`
   // ── Privy connection sync ─────────────────────────────────────────────────
   useEffect(() => {
     if (!privyReady) return;
-    // Race fix: user authenticated but Solana embedded wallet not yet created.
-    // Guard against calling createWallet repeatedly — track with a ref.
+    // If authenticated but no Solana wallet found yet, log and wait —
+    // Privy creates it async; privyWallets will update and re-trigger this effect.
     if (privyAuthed && !privyEmbeddedWallet) {
-      if (!privyCreatingWalletRef.current) {
-        privyCreatingWalletRef.current = true;
-        // createAdditional:true allows Solana wallet creation even if user
-        // already has an ETH embedded wallet from a previous Privy session.
-        privyCreateWallet({ createAdditional: true })
-          .catch((err) => {
-            console.warn("[ChatFi] privyCreateWallet failed:", err?.message || err);
-          })
-          .finally(() => {
-            setTimeout(() => { privyCreatingWalletRef.current = false; }, 1500);
-          });
-      }
+      console.warn("[ChatFi] Authed but no SVM wallet yet. wallets:", privyWallets.map(w => ({ type: w.walletClientType, chain: w.chainType, t: w.type })));
       return;
     }
     if (privyAuthed && privyEmbeddedWallet) {
@@ -5040,10 +5029,17 @@ Order: \`${orderKey.slice(0,20)}…\`
       setWallet(display);
       setWalletFull(address);
       setConnectedWalletName(privyUser?.email?.address || privyUser?.google?.email || privyUser?.twitter?.username || "Social Account");
-      // Build provider shim using Privy embedded wallet's signTransaction
+      // Build provider shim using Privy embedded wallet's sign methods
       const privyProvider = {
         signTransaction: async (tx) => privyEmbeddedWallet.signTransaction(tx),
         signAllTransactions: async (txs) => Promise.all(txs.map(tx => privyEmbeddedWallet.signTransaction(tx))),
+        // signMessage needed for Jupiter Trigger v2 JWT auth
+        signMessage: async (msg) => {
+          const result = await privyEmbeddedWallet.signMessage(msg);
+          // Privy returns { signature: Uint8Array } — normalise to match Phantom's shape
+          return result?.signature instanceof Uint8Array ? result : { signature: result };
+        },
+        publicKey: { toBytes: () => new PublicKey(privyEmbeddedWallet.address).toBytes() },
       };
       connectedProviderRef.current = privyProvider;
       fetchSolanaBalances(address).then(balances => {
@@ -5080,7 +5076,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       push("ai", "👋 Signed out. Connect again anytime.");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [privyReady, privyAuthed, privyEmbeddedWallet, privyUser, privyCreateWallet]);
+  }, [privyReady, privyAuthed, privyEmbeddedWallet, privyUser]);
 
   // ── Send message to Claude ──────────────────────────────────────────────────
   // ── Mirror-trade event: triggered by Copy Trade "Mirror" button ─────────────
@@ -9526,14 +9522,7 @@ export default function JupChat() {
       appId={appId}
       config={{
         loginMethods: ["email", "google", "twitter", "discord"],
-        // Privy calls this after successful login — used to dismiss any stuck modal UI
-        onSuccess: (user, isNewUser) => {
-          // Close any lingering Privy overlay DOM elements
-          try {
-            const overlay = document.querySelector('[data-privy-dialog], #privy-modal-content, [class*="privy"][class*="modal"]');
-            if (overlay) overlay.closest('[role="dialog"], [data-radix-portal]')?.remove();
-          } catch (_) {}
-        },
+
         appearance: {
           theme: "dark",
           accentColor: "#c8f255",
