@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Transaction, VersionedTransaction, Keypair } from "@solana/web3.js";
+import { Connection, Transaction, VersionedTransaction, Keypair } from "@solana/web3.js";
 
 // ── Reown AppKit (external wallet connect — Phantom, Backpack, etc.) ─────────
 import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect, useWalletInfo } from "@reown/appkit/react";
