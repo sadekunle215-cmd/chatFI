@@ -7,7 +7,7 @@ import { SolanaAdapter } from "@reown/appkit-adapter-solana";
 import { solana as solanaMainnet } from "@reown/appkit/networks";
 
 // ── Privy (social / email login with embedded Solana wallet) ─────────────────
-import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
+import { PrivyProvider, usePrivy, useWallets, useSolanaWallets } from "@privy-io/react-auth";
 
 // ── SVG Icon Components ─────────────────────────────────────────────────────
 const SvgChat = ({size=16,color="currentColor"}) => (
@@ -1156,7 +1156,11 @@ function JupChatInner() {
   // ── Privy hooks (social login + embedded wallet) ───────────────────────────
   const { ready: privyReady, authenticated: privyAuthed, user: privyUser,
           login: privyLogin, logout: privyLogout } = usePrivy();
-  const { wallets: privyWallets } = useWallets();
+  const { wallets: _privyEVMWallets } = useWallets();
+  const { wallets: _privySolWallets } = (() => { try { return useSolanaWallets(); } catch { return { wallets: [] }; } })();
+  // Merge both hooks — useSolanaWallets() is the correct one for embedded Solana wallets
+  // in newer Privy SDK versions; useWallets() covers older versions
+  const privyWallets = [...(_privySolWallets || []), ...(_privyEVMWallets || [])];
   // Find the Privy-managed Solana embedded wallet.
   // Solana addresses are base58 (never start with "0x") — use that as the
   // definitive signal since chainType/walletClientType vary across SDK versions.
