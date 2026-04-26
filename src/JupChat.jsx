@@ -1154,6 +1154,10 @@ function JupChatInner() {
   const [prices, setPrices]       = useState({});
   const [portfolio, setPortfolio] = useState({});
 
+  // ── CHATFI token gate — 10,000 CHATFI unlocks fee discounts + premium features ─
+  const CHATFI_THRESHOLD = 10000;
+  const isPremium = (portfolio["CHATFI"] || 0) >= CHATFI_THRESHOLD;
+
   // ── Reown AppKit hooks ─────────────────────────────────────────────────────
   const { open: reownOpen }                                     = useAppKit();
   const { address: reownAddress, isConnected: reownConnected }  = useAppKitAccount();
@@ -1369,6 +1373,9 @@ function JupChatInner() {
   // ── Copy Trade ────────────────────────────────────────────────────────────────
   const [copyTradeData, setCopyTradeData] = useState(null);
   const [showCopyTrade, setShowCopyTrade] = useState(false);
+  const [leaderboard, setLeaderboard]     = useState([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [leaderboardCachedAt, setLeaderboardCachedAt] = useState(null);
 
   // ── Jupiter official docs — fetched once, injected into AI system prompt ────
   const [jupDocs, setJupDocs] = useState("");
@@ -1857,6 +1864,71 @@ function JupChatInner() {
     const res = await fetch(`/api/wallet-trades?wallet=${encodeURIComponent(walletAddress)}&limit=${limit}`);
     if (!res.ok) throw new Error(await res.text());
     return res.json();
+  };
+
+  // ── Wallet behaviour analyser — builds a profile from 50 trades ─────────────
+  const analyseWalletBehaviour = async (walletAddress) => {
+    const trades = await fetchWalletTrades(walletAddress, 50);
+    if (!trades?.length) return { trades: [], profile: null };
+
+    // Token frequency
+    const tokenCount = {};
+    const pairCount  = {};
+    trades.forEach(t => {
+      if (t.toSymbol)   tokenCount[t.toSymbol]   = (tokenCount[t.toSymbol]   || 0) + 1;
+      if (t.fromSymbol) tokenCount[t.fromSymbol] = (tokenCount[t.fromSymbol] || 0) + 1;
+      const pair = `${t.fromSymbol}→${t.toSymbol}`;
+      pairCount[pair] = (pairCount[pair] || 0) + 1;
+    });
+    const topTokens = Object.entries(tokenCount)
+      .filter(([sym]) => !["USDC","USDT","SOL"].includes(sym))
+      .sort((a, b) => b[1] - a[1]).slice(0, 5).map(([sym]) => sym);
+    const topPairs = Object.entries(pairCount)
+      .sort((a, b) => b[1] - a[1]).slice(0, 3).map(([pair]) => pair);
+
+    // Trading frequency
+    const timestamps = trades.map(t => t.timestamp).filter(Boolean).sort((a, b) => b - a);
+    let avgGapHours = null;
+    if (timestamps.length >= 2) {
+      const gaps = [];
+      for (let i = 0; i < timestamps.length - 1; i++) gaps.push((timestamps[i] - timestamps[i+1]) / 3600000);
+      avgGapHours = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+    }
+    const tradingStyle = avgGapHours == null ? "Unknown"
+      : avgGapHours < 2  ? "Scalper"
+      : avgGapHours < 12 ? "Day Trader"
+      : avgGapHours < 72 ? "Swing Trader"
+      : "Position Trader";
+
+    // Buy vs sell ratio
+    const buys  = trades.filter(t => t.fromSymbol === "USDC" || t.fromSymbol === "SOL").length;
+    const sells = trades.filter(t => t.toSymbol   === "USDC" || t.toSymbol   === "SOL").length;
+    const sentiment = buys > sells * 1.5 ? "Accumulating 🟢" : sells > buys * 1.5 ? "Distributing 🔴" : "Balanced ⚪";
+
+    // Avg trade size
+    const usdTrades = trades.filter(t => ["USDC","USDT"].includes(t.fromSymbol) && t.fromAmount);
+    const avgUsd = usdTrades.length
+      ? (usdTrades.reduce((s, t) => s + parseFloat(t.fromAmount || 0), 0) / usdTrades.length).toFixed(0)
+      : null;
+
+    return { trades, profile: { tradeCount: trades.length, topTokens, topPairs, tradingStyle, sentiment, avgUsd, buys, sells } };
+  };
+
+  // ── Leaderboard — fetch live top 50 profitable wallets from /api/leaderboard ─
+  const fetchLeaderboard = async () => {
+    if (leaderboardLoading) return;
+    setLeaderboardLoading(true);
+    try {
+      const res  = await fetch("/api/leaderboard");
+      const data = await res.json();
+      if (data.leaderboard?.length) {
+        setLeaderboard(data.leaderboard);
+        setLeaderboardCachedAt(data.cachedAt);
+      }
+    } catch (e) {
+      console.warn("[ChatFi] Leaderboard fetch failed:", e.message);
+    }
+    setLeaderboardLoading(false);
   };
 
   const checkVerifyEligibility = async (mintAddress) => {
@@ -2380,6 +2452,20 @@ function JupChatInner() {
             lockedVestingParam: { totalLockedVestingAmount:100000000, cliffUnlockAmount:0, numberOfVestingPeriod:365, totalVestingDuration:31536000, cliffDurationFromMigrationTime:0 },
           },
           antiSniping: true, fee:{ feeBps:100 }, isLpLocked: true,
+        },
+        // CHATFI token preset — meme curve, 80% community locked 2 years, no team allocation
+        chatfi: {
+          buildCurveByMarketCapParam: {
+            quoteMint: USDC, initialMarketCap: 16000, migrationMarketCap: 69000, tokenQuoteDecimal: 6,
+            lockedVestingParam: {
+              totalLockedVestingAmount: 800000000,   // 80% of 1B supply locked
+              cliffUnlockAmount: 0,                  // no cliff unlock
+              numberOfVestingPeriod: 1,              // single release at end
+              totalVestingDuration: 63072000,        // 2 years in seconds
+              cliffDurationFromMigrationTime: 63072000, // full 2yr cliff from migration
+            },
+          },
+          antiSniping: false, fee:{ feeBps:100 }, isLpLocked: true,
         },
       };
       const presetCfg = presets[preset] || presets.meme;
@@ -4504,7 +4590,9 @@ function JupChatInner() {
     try {
       const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals || 9));
       // v2 /order: no slippageBps = auto RTSE slippage + auto gasless if <0.01 SOL
-      const orderData = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&taker=${walletFull}&referral=${CHATFI_REFERRAL}`);
+      // Premium holders (10,000+ CHATFI) get zero platform fee as a perk
+      const referralParam = isPremium ? "" : `&referral=${CHATFI_REFERRAL}`;
+      const orderData = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amountRaw}&taker=${walletFull}${referralParam}`);
       if (orderData.error) throw new Error(typeof orderData.error==="object"?JSON.stringify(orderData.error):orderData.error);
       if (!orderData.transaction) throw new Error("No transaction returned from Jupiter — check your balance.");
 
@@ -6236,22 +6324,25 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       // ── COPY_TRADE ──────────────────────────────────────────────────────────
       } else if (action === "COPY_TRADE") {
         const ctWallet = actionData?.wallet;
-        const ctLimit  = parseInt(actionData?.limit) || 5;
         if (!ctWallet) {
           push("ai", "Please provide a wallet address, e.g. *copy trades from ABC...XYZ*.");
         } else {
-          push("ai", text + `\n\nFetching last ${ctLimit} swaps from \`${ctWallet.slice(0,8)}…${ctWallet.slice(-4)}\`…`);
+          push("ai", text + `\n\nAnalysing wallet \`${ctWallet.slice(0,8)}…${ctWallet.slice(-4)}\` — fetching last 50 trades…`);
           try {
-            const trades = await fetchWalletTrades(ctWallet, ctLimit);
+            const { trades, profile } = await analyseWalletBehaviour(ctWallet);
             if (!trades?.length) {
               push("ai", `No recent swaps found for \`${ctWallet.slice(0,8)}…\``);
             } else {
-              setCopyTradeData({ wallet: ctWallet, trades });
+              setCopyTradeData({ wallet: ctWallet, trades, profile });
               setShowCopyTrade(true);
-              const lines = trades.map((t, i) =>
-                `${i+1}. **${t.fromSymbol}→${t.toSymbol}** — ${t.fromAmount} ${t.fromSymbol} → ${t.toAmount} ${t.toSymbol}  ·  ${new Date(t.timestamp).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`
-              ).join("\n");
-              push("ai", `**Last ${trades.length} swaps** from \`${ctWallet.slice(0,8)}…${ctWallet.slice(-4)}\`:\n${lines}\n\nUse the **Mirror** buttons below to copy any trade.`);
+              const profileSummary = profile ? [
+                `**Style:** ${profile.tradingStyle}`,
+                `**Sentiment:** ${profile.sentiment}`,
+                profile.topTokens.length ? `**Favourite tokens:** ${profile.topTokens.join(", ")}` : null,
+                profile.avgUsd ? `**Avg trade size:** ~$${parseInt(profile.avgUsd).toLocaleString()}` : null,
+                `**Buys/Sells:** ${profile.buys}/${profile.sells} in last ${profile.tradeCount} trades`,
+              ].filter(Boolean).join("  ·  ") : "";
+              push("ai", `**Wallet Analysis** — \`${ctWallet.slice(0,8)}…${ctWallet.slice(-4)}\`\n\n${profileSummary}\n\nShowing last ${trades.length} trades below. Use **Mirror** to copy any trade.`);
             }
           } catch(e) {
             push("ai", `Could not fetch trades: ${e?.message || "unknown error"}. Check the wallet address and try again.`);
@@ -9385,6 +9476,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   {[
                     { id:"meme", label:"Meme", desc:"16K→69K MC, raises ~18K USDC" },
                     { id:"indie", label:"Indie", desc:"32K→240K MC, raises ~58K USDC + vesting" },
+                    { id:"chatfi", label:"ChatFi", desc:"16K→69K MC, 80% locked 2yrs, 1% fee" },
                   ].map(p => (
                     <button key={p.id} onClick={() => setStudioCfg(c=>({...c,preset:p.id}))}
                       style={{ flex:1, padding:"8px 10px", borderRadius:8, border:`1px solid ${studioCfg.preset===p.id ? T.accent : T.border}`, background: studioCfg.preset===p.id ? T.accentBg : T.bg, color: studioCfg.preset===p.id ? T.accent : T.text2, fontSize:12, cursor:"pointer", textAlign:"left" }}>
@@ -9824,15 +9916,57 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         {/* ── Copy Trade Panel ──────────────────────────────────────────── */}
         {showCopyTrade && copyTradeData && (
           <div style={{ margin:"0 16px 16px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            {/* Header */}
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                <span style={{ fontSize:15 }}><SvgBlog size={15} color="currentColor"/></span>
+                <SvgBarChart size={15} color={T.accent}/>
                 <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>
-                  Copy Trade — <span style={{ fontFamily:T.mono, fontSize:12, color:T.text3 }}>{copyTradeData.wallet.slice(0,8)}…{copyTradeData.wallet.slice(-4)}</span>
+                  Wallet Analysis
                 </span>
+                <span style={{ fontFamily:T.mono, fontSize:11, color:T.text3 }}>{copyTradeData.wallet.slice(0,8)}…{copyTradeData.wallet.slice(-4)}</span>
               </div>
               <button onClick={() => setShowCopyTrade(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
             </div>
+
+            {/* Wallet profile card */}
+            {copyTradeData.profile && (
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:14 }}>
+                {[
+                  { label:"Style",       value: copyTradeData.profile.tradingStyle },
+                  { label:"Sentiment",   value: copyTradeData.profile.sentiment },
+                  { label:"Avg Size",    value: copyTradeData.profile.avgUsd ? `~$${parseInt(copyTradeData.profile.avgUsd).toLocaleString()}` : "N/A" },
+                  { label:"Buy / Sell",  value: `${copyTradeData.profile.buys} / ${copyTradeData.profile.sells}` },
+                ].map(s => (
+                  <div key={s.label} style={{ padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>
+                    <div style={{ fontSize:9, color:T.text3, letterSpacing:"0.07em", textTransform:"uppercase", marginBottom:3 }}>{s.label}</div>
+                    <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{s.value}</div>
+                  </div>
+                ))}
+                {copyTradeData.profile.topTokens.length > 0 && (
+                  <div style={{ gridColumn:"1/-1", padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>
+                    <div style={{ fontSize:9, color:T.text3, letterSpacing:"0.07em", textTransform:"uppercase", marginBottom:5 }}>Favourite Tokens</div>
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                      {copyTradeData.profile.topTokens.map(sym => (
+                        <span key={sym} style={{ fontSize:11, fontWeight:700, color:T.accent, background:T.accentBg, padding:"2px 8px", borderRadius:5 }}>{sym}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {copyTradeData.profile.topPairs.length > 0 && (
+                  <div style={{ gridColumn:"1/-1", padding:"8px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8 }}>
+                    <div style={{ fontSize:9, color:T.text3, letterSpacing:"0.07em", textTransform:"uppercase", marginBottom:5 }}>Top Pairs</div>
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                      {copyTradeData.profile.topPairs.map(pair => (
+                        <span key={pair} style={{ fontSize:11, color:T.text2, background:T.surface, border:`1px solid ${T.border}`, padding:"2px 8px", borderRadius:5 }}>{pair}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Trade list */}
+            <div style={{ fontSize:10, color:T.text3, letterSpacing:"0.07em", textTransform:"uppercase", marginBottom:8 }}>Last {copyTradeData.trades.length} Trades</div>
             {copyTradeData.trades.map((t, i) => (
               <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8, gap:12, flexWrap:"wrap" }}>
                 <div style={{ flex:1, minWidth:0 }}>
@@ -9861,6 +9995,83 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* ── Top Wallets Leaderboard — live, ranked by 7d PnL via Helius ──── */}
+        {!showCopyTrade && (
+          <div style={{ margin:"0 16px 12px" }}>
+            {/* Header row */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:11, color:T.text3, letterSpacing:"0.07em", textTransform:"uppercase" }}>
+                <SvgBarChart size={11} color={T.text3}/> Top Wallets — Live 7d PnL
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                {leaderboardCachedAt && (
+                  <span style={{ fontSize:9, color:T.text3 }}>
+                    Updated {Math.round((Date.now() - leaderboardCachedAt) / 60000)}m ago
+                  </span>
+                )}
+                <button
+                  onClick={fetchLeaderboard}
+                  disabled={leaderboardLoading}
+                  className="hov-btn"
+                  style={{ padding:"3px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text3, fontSize:10, cursor:"pointer" }}>
+                  {leaderboardLoading ? "Loading…" : leaderboard.length ? "Refresh" : "Load"}
+                </button>
+              </div>
+            </div>
+
+            {/* Empty state */}
+            {!leaderboardLoading && leaderboard.length === 0 && (
+              <div style={{ padding:"12px 14px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, fontSize:12, color:T.text3, textAlign:"center" }}>
+                Hit Load to fetch the top 50 most profitable Solana wallets right now.
+              </div>
+            )}
+
+            {/* Loading skeleton */}
+            {leaderboardLoading && (
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} style={{ height:52, borderRadius:8, background:"linear-gradient(90deg,#0d1117 25%,#1e2d3d 50%,#0d1117 75%)", backgroundSize:"200% 100%", animation:"shimmer 1.4s infinite" }}/>
+                ))}
+              </div>
+            )}
+
+            {/* Live leaderboard rows */}
+            {!leaderboardLoading && leaderboard.map((w, i) => {
+              const pnlColor  = w.totalPnl >= 0 ? T.green : T.red;
+              const pnlBg     = w.totalPnl >= 0 ? T.greenBg : T.redBg;
+              const rankColor = i === 0 ? "#f6d860" : i === 1 ? "#c0c0c0" : i === 2 ? "#cd7f32" : T.text3;
+              const short     = `${w.wallet.slice(0,6)}…${w.wallet.slice(-4)}`;
+              return (
+                <div key={w.wallet} style={{ display:"flex", alignItems:"center", gap:0, background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:6, overflow:"hidden" }}>
+                  <div style={{ width:3, alignSelf:"stretch", background: i < 3 ? rankColor : T.border, flexShrink:0 }}/>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", flex:1, minWidth:0 }}>
+                    <span style={{ fontSize:10, fontWeight:700, color:rankColor, minWidth:18, textAlign:"center", flexShrink:0 }}>#{w.rank}</span>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:12, fontWeight:600, color:T.text1, fontFamily:T.mono }}>{short}</div>
+                      <div style={{ fontSize:10, color:T.text3, marginTop:1 }}>
+                        Vol: ${(w.totalVolume/1000).toFixed(1)}k
+                        {w.winRate != null && <> · Win rate: {w.winRate}%</>}
+                        · {w.txCount} swaps
+                      </div>
+                    </div>
+                    <div style={{ textAlign:"right", flexShrink:0 }}>
+                      <div style={{ fontSize:12, fontWeight:700, color:pnlColor, background:pnlBg, padding:"2px 8px", borderRadius:5 }}>
+                        {w.totalPnl >= 0 ? "+" : ""}${w.totalPnl.toLocaleString()}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => { window.__chatfiSend && window.__chatfiSend(`copy trades from ${w.wallet}`); }}
+                      className="hov-btn"
+                      style={{ padding:"5px 10px", background:"none", border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:10, fontWeight:600, cursor:"pointer", flexShrink:0, marginLeft:4 }}>
+                      Mirror
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
 
