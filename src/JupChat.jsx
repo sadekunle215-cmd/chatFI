@@ -1152,6 +1152,7 @@ function JupChatInner() {
   const { walletInfo: reownWalletInfo }                         = useWalletInfo();
   const [connectedWalletIcon, setConnectedWalletIcon]           = useState(null);
   const prevConnectedRef = useRef(false);
+  const privyCreatingWalletRef = useRef(false); // prevents duplicate createWallet calls
 
   // ── Privy hooks (social login + embedded wallet) ───────────────────────────
   const { ready: privyReady, authenticated: privyAuthed, user: privyUser,
@@ -1168,6 +1169,20 @@ function JupChatInner() {
   useEffect(() => {
     if (reownWalletInfo?.icon) setConnectedWalletIcon(reownWalletInfo.icon);
   }, [reownWalletInfo]);
+
+  // ── Force-close Privy modal as soon as auth is confirmed ─────────────────
+  // Privy's OTP modal can get stuck showing "Success!" without closing itself.
+  // Clicking the X on the modal or dismissing it manually completes the flow.
+  // We simulate that by calling login() again if already authed — Privy will
+  // detect the existing session and immediately close the modal.
+  useEffect(() => {
+    if (privyReady && privyAuthed) {
+      // Close any open Privy UI overlay by targeting its close button in DOM.
+      // This is a safe fallback — Privy renders a fixed iframe/div overlay.
+      const closeBtn = document.querySelector('[data-privy-dialog] button[aria-label="Close"], [data-privy-dialog] button.privy-close, iframe[id*="privy"] + * button');
+      if (closeBtn) closeBtn.click();
+    }
+  }, [privyReady, privyAuthed]);
 
   // Swap — stores symbol + resolved mint + decimals for any token
   const [showSwap, setShowSwap]   = useState(false);
@@ -4993,11 +5008,21 @@ Order: \`${orderKey.slice(0,20)}…\`
   // ── Privy connection sync ─────────────────────────────────────────────────
   useEffect(() => {
     if (!privyReady) return;
-    // Race fix: user authenticated but Solana embedded wallet not yet created
-    // (happens on first login after switching from ETH → Solana config).
-    // Calling createWallet updates privyWallets, which re-triggers this effect.
+    // Race fix: user authenticated but Solana embedded wallet not yet created.
+    // Guard against calling createWallet repeatedly — track with a ref.
     if (privyAuthed && !privyEmbeddedWallet) {
-      privyCreateWallet({ createAdditional: false }).catch(() => {});
+      if (!privyCreatingWalletRef.current) {
+        privyCreatingWalletRef.current = true;
+        privyCreateWallet({ createAdditional: false })
+          .catch(() => {
+            // createWallet can fail if user already has a wallet record that
+            // hasn't propagated yet — wait 1.5s then clear the guard so the
+            // effect re-runs naturally when privyWallets updates.
+          })
+          .finally(() => {
+            setTimeout(() => { privyCreatingWalletRef.current = false; }, 1500);
+          });
+      }
       return;
     }
     if (privyAuthed && privyEmbeddedWallet) {
@@ -9497,8 +9522,14 @@ export default function JupChat() {
       appId={appId}
       config={{
         loginMethods: ["email", "google", "twitter", "discord"],
-        // Ensure the modal closes and flow completes after OTP success
-        onSuccess: () => {},
+        // Privy calls this after successful login — used to dismiss any stuck modal UI
+        onSuccess: (user, isNewUser) => {
+          // Close any lingering Privy overlay DOM elements
+          try {
+            const overlay = document.querySelector('[data-privy-dialog], #privy-modal-content, [class*="privy"][class*="modal"]');
+            if (overlay) overlay.closest('[role="dialog"], [data-radix-portal]')?.remove();
+          } catch (_) {}
+        },
         appearance: {
           theme: "dark",
           accentColor: "#c8f255",
