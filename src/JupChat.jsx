@@ -370,9 +370,9 @@ Available actions:
 - null               → just chat
 - "FETCH_PRICE"      → actionData: { "tokens": ["SOL","JUP"] }
 - "FETCH_TOKEN_INFO"     → actionData: { "symbol": "BONK" } — full token details: price, supply, holders, liquidity, 24h stats, audit, social links
-- "FETCH_TOKEN_TAG"     → actionData: { "tag": "verified" } — tag must be "lst" (liquid staking) or "verified"
-- "FETCH_TOKEN_CATEGORY"→ actionData: { "category": "toptrending", "interval": "24h", "limit": 20 } — category: toporganicscore|toptraded|toptrending; interval: 5m|1h|6h|24h
-- "FETCH_TOKEN_RECENT"  → actionData: {} — newest tokens that just got their first liquidity pool
+- "FETCH_TOKEN_TAG"     → actionData: { "tag": "verified", "limit": 20 } — tag must be "lst" (liquid staking) or "verified". ALWAYS set limit to the number the user requests (e.g. "top 50" → limit:50). Default 20.
+- "FETCH_TOKEN_CATEGORY"→ actionData: { "category": "toptrending", "interval": "24h", "limit": 20 } — category: toporganicscore|toptraded|toptrending; interval: 5m|1h|6h|24h. ALWAYS set limit to the number the user requests (e.g. "top 30" → limit:30). Default 20.
+- "FETCH_TOKEN_RECENT"  → actionData: { "limit": 30 } — newest tokens that just got their first liquidity pool. ALWAYS set limit to the number the user requests (e.g. "top 50 new coins" → limit:50). Default 30.
 - "CHECK_TOKEN_VERIFY"  → actionData: { "symbol": "BONK" } — check if a token is eligible for Jupiter express verification
 - "FETCH_PORTFOLIO"  → actionData: { "wallet": "address_or_connected" } — fetches wallet balances + DeFi positions + prediction positions + earn positions + pending orders + airdrops (claimed & unclaimed)
 - "SHOW_SWAP"        → actionData: { "from": "SOL", "to": "PEPE", "amount": "10", "amountUSD": null, "portion": null, "reason": "brief why" }
@@ -1410,9 +1410,9 @@ function JupChatInner() {
   };
 
   // ── Token Recent — newly listed tokens (first pool just created) ────────────
-  const fetchRecentTokens = async () => {
+  const fetchRecentTokens = async (limit = 30) => {
     try {
-      const data = await jupFetch(JUP_TOKEN_RECENT);
+      const data = await jupFetch(`${JUP_TOKEN_RECENT}?limit=${limit}`);
       return Array.isArray(data) ? data : (data?.tokens || data?.data || []);
     } catch { return []; }
   };
@@ -4540,13 +4540,13 @@ Order: \`${orderKey.slice(0,20)}…\`
     if (lower === "refresh" || lower === "reload" || lower === "refresh page" || lower === "reload page") {
       setInput("");
       push("user", raw);
-      push("ai", "Refreshing the page now… Your chat will be restored. 🔄");
+      push("ai", "Refreshing the page now… Your chat will be restored. <svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' style='display:inline;vertical-align:middle;margin-left:3px'><path d='M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8'/><path d='M21 3v5h-5'/><path d='M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16'/><path d='M8 16H3v5'/></svg>");
       setTimeout(() => window.location.reload(), 800);
       return;
     }
 
     // "delete chat" / "clear chat" / "new chat" — wipe chat history
-    if (lower === "delete chat" || lower === "clear chat" || lower === "new chat" || lower === "clear conversation" || lower === "delete conversation") {
+    if (lower === "delete chat" || lower === "clear chat" || lower === "new chat" || lower === "clear conversation" || lower === "delete conversation" || lower === "delete messages" || lower === "clear messages" || lower === "delete all messages" || lower === "clear all messages") {
       setInput("");
       push("user", raw);
       histRef.current = [];
@@ -4905,33 +4905,35 @@ Order: \`${orderKey.slice(0,20)}…\`
         await fetchRecurringOrders(status);
 
       } else if (action === "FETCH_TOKEN_TAG") {
-        const tag = (actionData?.tag || "verified").toLowerCase();
+        const tag   = (actionData?.tag || "verified").toLowerCase();
+        const limit = Math.min(Math.max(parseInt(actionData?.limit) || 20, 1), 100);
         const tokens = await fetchTokensByTag(tag);
         if (!tokens.length) {
           push("ai", text + `\n\nNo tokens found for tag **${tag}**.`);
         } else {
           const label = tag === "lst" ? "Liquid Staking Tokens (LST)" : "Verified Tokens";
-          push("ai", text + `\n\n**${label}** (${tokens.length} found, showing top 15):\n${fmtTokenList(tokens, 15)}`);
+          push("ai", text + `\n\n**${label}** (${tokens.length} found, showing top ${Math.min(limit, tokens.length)}):\n${fmtTokenList(tokens, limit)}`);
         }
 
       } else if (action === "FETCH_TOKEN_CATEGORY") {
         const cat      = actionData?.category || "toptrending";
         const interval = actionData?.interval || "24h";
-        const limit    = Math.min(actionData?.limit || 20, 50);
+        const limit    = Math.min(Math.max(parseInt(actionData?.limit) || 20, 1), 100);
         const tokens   = await fetchTokensByCategory(cat, interval, limit);
         if (!tokens.length) {
           push("ai", text + `\n\nNo data returned for category **${cat}** / **${interval}**.`);
         } else {
           const catLabel = { toptrending: "Top Trending", toptraded: "Top Traded", toporganicscore: "Highest Organic Score" }[cat] || cat;
-          push("ai", text + `\n\n**${catLabel}** — ${interval} (showing ${Math.min(tokens.length, 20)}):\n${fmtTokenList(tokens, 20)}`);
+          push("ai", text + `\n\n**${catLabel}** — ${interval} (showing ${Math.min(tokens.length, limit)}):\n${fmtTokenList(tokens, limit)}`);
         }
 
       } else if (action === "FETCH_TOKEN_RECENT") {
-        const tokens = await fetchRecentTokens();
+        const limit  = Math.min(Math.max(parseInt(actionData?.limit) || 30, 1), 100);
+        const tokens = await fetchRecentTokens(limit);
         if (!tokens.length) {
           push("ai", text + "\n\nCould not fetch recently listed tokens right now.");
         } else {
-          push("ai", text + `\n\n**Recently Listed Tokens** (${tokens.length} found, newest first):\n${fmtTokenList(tokens, 15)}`);
+          push("ai", text + `\n\n**Recently Listed Tokens** (${tokens.length} found, newest first):\n${fmtTokenList(tokens, limit)}`);
         }
 
       } else if (action === "CHECK_TOKEN_VERIFY") {
@@ -8048,17 +8050,45 @@ Order: \`${orderKey.slice(0,20)}…\`
                       <>
                         <div style={{ fontSize:11, color:T.text3, marginBottom:8 }}>ROUTE ({hops.length} hop{hops.length!==1?"s":""})</div>
                         {hops.map((hop, i) => {
-                          const dex    = hop.ammKey?.label || hop.marketMeta?.amm?.label || hop.label || hop.dex || `DEX ${i+1}`;
+                          const DEX_LOGOS = {
+                            "orca":        "https://www.orca.so/favicon.ico",
+                            "whirlpool":   "https://www.orca.so/favicon.ico",
+                            "raydium":     "https://raydium.io/favicon.ico",
+                            "meteora":     "https://app.meteora.ag/favicon.ico",
+                            "lifinity":    "https://lifinity.io/favicon.ico",
+                            "phoenix":     "https://www.phoenix.trade/favicon.ico",
+                            "openbook":    "https://openbookdex.com/favicon.ico",
+                            "goosefx":     "https://www.goosefx.io/favicon.ico",
+                            "saber":       "https://app.saber.so/favicon.ico",
+                            "aldrin":      "https://aldrin.com/favicon.ico",
+                            "crema":       "https://crema.finance/favicon.ico",
+                            "invariant":   "https://invariant.app/favicon.ico",
+                            "dooar":       "https://dooar.com/favicon.ico",
+                            "stepn":       "https://stepn.com/favicon.ico",
+                            "saros":       "https://saros.finance/favicon.ico",
+                            "symmetry":    "https://symmetry.fi/favicon.ico",
+                            "sanctum":     "https://www.sanctum.so/favicon.ico",
+                            "stabblefi":   "https://stabble.org/favicon.ico",
+                            "helium":      "https://helium.com/favicon.ico",
+                            "perena":      "https://perena.org/favicon.ico",
+                          };
+                          const dex     = hop.swapInfo?.label || hop.ammKey?.label || hop.marketMeta?.amm?.label || hop.label || hop.dex || `DEX ${i+1}`;
+                          const dexKey  = dex.toLowerCase().split(/[\s(]/)[0];
+                          const logoUrl = Object.entries(DEX_LOGOS).find(([k]) => dexKey.includes(k))?.[1] || null;
                           const inSym  = hop.inputMint  ? `${hop.inAmount ? (parseInt(hop.inAmount)/1e6).toFixed(4)  : ""} ${routeData.fromSym}` : "";
                           const outSym = hop.outputMint ? `${hop.outAmount ? (parseInt(hop.outAmount)/1e6).toFixed(4) : ""} ${routeData.toSym}`   : "";
-                          const pi     = hop.priceImpactPct ? `${(parseFloat(hop.priceImpactPct)*100).toFixed(4)}% impact` : null;
+                          const pi     = (hop.swapInfo?.priceImpactPct ?? hop.priceImpactPct) ? `${(parseFloat(hop.swapInfo?.priceImpactPct ?? hop.priceImpactPct)*100).toFixed(4)}% impact` : null;
                           const pct    = hop.percent    ? `${hop.percent}%` : null;
                           return (
                             <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 10px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:6, fontSize:12 }}>
                               <span style={{ width:20, height:20, borderRadius:"50%", background:T.accentBg, border:`1px solid ${T.accent}`, display:"flex", alignItems:"center", justifyContent:"center", color:T.accent, fontSize:10, flexShrink:0 }}>{i+1}</span>
+                              {logoUrl
+                                ? <img src={logoUrl} alt={dex} style={{ width:18, height:18, borderRadius:4, objectFit:"contain", flexShrink:0, background:"#fff" }} onError={e => { e.currentTarget.style.display="none"; }} />
+                                : <span style={{ width:18, height:18, borderRadius:4, background:T.border, flexShrink:0 }}/>
+                              }
                               <span style={{ fontWeight:600, color:T.teal, flex:1 }}>{dex}</span>
                               {pct   && <span style={{ color:T.text3 }}>{pct}</span>}
-                              {pi    && <span style={{ color: parseFloat(hop.priceImpactPct||0)*100 > 1 ? T.red : T.text3 }}>{pi}</span>}
+                              {pi    && <span style={{ color: parseFloat(hop.swapInfo?.priceImpactPct ?? hop.priceImpactPct ?? 0)*100 > 1 ? T.red : T.text3 }}>{pi}</span>}
                             </div>
                           );
                         })}
