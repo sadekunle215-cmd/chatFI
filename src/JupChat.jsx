@@ -9227,13 +9227,7 @@ export default function JupChat() {
           noPromptOnSignature: false,
           requireUserPasswordOnCreate: false,
         },
-        // Solana mainnet — required for embedded Solana wallets
-        defaultChain: {
-          id: 1399811149,
-          name: "Solana",
-          nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 },
-          rpcUrls: { default: { http: [import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com"] } },
-        },
+        // Solana mainnet — embedded wallet cluster config
         solanaClusters: [
           { name: "mainnet-beta", rpcUrl: import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com" },
         ],
