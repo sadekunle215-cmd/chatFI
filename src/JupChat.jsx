@@ -5445,6 +5445,18 @@ Order: \`${orderKey.slice(0,20)}…\`
 
           // ── Phase 1: resolve mints + fetch all orders in parallel ─────────────
           const BASKET_SLIPPAGE_BPS = 50; // 0.5% — enough room for sequential pool impacts
+
+          // Pre-resolve any symbols not already cached (e.g. PENGU, FARTCOIN)
+          // resolveToken() hits Jupiter's search API and populates tokenCacheRef automatically.
+          const _allBasketSyms = [...new Set(basketTrades.flatMap(t => [
+            (t.from || "USDC").toUpperCase(),
+            (t.to   || "SOL").toUpperCase(),
+          ]))];
+          const _unknownSyms = _allBasketSyms.filter(s => !tokenCacheRef.current[s] && !TOKEN_MINTS[s]);
+          if (_unknownSyms.length > 0) {
+            await Promise.all(_unknownSyms.map(s => resolveToken(s).catch(() => null)));
+          }
+
           const tradeMeta = basketTrades.map(t => {
             const fromSym  = (t.from || "USDC").toUpperCase();
             const toSym    = (t.to   || "SOL").toUpperCase();
