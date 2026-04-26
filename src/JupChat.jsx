@@ -3646,8 +3646,8 @@ function JupChatInner() {
       setShowBorrow(false);
       push("ai",
         "Borrow successful\n\n" +
-        ""Deposited: **" + colAmount + " " + collateral + "** deposited as collateral\n" +
-        ""Borrowed: **" + borrowAmount + " " + debt + "** borrowed to your wallet\n\n" +
+        "Deposited: **" + colAmount + " " + collateral + "** deposited as collateral\n" +
+        "Borrowed: **" + borrowAmount + " " + debt + "** borrowed to your wallet\n\n" +
         "Position NFT is in your wallet.\nTx: `" + signature.slice(0,20) + "…`\n" +
         "[View on Solscan →](https://solscan.io/tx/" + signature + ")\n\n" +
         "Note: Monitor your LTV at [jup.ag/lend](https://jup.ag/lend) to avoid liquidation."
