@@ -5341,7 +5341,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         if (!basketTrades.length) { push("ai", "No trades found in basket. Try: *buy $100 each of SOL, JUP, and BONK*."); }
         else if (!walletFull) { push("ai", "Connect your wallet first to execute a basket swap."); }
         else {
-          push("ai", text + `\n\nExecuting **${basketTrades.length} swaps** in sequence…`);
+          push("ai", (text || "") + `\n\nExecuting **${basketTrades.length} swaps** in sequence…`);
           let done = 0, failed = 0;
           const summary = [];
           for (const t of basketTrades) {
@@ -5364,13 +5364,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                 inUnits  = usd / p;
               }
               const atomicAmt = Math.floor(inUnits * Math.pow(10, fromDec));
-              const orderRes  = await jupFetch(`${JUP_SWAP_ORDER}`, { method:"POST", body:{ inputMint:fromMint, outputMint:toMint, amount:atomicAmt, taker:walletFull, slippageBps:100 } });
+              const orderRes  = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${atomicAmt}&taker=${walletFull}`);
               if (!orderRes?.transaction) throw new Error("No transaction returned");
               const txBytes  = Uint8Array.from(atob(orderRes.transaction), c=>c.charCodeAt(0));
               const vTx      = VersionedTransaction.deserialize(txBytes);
               const provider = connectedProviderRef.current;
               const signed   = await provider.signTransaction(vTx);
-              const execRes  = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: btoa(String.fromCharCode(...signed.serialize())), requestId: orderRes.requestId } });
+              const execRes  = await jupFetch(`${JUP_SWAP_EXEC}`, { method:"POST", body:{ signedTransaction: bytesToB64(signed.serialize()), requestId: orderRes.requestId } });
               const sig      = execRes?.signature;
               if (!sig) throw new Error("No signature");
               done++;
