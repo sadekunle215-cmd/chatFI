@@ -4387,11 +4387,7 @@ function JupChatInner() {
       return;
     }
     setShowWalletModal(false);
-    // Small delay lets the modal animate closed before Privy opens its
-    // overlay — prevents the click from being swallowed on mobile browsers.
-    setTimeout(() => {
-      privyLogin();
-    }, 150);
+    privyLogin();
   };
 
   // Connect via Reown (Phantom, Backpack, WalletConnect, etc.)
@@ -9508,12 +9504,13 @@ export default function JupChat() {
           showWalletLoginFirst: false,
         },
         embeddedWallets: {
-          createOnLogin: "users-without-wallets",
-          noPromptOnSignature: false,
-          requireUserPasswordOnCreate: false,
+          // Solana-only: disable ETH wallet creation, enable Solana
+          ethereum: { createOnLogin: "off" },
           solana: { createOnLogin: "users-without-wallets" },
+          noPromptOnSignature: true,
+          requireUserPasswordOnCreate: false,
         },
-        // Solana mainnet — embedded wallet cluster config
+        // Solana mainnet RPC
         solanaClusters: [
           { name: "mainnet-beta", rpcUrl: import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com" },
         ],
