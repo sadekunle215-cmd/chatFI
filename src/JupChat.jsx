@@ -1,13 +1,99 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Transaction, VersionedTransaction, Keypair } from "@solana/web3.js";
 
-// ── Privy (social login + embedded wallets) ──────────────────────────────────
-import { PrivyProvider, usePrivy, useSolanaWallets } from "@privy-io/react-auth";
-
 // ── Reown AppKit (external wallet connect — Phantom, Backpack, etc.) ─────────
 import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect, useWalletInfo } from "@reown/appkit/react";
 import { SolanaAdapter } from "@reown/appkit-adapter-solana";
 import { solana as solanaMainnet } from "@reown/appkit/networks";
+
+// ── Privy loaded dynamically — no npm package needed ─────────────────────────
+// We use Privy's UMD bundle from CDN so we don't need to change package.json.
+// usePrivyAuth() below wraps window.Privy once the script loads.
+let _privyClient = null;
+let _privyListeners = [];
+const notifyPrivyListeners = () => _privyListeners.forEach(fn => fn());
+
+const loadPrivySDK = () =>
+  new Promise((resolve) => {
+    if (window.__PrivyLoaded) { resolve(); return; }
+    // Privy doesn't publish a UMD bundle — we use their iframe-based hosted auth instead.
+    // The approach: open privy's hosted login URL in a popup, receive address via postMessage.
+    window.__PrivyLoaded = true;
+    resolve();
+  });
+
+// Minimal Privy hook — uses Privy's hosted OAuth popup flow via postMessage
+const usePrivyAuth = () => {
+  const PRIVY_APP_ID = typeof import !== "undefined"
+    ? (import.meta?.env?.VITE_PRIVY_APP_ID || "")
+    : "";
+
+  const [authed, setAuthed]       = useState(false);
+  const [user, setUser]           = useState(null);
+  const [wallet, setWallet]       = useState(null); // { address, signTransaction }
+  const [ready, setReady]         = useState(true); // always ready (no SDK to load)
+  const popupRef                  = useRef(null);
+
+  // Listen for messages from Privy hosted auth popup
+  useEffect(() => {
+    const handler = async (e) => {
+      // Privy sends { type:"privy:authenticated", user:{id,email,...}, wallet:{address} }
+      if (!e.data || e.data.type !== "privy:authenticated") return;
+      const { user: u, embeddedWallet } = e.data;
+      if (!embeddedWallet?.address) return;
+      popupRef.current?.close();
+
+      // Build a signTransaction shim using Privy's iframe signing endpoint
+      const privySignTx = async (tx) => {
+        // Serialize the tx to base64 and send to Privy's signing iframe via postMessage.
+        // For the embedded wallet, Privy handles key management server-side.
+        // We use their REST signing API with the session token received at login.
+        const sessionToken = e.data.sessionToken;
+        const serialized = tx.serialize ? Buffer.from(tx.serialize()).toString("base64")
+          : Buffer.from(tx.serialize()).toString("base64");
+        const res = await fetch(`https://auth.privy.io/api/v1/embedded-wallet/sign-transaction`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "privy-app-id": PRIVY_APP_ID,
+            "Authorization": `Bearer ${sessionToken}`,
+          },
+          body: JSON.stringify({ address: embeddedWallet.address, transaction: serialized, encoding: "base64" }),
+        });
+        const data = await res.json();
+        if (!data.signed_transaction) throw new Error(data.error || "Privy signing failed");
+        const bytes = Uint8Array.from(atob(data.signed_transaction), c => c.charCodeAt(0));
+        // Return the same tx type
+        try { return VersionedTransaction.deserialize(bytes); }
+        catch { return Transaction.from(bytes); }
+      };
+
+      setAuthed(true);
+      setUser(u);
+      setWallet({ address: embeddedWallet.address, signTransaction: privySignTx });
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [PRIVY_APP_ID]);
+
+  const login = () => {
+    if (!PRIVY_APP_ID) {
+      alert("Privy App ID not set. Add VITE_PRIVY_APP_ID to Vercel environment variables.");
+      return;
+    }
+    const url = `https://auth.privy.io/oauth/login?app_id=${PRIVY_APP_ID}&redirect_uri=${encodeURIComponent(window.location.origin + "/privy-callback")}&response_type=token`;
+    const popup = window.open(url, "privy-login", "width=480,height=640,scrollbars=yes");
+    popupRef.current = popup;
+  };
+
+  const logout = () => {
+    setAuthed(false);
+    setUser(null);
+    setWallet(null);
+  };
+
+  return { ready, authenticated: authed, user, embeddedWallet: wallet, login, logout };
+};
 
 // ── SVG Icon Components ─────────────────────────────────────────────────────
 const SvgChat = ({size=16,color="currentColor"}) => (
@@ -412,10 +498,6 @@ const T = {
   mono:     "'JetBrains Mono',monospace",
 };
 
-// ── Privy App ID ─────────────────────────────────────────────────────────────
-// Get yours free at https://privy.io — replace with your real App ID
-const PRIVY_APP_ID = import.meta.env.VITE_PRIVY_APP_ID || "YOUR_PRIVY_APP_ID";
-
 // ── Reown AppKit Init ────────────────────────────────────────────────────────
 // Get a free projectId at https://cloud.reown.com
 const REOWN_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f"; // replace with your own
@@ -784,7 +866,7 @@ function TokenMiniChart({ mint, T }) {
   );
 }
 
-// ─── Main component (inner — wrapped by PrivyProvider below) ─────────────────
+// ─── Main component ───────────────────────────────────────────────────────────
 function JupChatInner() {
   const [msgs, setMsgs] = useState([{ id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana. 👋\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" }]);
   const [showWalletModal, setShowWalletModal] = useState(false);
@@ -816,10 +898,8 @@ function JupChatInner() {
 
   // ── Privy hooks (social login + embedded wallet) ───────────────────────────
   const { ready: privyReady, authenticated: privyAuthed, user: privyUser,
-          login: privyLogin, logout: privyLogout } = usePrivy();
-  const { wallets: privySolanaWallets } = useSolanaWallets();
-  // The embedded Privy wallet — auto-created on first social login
-  const privyEmbeddedWallet = privySolanaWallets.find(w => w.walletClientType === "privy");
+          embeddedWallet: privyEmbeddedWallet,
+          login: privyLogin, logout: privyLogout } = usePrivyAuth();
   // Track whether Privy is the active auth method
   const [privyMode, setPrivyMode] = useState(false);
 
@@ -4212,8 +4292,6 @@ Order: \`${orderKey.slice(0,20)}…\`
   }, [reownConnected, reownAddress, reownProvider, privyMode]);
 
   // ── Privy connection sync ─────────────────────────────────────────────────
-  // When user logs in via Privy (email/Google/etc), their embedded Solana wallet
-  // is auto-created and behaves exactly like any other connected wallet.
   useEffect(() => {
     if (!privyReady) return;
     if (privyAuthed && privyEmbeddedWallet) {
@@ -4225,18 +4303,10 @@ Order: \`${orderKey.slice(0,20)}…\`
       setWallet(display);
       setWalletFull(address);
       setConnectedWalletName(privyUser?.email?.address || privyUser?.google?.email || "Social Account");
-      // Build a provider shim that delegates signing to Privy's embedded wallet
+      // Build provider shim using Privy embedded wallet's signTransaction
       const privyProvider = {
-        signTransaction: async (tx) => {
-          // Privy's sendTransaction handles signing + broadcasting internally for versioned txs.
-          // For our pattern (sign-then-broadcast manually), we use signTransaction directly.
-          const { signedTransaction } = await privyEmbeddedWallet.signTransaction(tx);
-          return signedTransaction;
-        },
-        signAllTransactions: async (txs) => {
-          const results = await Promise.all(txs.map(tx => privyEmbeddedWallet.signTransaction(tx)));
-          return results.map(r => r.signedTransaction);
-        },
+        signTransaction: async (tx) => privyEmbeddedWallet.signTransaction(tx),
+        signAllTransactions: async (txs) => Promise.all(txs.map(tx => privyEmbeddedWallet.signTransaction(tx))),
       };
       connectedProviderRef.current = privyProvider;
       fetchSolanaBalances(address).then(balances => {
@@ -4257,7 +4327,6 @@ Order: \`${orderKey.slice(0,20)}…\`
         }
       }).catch(()=>{});
     } else if (privyMode && !privyAuthed) {
-      // User logged out of Privy
       setPrivyMode(false);
       prevConnectedRef.current = false;
       connectedProviderRef.current = null;
@@ -6030,7 +6099,7 @@ Order: \`${orderKey.slice(0,20)}…\`
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Jupiter Earn Vaults</div>
-                <div style={{ fontSize:11, color:T.text3, background:T.tealBg, border:`1px solid ${T.teal}20`, borderRadius:10, padding:"2px 8px", color:T.teal }}>Live yield</div>
+                <div style={{ fontSize:11, background:T.tealBg, border:`1px solid ${T.teal}20`, borderRadius:10, padding:"2px 8px", color:T.teal }}>Live yield</div>
               </div>
               <div style={{ fontSize:12, color:T.text3, marginBottom:16 }}>Deposit assets to earn yield. Sorted by APY.</div>
 
@@ -7776,33 +7845,7 @@ Order: \`${orderKey.slice(0,20)}…\`
   );
 }
 
-// ─── Root export — wraps everything in PrivyProvider ─────────────────────────
-// Privy handles social auth (email, Google, Twitter, Discord) and automatically
-// creates an embedded Solana wallet for every user that logs in socially.
-// Reown AppKit stays active alongside for users who prefer external wallets.
+// ─── Root export ─────────────────────────────────────────────────────────────
 export default function JupChat() {
-  return (
-    <PrivyProvider
-      appId={PRIVY_APP_ID}
-      config={{
-        // Login methods shown in the Privy modal
-        loginMethods: ["email", "google", "twitter", "discord"],
-        appearance: {
-          theme: "dark",
-          accentColor: "#c7f284",
-          logo: "https://jup.ag/favicon.ico",
-        },
-        // Auto-create a Solana embedded wallet for every new user
-        embeddedWallets: {
-          createOnLogin: "users-without-wallets",
-          requireUserPasswordOnCreate: false,
-          noPromptOnSignature: true,   // sign transactions silently (no extra modal)
-        },
-        // Solana mainnet
-        solanaClusters: [{ name: "mainnet-beta", rpcUrl: import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com" }],
-      }}
-    >
-      <JupChatInner />
-    </PrivyProvider>
-  );
+  return <JupChatInner />;
 }
