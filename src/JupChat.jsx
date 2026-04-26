@@ -24,9 +24,7 @@ const loadPrivySDK = () =>
 
 // Minimal Privy hook — uses Privy's hosted OAuth popup flow via postMessage
 const usePrivyAuth = () => {
-  const PRIVY_APP_ID = typeof import !== "undefined"
-    ? (import.meta?.env?.VITE_PRIVY_APP_ID || "")
-    : "";
+  const PRIVY_APP_ID = import.meta.env.VITE_PRIVY_APP_ID || "";
 
   const [authed, setAuthed]       = useState(false);
   const [user, setUser]           = useState(null);
