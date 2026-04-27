@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Connection, Transaction, VersionedTransaction, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 // ── Reown AppKit (external wallet connect — Phantom, Backpack, etc.) ─────────
 import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect, useWalletInfo } from "@reown/appkit/react";
@@ -1591,9 +1592,12 @@ const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **Cha
 // Wrapper: shows landing on first visit, then the app
 function JupChatWithLanding() {
   const [showLanding, setShowLanding] = useState(() => {
-    try { return !sessionStorage.getItem("chatfi-msgs"); } catch { return true; }
+    try { return !sessionStorage.getItem("chatfi-entered"); } catch { return true; }
   });
-  if (showLanding) return <LandingPage onEnter={() => setShowLanding(false)} />;
+  if (showLanding) return <LandingPage onEnter={() => {
+    try { sessionStorage.setItem("chatfi-entered", "1"); } catch {}
+    setShowLanding(false);
+  }} />;
   return <JupChatInner />;
 }
 
@@ -3329,9 +3333,7 @@ function JupChatInner() {
     const escrowAddr = lockId || lockPubkey;
     setClaimingLock(escrowAddr);
     try {
-      const { PublicKey, SystemProgram, Transaction, TransactionInstruction, Connection } = await import("@solana/web3.js");
-      const { getAssociatedTokenAddress, TOKEN_PROGRAM_ID,
-              ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountInstruction } = await import("@solana/spl-token");
+      const { TransactionInstruction } = await import("@solana/web3.js");
 
       const LOCK_PROGRAM = new PublicKey("LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn");
       const RPC_URL      = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
@@ -3796,22 +3798,21 @@ function JupChatInner() {
         const lamports = Math.round(amtNum * LAMPORTS_PER_SOL);
         tx.add(SystemProgram.transfer({ fromPubkey: senderPubkey, toPubkey: recipientPubkey, lamports }));
       } else {
-        // SPL token transfer — dynamically import spl-token to keep bundle light
-        const spl = await import("@solana/spl-token");
+        // SPL token transfer — using statically imported spl-token
         const mintPubkey = new PublicKey(mint);
         const decimalsInfo = await connection.getParsedAccountInfo(mintPubkey);
         const decimals = decimalsInfo?.value?.data?.parsed?.info?.decimals ?? tokenDecimalsRef.current[token] ?? 6;
         const rawAmt = BigInt(Math.round(amtNum * Math.pow(10, decimals)));
 
-        const senderATA   = await spl.getAssociatedTokenAddress(mintPubkey, senderPubkey);
-        const recipientATA = await spl.getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+        const senderATA   = await getAssociatedTokenAddress(mintPubkey, senderPubkey);
+        const recipientATA = await getAssociatedTokenAddress(mintPubkey, recipientPubkey);
 
         // Create recipient ATA if it doesn't exist
         const recipientATAInfo = await connection.getAccountInfo(recipientATA);
         if (!recipientATAInfo) {
-          tx.add(spl.createAssociatedTokenAccountInstruction(senderPubkey, recipientATA, recipientPubkey, mintPubkey));
+          tx.add(createAssociatedTokenAccountInstruction(senderPubkey, recipientATA, recipientPubkey, mintPubkey));
         }
-        tx.add(spl.createTransferInstruction(senderATA, recipientATA, senderPubkey, rawAmt));
+        tx.add(createTransferInstruction(senderATA, recipientATA, senderPubkey, rawAmt));
       }
 
       const signedTx = await provider.signTransaction(tx);
@@ -5699,7 +5700,7 @@ Order: \`${orderKey.slice(0,20)}…\`
     }
     if (privyAuthed && privyEmbeddedWallet) {
       const address = privyEmbeddedWallet.address;
-      const justConnected = !privyMode;
+      const justConnected = !privyMode && !sessionStorage.getItem("chatfi-wallet-shown");
       setPrivyMode(true);
       prevConnectedRef.current = true;
       const provider = privyUser?.google?.email ? "google" : privyUser?.twitter?.username ? "twitter" : privyUser?.discord?.username ? "discord" : "email";
@@ -5740,6 +5741,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                 tokens,
               }
             });
+            try { sessionStorage.setItem("chatfi-wallet-shown", "1"); } catch {}
           }).catch(()=>{});
         }
       }).catch(()=>{});
@@ -5752,6 +5754,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       setWalletFull(null);
       setConnectedWalletName(null);
       setPortfolio({});
+      try { sessionStorage.removeItem("chatfi-wallet-shown"); } catch {}
       push("ai", "Signed out. Connect again anytime.");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6085,6 +6088,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       setShowCopyTrade(false); setCopyTradeData(null);
       histRef.current = [];
       try { sessionStorage.removeItem("chatfi-msgs"); } catch {}
+      try { sessionStorage.removeItem("chatfi-wallet-shown"); } catch {}
       setMsgs([INITIAL_MSG]);
       return;
     }
