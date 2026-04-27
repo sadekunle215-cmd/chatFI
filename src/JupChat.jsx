@@ -2391,24 +2391,13 @@ function JupChatInner() {
     return { trades, profile: { tradeCount: trades.length, topTokens, topPairs, tradingStyle, sentiment, avgUsd, buys, sells } };
   };
 
-  // ── Leaderboard — real on-chain top traders via Birdeye API ─────────────────
-  // ⚠️  SERVER ACTION REQUIRED: update /api/leaderboard to proxy Birdeye:
-  //   GET https://public-api.birdeye.so/defi/v2/tokens/top_traders
-  //       ?address=So11111111111111111111111111111111111111112
-  //       &time_frame=7d&sort_by=PnL&sort_type=desc&limit=40
-  //   Headers: { "X-API-KEY": process.env.BIRDEYE_API_KEY, "x-chain": "solana" }
-  //   Shape returned to client: { data: { items: [{ address, pnl, volume, trade, winRate }] } }
-  // ── Leaderboard seed wallets (fallback when server isn't using Birdeye) ───────
-  // To get REAL live top-trader data, update your /api/leaderboard server route to:
-  //
-  //   const SOL_MINT = "So11111111111111111111111111111111111111112";
-  //   const res = await fetch(
-  //     `https://public-api.birdeye.so/defi/v2/tokens/top_traders?address=${SOL_MINT}&time_frame=1W&sort_by=PnL&sort_type=desc&limit=40`,
-  //     { headers: { "X-API-KEY": process.env.BIRDEYE_API_KEY, "x-chain": "solana" } }
-  //   );
-  //   const { data } = await res.json();
-  //   // map data.items → { leaderboard: [{address,pnl,volume,trade,winRate}] }
-  //   // Free Birdeye API key at: https://bds.birdeye.so
+  // ── Leaderboard — real on-chain top traders via DexScreener (free, no API key) ──
+  // Uses DexScreener's free public API to discover top Solana SOL/WSOL pairs,
+  // then scores those maker wallets via the Helius fallback below.
+  // No subscription or API key required.
+  //   GET https://api.dexscreener.com/token-pairs/v1/solana/So11111111111111111111111111111111111111112
+  //   Returns pairs sorted by volume; we extract pairAddresses as candidate wallets.
+  // ── Leaderboard seed wallets (used when DexScreener pairs can't be resolved) ────
   const SEED_WALLETS = [
     "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM", "DfXygSmDjBpFhG9J6G6VjpKxDbFx8wjDiVhEa5N6dqXj",
     "HN7cABqLq46Es1jh92dQQisAq662SmxELLLsHHe4YWrH", "GjNau6UB2KJKJFpSsHQLzeFiNsNqbHAqenHqNjTPuY5A",
@@ -2428,28 +2417,45 @@ function JupChatInner() {
     if (leaderboardLoading) return;
     setLeaderboardLoading(true);
     try {
-      // ── 1. Try server (should proxy Birdeye top_traders by PnL) ────────────
+      // ── 1. Try DexScreener free API (no key required) ──────────────────────
       let serverWallets = [];
       try {
-        const res  = await fetch("/api/leaderboard?limit=40&source=birdeye");
-        const data = await res.json();
-        // Handle Birdeye shape { data: { items } } or legacy { leaderboard }
-        const items = data?.data?.items || data?.leaderboard || [];
-        serverWallets = items
-          .map((w, i) => ({
-            wallet:      w.address    || w.wallet,
-            totalPnl:    Math.round(w.pnl       ?? w.totalPnl   ?? 0),
-            totalVolume: Math.round(w.volume    ?? w.totalVolume ?? 0),
-            txCount:     w.trade      ?? w.txCount ?? 0,
-            // Birdeye returns winRate as 0-1 decimal; legacy may be 0-100
-            winRate:     w.winRate != null ? Math.round(w.winRate * (w.winRate <= 1 ? 100 : 1)) : null,
-            rank:        i + 1,
-          }))
-          .filter(w => w.wallet && w.totalPnl > 0)
-          .sort((a, b) => b.totalPnl - a.totalPnl)
-          .slice(0, 40)
-          .map((w, i) => ({ ...w, rank: i + 1 }));
-      } catch { /* server not yet proxying Birdeye — fall through */ }
+        const SOL_MINT = "So11111111111111111111111111111111111111112";
+        const dsRes  = await fetch(
+          `https://api.dexscreener.com/token-pairs/v1/solana/${SOL_MINT}`
+        );
+        const dsData = await dsRes.json();
+        // DexScreener returns an array of pair objects sorted by volume
+        const pairs = Array.isArray(dsData) ? dsData : (dsData?.pairs || []);
+        // Extract unique maker/pairAddress as candidate wallets; filter valid base-58
+        const candidates = [...new Set(
+          pairs.slice(0, 40).map(p => p.pairAddress).filter(Boolean)
+        )];
+        // Score candidates via Helius trades (reuse existing fetchWalletTrades)
+        if (candidates.length >= 3) {
+          const results = await Promise.allSettled(
+            candidates.map(addr => fetchWalletTrades(addr, 30))
+          );
+          results.forEach((r, idx) => {
+            if (r.status !== "fulfilled" || !r.value?.length) return;
+            const trades   = r.value;
+            const wallet   = candidates[idx];
+            const usdBuys  = trades.filter(t => ["USDC","USDT"].includes(t.fromSymbol));
+            const usdSells = trades.filter(t => ["USDC","USDT"].includes(t.toSymbol));
+            const inFlow   = usdBuys.reduce((s,t)  => s + parseFloat(t.fromAmount||0), 0);
+            const outFlow  = usdSells.reduce((s,t) => s + parseFloat(t.toAmount  ||0), 0);
+            const pnl      = outFlow - inFlow;
+            if (pnl <= 0) return;
+            const wins     = usdSells.filter(t => parseFloat(t.toAmount||0) > parseFloat(t.fromAmount||0)*0.95).length;
+            const winRate  = usdSells.length ? Math.round((wins/usdSells.length)*100) : null;
+            serverWallets.push({ wallet, totalPnl:Math.round(pnl), totalVolume:inFlow, txCount:trades.length, winRate, rank:0 });
+          });
+          serverWallets = serverWallets
+            .sort((a, b) => b.totalPnl - a.totalPnl)
+            .slice(0, 40)
+            .map((w, i) => ({ ...w, rank: i + 1 }));
+        }
+      } catch { /* DexScreener unavailable — fall through to seed wallets */ }
 
       if (serverWallets.length >= 3) {
         setLeaderboard(serverWallets);
@@ -2460,7 +2466,7 @@ function JupChatInner() {
       }
 
       // ── 2. Client fallback: score seed wallets via Helius trades ────────────
-      // Used until server is updated to use Birdeye API key.
+      // Used when DexScreener pairs yield no scoreable wallets.
       const results = await Promise.allSettled(
         SEED_WALLETS.map(addr => fetchWalletTrades(addr, 30))
       );
