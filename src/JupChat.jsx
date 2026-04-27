@@ -793,15 +793,21 @@ function TokenPicker({ value, onSelect, jupFetch }) {
           {!busy && results.length === 0 && query.length > 1 && (
             <div style={{ padding:"8px 12px", fontSize:12, color:T.text3 }}>No results for "{query}"</div>
           )}
-          {results.map(t => (
-            <div key={t.address} onMouseDown={() => pick(t)}
-              style={{ padding:"8px 12px", cursor:"pointer", fontSize:13, display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${T.border}` }}
-              className="hov-row"
-            >
-              <span><strong>{t.symbol}</strong>{t.name ? ` — ${t.name.slice(0,24)}` : ""}</span>
-              {t.daily_volume > 0 && <span style={{ fontSize:10, color:T.text3 }}>${(t.daily_volume/1e3).toFixed(0)}k vol</span>}
-            </div>
-          ))}
+          {results.map(t => {
+            const logo = t.icon || t.logoURI;
+            return (
+              <div key={t.address} onMouseDown={() => pick(t)}
+                style={{ padding:"8px 12px", cursor:"pointer", fontSize:13, display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid ${T.border}` }}
+                className="hov-row"
+              >
+                <span style={{ display:"flex", alignItems:"center", gap:6 }}>
+                  {logo && <img src={logo} alt="" style={{ width:18, height:18, borderRadius:"50%", flexShrink:0 }} onError={e => e.target.style.display="none"} />}
+                  <strong>{t.symbol}</strong>{t.name ? ` — ${t.name.slice(0,24)}` : ""}
+                </span>
+                {t.daily_volume > 0 && <span style={{ fontSize:10, color:T.text3 }}>${(t.daily_volume/1e3).toFixed(0)}k vol</span>}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -2344,9 +2350,62 @@ function JupChatInner() {
   };
 
   // ── Wallet behaviour analyser — builds a profile from 50 trades ─────────────
+  // Helper: resolve a raw mint address → { symbol, name, logoURI, decimals } via Jupiter
+  const resolveMintToMeta = async (mint) => {
+    try {
+      const meta = await jupFetch(`https://tokens.jup.ag/token/${mint}`);
+      return meta || null;
+    } catch { return null; }
+  };
+
+  // Helper: given a symbol value that might actually be a mint address, return { sym, mint }
+  const isMintAddr = (s) => typeof s === "string" && s.length >= 32 && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
+
+  // Normalise all trades: replace any mint-address symbols with real token symbols
+  const normaliseTrades = async (trades) => {
+    // Collect unique mints that need resolving
+    const mintsToResolve = new Set();
+    trades.forEach(t => {
+      if (isMintAddr(t.fromSymbol)) mintsToResolve.add(t.fromSymbol);
+      if (isMintAddr(t.toSymbol))   mintsToResolve.add(t.toSymbol);
+    });
+
+    // Batch-resolve all unknown mints in parallel
+    const mintMap = {}; // mint → { symbol, logoURI, decimals }
+    await Promise.allSettled(
+      [...mintsToResolve].map(async (mint) => {
+        // Check cache first
+        const cached = Object.keys(tokenCacheRef.current).find(sym => tokenCacheRef.current[sym] === mint);
+        if (cached) { mintMap[mint] = { symbol: cached }; return; }
+        const meta = await resolveMintToMeta(mint);
+        if (meta?.symbol) {
+          mintMap[mint] = { symbol: meta.symbol.toUpperCase(), logoURI: meta.logoURI, decimals: meta.decimals };
+          // Populate caches so swap panel can use them
+          tokenCacheRef.current[meta.symbol.toUpperCase()] = mint;
+          tokenDecimalsRef.current[meta.symbol.toUpperCase()] = meta.decimals ?? 6;
+          if (meta.logoURI && logoMapRef.current) logoMapRef.current[meta.symbol.toUpperCase()] = meta.logoURI;
+        } else {
+          // Can't resolve — use a short truncation so at least it's readable
+          mintMap[mint] = { symbol: `${mint.slice(0,4)}…${mint.slice(-4)}` };
+        }
+      })
+    );
+
+    // Return trades with symbols replaced
+    return trades.map(t => ({
+      ...t,
+      fromSymbol: isMintAddr(t.fromSymbol) ? (mintMap[t.fromSymbol]?.symbol || t.fromSymbol) : t.fromSymbol,
+      toSymbol:   isMintAddr(t.toSymbol)   ? (mintMap[t.toSymbol]?.symbol   || t.toSymbol)   : t.toSymbol,
+      // Preserve original mints so the swap panel can use them
+      fromMint: t.fromMint || (isMintAddr(t.fromSymbol) ? t.fromSymbol : (tokenCacheRef.current[t.fromSymbol] || null)),
+      toMint:   t.toMint   || (isMintAddr(t.toSymbol)   ? t.toSymbol   : (tokenCacheRef.current[t.toSymbol]   || null)),
+    }));
+  };
+
   const analyseWalletBehaviour = async (walletAddress) => {
-    const trades = await fetchWalletTrades(walletAddress, 50);
-    if (!trades?.length) return { trades: [], profile: null };
+    const rawTrades = await fetchWalletTrades(walletAddress, 50);
+    if (!rawTrades?.length) return { trades: [], profile: null };
+    const trades = await normaliseTrades(rawTrades);
 
     // Token frequency
     const tokenCount = {};
@@ -2434,8 +2493,17 @@ function JupChatInner() {
         )
       );
 
+      // Normalise all trade batches (resolve mint-address symbols → real names)
+      const normalisedResults = await Promise.allSettled(
+        results.map(async (r) => {
+          const raw = r.status === "fulfilled" ? (r.value || []) : [];
+          if (!raw.length) return [];
+          try { return await normaliseTrades(raw); } catch { return raw; }
+        })
+      );
+
       const rows = [];
-      results.forEach((r, idx) => {
+      normalisedResults.forEach((r, idx) => {
         const trades = r.status === "fulfilled" ? (r.value || []) : [];
         if (!trades.length) return;
         const wallet   = SEED_WALLETS[idx];
@@ -5770,29 +5838,44 @@ Order: \`${orderKey.slice(0,20)}…\`
       const { from, to, amount, fromMint: evtFromMint, toMint: evtToMint } = e.detail || {};
       if (!from || !to || !amount) return;
 
-      const fromSym = from.toUpperCase();
-      const toSym   = to.toUpperCase();
+      const isMintAddr = (s) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
 
-      // Resolve mints: prefer mints passed in event, then cache/known list, then Jupiter search
+      // ── Resolve FROM token ──
+      let fromSym  = from.toUpperCase();
       let fromMint = evtFromMint || tokenCacheRef.current[fromSym] || TOKEN_MINTS[fromSym];
-      let toMint   = evtToMint   || tokenCacheRef.current[toSym]   || TOKEN_MINTS[toSym];
 
-      if (!fromMint) {
-        // fromSymbol might itself be a full mint address (44-char base58)
-        if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(from)) {
-          fromMint = from;
-        } else {
-          const r = await resolveToken(fromSym).catch(() => null);
-          if (r) { fromMint = r.mint; tokenCacheRef.current[fromSym] = r.mint; tokenDecimalsRef.current[fromSym] = r.decimals; }
+      if (isMintAddr(from)) {
+        // `from` is a raw mint address — resolve symbol + logo from Jupiter
+        fromMint = from;
+        const meta = await jupFetch(`https://tokens.jup.ag/token/${from}`).catch(() => null);
+        if (meta?.symbol) {
+          fromSym = meta.symbol.toUpperCase();
+          tokenCacheRef.current[fromSym] = from;
+          tokenDecimalsRef.current[fromSym] = meta.decimals ?? 9;
+          if (meta.logoURI && logoMapRef.current) logoMapRef.current[fromSym] = meta.logoURI;
         }
+      } else if (!fromMint) {
+        const r = await resolveToken(fromSym).catch(() => null);
+        if (r) { fromMint = r.mint; tokenCacheRef.current[fromSym] = r.mint; tokenDecimalsRef.current[fromSym] = r.decimals; }
       }
-      if (!toMint) {
-        if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(to)) {
-          toMint = to;
-        } else {
-          const r = await resolveToken(toSym).catch(() => null);
-          if (r) { toMint = r.mint; tokenCacheRef.current[toSym] = r.mint; tokenDecimalsRef.current[toSym] = r.decimals; }
+
+      // ── Resolve TO token ──
+      let toSym  = to.toUpperCase();
+      let toMint = evtToMint || tokenCacheRef.current[toSym] || TOKEN_MINTS[toSym];
+
+      if (isMintAddr(to)) {
+        // `to` is a raw mint address — resolve symbol + logo from Jupiter
+        toMint = to;
+        const meta = await jupFetch(`https://tokens.jup.ag/token/${to}`).catch(() => null);
+        if (meta?.symbol) {
+          toSym = meta.symbol.toUpperCase();
+          tokenCacheRef.current[toSym] = to;
+          tokenDecimalsRef.current[toSym] = meta.decimals ?? 6;
+          if (meta.logoURI && logoMapRef.current) logoMapRef.current[toSym] = meta.logoURI;
         }
+      } else if (!toMint) {
+        const r = await resolveToken(toSym).catch(() => null);
+        if (r) { toMint = r.mint; tokenCacheRef.current[toSym] = r.mint; tokenDecimalsRef.current[toSym] = r.decimals; }
       }
 
       push("ai", `Mirroring swap: **${amount} ${fromSym} → ${toSym}**`);
@@ -10595,9 +10678,16 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             {copyTradeData.trades.map((t, i) => (
               <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8, gap:12, flexWrap:"wrap" }}>
                 <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontSize:14, fontWeight:600, color:T.text1 }}>{t.fromSymbol} → {t.toSymbol}</div>
+                  <div style={{ fontSize:14, fontWeight:600, color:T.text1 }}>
+                    {/* If symbol looks like a raw mint address, truncate it */}
+                    {(() => {
+                      const isMint = s => s && s.length > 10;
+                      const fmt    = s => isMint(s) ? `${s.slice(0,5)}…${s.slice(-4)}` : s;
+                      return <>{fmt(t.fromSymbol)} → {fmt(t.toSymbol)}</>;
+                    })()}
+                  </div>
                   <div style={{ fontSize:11, color:T.text3, marginTop:2 }}>
-                    {t.fromAmount} {t.fromSymbol} → {t.toAmount} {t.toSymbol}
+                    {t.fromAmount} {t.fromSymbol?.length > 10 ? `${t.fromSymbol.slice(0,5)}…` : t.fromSymbol} → {t.toAmount} {t.toSymbol?.length > 10 ? `${t.toSymbol.slice(0,5)}…` : t.toSymbol}
                     {t.timestamp && <> · {new Date(t.timestamp).toLocaleDateString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}</>}
                   </div>
                 </div>
