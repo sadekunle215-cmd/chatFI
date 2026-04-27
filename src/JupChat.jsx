@@ -317,7 +317,7 @@ Available actions:
 - "SHOW_RECURRING"   → actionData: { "from": "USDC", "to": "SOL", "amountPerCycle": "10", "numberOfOrders": "10", "intervalSecs": "86400", "reason": "brief why" } — time-based DCA. intervalSecs: 60=1min,3600=1hr,86400=1day,604800=1wk,2592000=1mo
 - "FETCH_RECURRING_ORDERS" → actionData: { "status": "active" } — status: "active"|"history". Show user open or past recurring orders with cancel buttons.
 - "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players", "searchQuery": "Arsenal Man City" } — ALWAYS set searchQuery. ALSO trigger FETCH_PREDICTIONS with the same query.
-- "FETCH_PREDICTIONS"→ actionData: { "sport": "sports", "query": null } — sport categories (exact): sports, crypto, politics, esports, culture, economics, tech. For specific leagues set query instead.
+- "FETCH_PREDICTIONS"→ actionData: { "sport": "<category>", "query": null, "limit": 20 } — Infer the category from user intent: user says "sport/sports/football/soccer/basketball/cricket/tennis" → sport:"sports"; "crypto" → sport:"crypto"; "politics/election" → sport:"politics"; "esports/gaming" → sport:"esports"; "culture/entertainment" → sport:"culture"; "economics/finance/market" → sport:"economics"; "tech/technology" → sport:"tech". If user names a specific league or competition (e.g. "EPL", "Champions League", "NBA finals") set query to that instead of sport. ALWAYS set limit to the number the user requests (e.g. "top 30" → limit:30, "show 50" → limit:50). Default limit:20.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — portion: "all"|"half"|"quarter"|"N%"
 - "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — leveraged looping via Jupiter Lend flashloans. Explain mechanics + show vaults.
 - "SHOW_BORROW"        → actionData: { "collateral": "SOL", "debt": "USDC", "colAmount": "10", "borrowAmount": "200", "reason": "brief why" } — deposit collateral into a Jupiter Lend vault and borrow against it. colAmount = collateral to deposit; borrowAmount = debt token to receive. Available vaults: SOL→USDC (vault 1, 80% LTV), JitoSOL→SOL (vault 2, 90%), JupSOL→SOL (vault 3, 90%), WBTC→USDC (vault 4, 80%), JLP→USDC (vault 5, 90%), JUP→USDC (vault 6, 75%), USDC→USDT (vault 7, 95%).
@@ -350,7 +350,8 @@ Rules:
 - "my portfolio" / "my wallet" / "my positions" / "my orders" / "my bets" → FETCH_PORTFOLIO
 - "claim" / "claim winnings" / "claim payout" / "claim ASR" / "claim governance rewards" / "claim JUP rewards" → CLAIM_PAYOUTS
 - sports + predict/bet / "EPL" / "Champions League" / specific match → ALWAYS do BOTH: SHOW_PREDICTION then FETCH_PREDICTIONS
-- "predictions" / "show markets" / "what can I bet on" → FETCH_PREDICTIONS
+- "predictions" / "show markets" / "what can I bet on" / "sport prediction" / "new predictions" / "show predictions" / "prediction markets" / any mention of predict/bet + sport/crypto/politics → FETCH_PREDICTIONS — infer category from context. If user says "sport" or "sports" set sport:"sports". If user says "show me top N" extract limit:N.
+- "show new sport prediction" / "sport prediction to predict on" / "new sport markets" → FETCH_PREDICTIONS with sport:"sports"
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
 - "withdraw from earn" / "redeem jlTokens" / "take out my earn" → SHOW_LEND_POSITIONS (earn panel has withdraw buttons)
 - "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY
@@ -1193,8 +1194,395 @@ const BLOG_POSTS = [
   },
 ];
 
+// ─── Landing Page ─────────────────────────────────────────────────────────────
+function LandingPage({ onEnter }) {
+  // Inject landing-specific styles once
+  useEffect(() => {
+    const id = "chatfi-landing-styles";
+    if (document.getElementById(id)) return;
+    const s = document.createElement("style");
+    s.id = id;
+    s.textContent = `
+      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&family=JetBrains+Mono:wght@400;700&display=swap');
+      .lp-root { --lp-bg:#0b1219;--lp-surface:#0e1820;--lp-surface2:#111c26;--lp-border:#1e2d3d;--lp-border2:#253545;--lp-text1:#e8f4f0;--lp-text2:#8fa8b8;--lp-text3:#4d6a7a;--lp-accent:#c7f284;--lp-accentBg:#1a2e1a;--lp-red:#f28484;--lp-purple:#a78bfa;--lp-teal:#38bdf8; font-family:'DM Sans','Segoe UI',sans-serif; background:var(--lp-bg); color:var(--lp-text1); min-height:100vh; overflow-x:hidden; overflow-y:auto; position:fixed; inset:0; z-index:200; }
+      .lp-root *,lp-root *::before,.lp-root *::after{box-sizing:border-box;margin:0;padding:0;}
+      .lp-nav{position:sticky;top:0;z-index:100;display:flex;align-items:center;justify-content:space-between;padding:16px 32px;background:rgba(11,18,25,0.88);backdrop-filter:blur(16px);border-bottom:1px solid var(--lp-border);}
+      .lp-logo{display:flex;align-items:center;gap:9px;font-size:18px;font-weight:800;color:var(--lp-text1);letter-spacing:-0.4px;text-decoration:none;}
+      .lp-logo-badge{width:30px;height:30px;border-radius:8px;background:var(--lp-accent);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+      .lp-nav-links{display:flex;align-items:center;gap:6px;}
+      .lp-nav-links a{color:var(--lp-text2);text-decoration:none;font-size:13px;font-weight:500;padding:6px 12px;border-radius:8px;transition:color .15s,background .15s;}
+      .lp-nav-links a:hover{color:var(--lp-text1);background:var(--lp-surface2);}
+      .lp-btn-primary{display:inline-flex;align-items:center;gap:7px;background:var(--lp-accent);color:#0b1219;font-size:13px;font-weight:700;font-family:'DM Sans',sans-serif;padding:9px 18px;border-radius:10px;border:none;cursor:pointer;text-decoration:none;transition:opacity .15s,transform .1s;}
+      .lp-btn-primary:hover{opacity:.9;transform:translateY(-1px);}
+      .lp-btn-primary.lg{font-size:15px;padding:13px 26px;border-radius:13px;}
+      .lp-btn-ghost{display:inline-flex;align-items:center;gap:7px;background:none;color:var(--lp-text2);font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;padding:9px 16px;border-radius:10px;border:1px solid var(--lp-border);cursor:pointer;text-decoration:none;transition:color .15s,border-color .15s,background .15s;}
+      .lp-btn-ghost:hover{color:var(--lp-text1);border-color:var(--lp-border2);background:var(--lp-surface2);}
+      .lp-btn-ghost.lg{font-size:15px;padding:13px 22px;border-radius:13px;}
+      .lp-hero{padding:120px 32px 90px;text-align:center;position:relative;overflow:hidden;}
+      .lp-hero::after{content:'';position:absolute;top:60px;left:50%;transform:translateX(-50%);width:640px;height:320px;background:radial-gradient(ellipse,rgba(199,242,132,0.07) 0%,transparent 70%);pointer-events:none;}
+      .lp-badge{display:inline-flex;align-items:center;gap:7px;background:var(--lp-accentBg);border:1px solid rgba(199,242,132,.25);color:var(--lp-accent);font-size:11px;font-weight:700;padding:5px 12px;border-radius:20px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:28px;}
+      @keyframes lp-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.4)}}
+      @keyframes lp-floatUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
+      @keyframes lp-reveal{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+      .lp-pulse{width:6px;height:6px;border-radius:50%;background:var(--lp-accent);animation:lp-pulse 2s infinite;flex-shrink:0;}
+      .lp-h1{font-size:clamp(36px,6vw,68px);font-weight:800;line-height:1.05;letter-spacing:-1.5px;color:var(--lp-text1);max-width:780px;margin:0 auto 20px;}
+      .lp-h1 .acc{color:var(--lp-accent);}
+      .lp-sub{font-size:clamp(14px,2vw,17px);color:var(--lp-text2);max-width:500px;margin:0 auto 40px;line-height:1.65;font-weight:400;}
+      .lp-cta-row{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;}
+      .lp-mockup{margin:64px auto 0;max-width:640px;background:var(--lp-surface);border:1px solid var(--lp-border);border-radius:20px;overflow:hidden;box-shadow:0 40px 100px rgba(0,0,0,.5);animation:lp-floatUp .7s ease both;}
+      .lp-topbar{display:flex;align-items:center;gap:10px;padding:13px 18px;border-bottom:1px solid var(--lp-border);background:var(--lp-bg);}
+      .lp-dots{display:flex;gap:6px;}
+      .lp-dots span{width:10px;height:10px;border-radius:50%;background:var(--lp-border2);}
+      .lp-topbar-title{font-size:12px;font-weight:600;color:var(--lp-text3);margin-left:6px;letter-spacing:.04em;}
+      .lp-status{margin-left:auto;display:flex;align-items:center;gap:5px;font-size:11px;color:var(--lp-accent);font-weight:600;}
+      .lp-mbody{padding:18px 16px 22px;display:flex;flex-direction:column;gap:12px;}
+      .lp-msg{display:flex;gap:9px;align-items:flex-start;}
+      .lp-msg.user{flex-direction:row-reverse;}
+      .lp-avatar{width:26px;height:26px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;}
+      .lp-av-ai{background:var(--lp-accentBg);border:1px solid rgba(199,242,132,.2);color:var(--lp-accent);}
+      .lp-av-user{background:#1e2d3d;color:var(--lp-text2);}
+      .lp-bubble{max-width:78%;padding:9px 13px;border-radius:13px;font-size:13px;line-height:1.5;}
+      .lp-bubble.ai{background:var(--lp-surface2);border:1px solid var(--lp-border);color:var(--lp-text1);border-bottom-left-radius:4px;}
+      .lp-bubble.usr{background:var(--lp-accentBg);border:1px solid rgba(199,242,132,.2);color:var(--lp-text1);border-bottom-right-radius:4px;}
+      .lp-swap-mini{background:var(--lp-bg);border:1px solid rgba(199,242,132,.18);border-radius:11px;padding:11px 13px;margin-top:6px;}
+      .lp-divider{width:100%;height:1px;background:linear-gradient(90deg,transparent,var(--lp-border),transparent);}
+      .lp-section{padding:90px 32px;}
+      .lp-container{max-width:1060px;margin:0 auto;}
+      .lp-section-label{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--lp-accent);margin-bottom:14px;}
+      .lp-h2{font-size:clamp(26px,4vw,44px);font-weight:800;letter-spacing:-1px;color:var(--lp-text1);line-height:1.1;margin-bottom:14px;}
+      .lp-sdesc{font-size:15px;color:var(--lp-text2);line-height:1.7;max-width:480px;margin-bottom:50px;}
+      .lp-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;}
+      .lp-stat{background:var(--lp-surface);border:1px solid var(--lp-border);border-radius:14px;padding:22px 20px;text-align:center;}
+      .lp-stat-num{font-size:34px;font-weight:800;color:var(--lp-text1);letter-spacing:-1px;line-height:1;margin-bottom:6px;}
+      .lp-stat-num span{color:var(--lp-accent);}
+      .lp-stat-label{font-size:12px;color:var(--lp-text3);font-weight:500;}
+      .lp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(275px,1fr));gap:14px;}
+      .lp-card{background:var(--lp-surface);border:1px solid var(--lp-border);border-radius:15px;padding:22px 20px;transition:border-color .2s,background .2s,transform .2s;cursor:default;}
+      .lp-card:hover{border-color:rgba(199,242,132,.3);background:var(--lp-surface2);transform:translateY(-2px);}
+      .lp-feat-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:13px;}
+      .lp-card h3{font-size:14px;font-weight:700;color:var(--lp-text1);margin-bottom:7px;letter-spacing:-.2px;}
+      .lp-card p{font-size:12.5px;color:var(--lp-text2);line-height:1.6;}
+      .lp-tag{display:inline-flex;align-items:center;margin-top:11px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--lp-accent);background:var(--lp-accentBg);padding:3px 7px;border-radius:5px;}
+      .lp-cmds-section{background:var(--lp-surface);border-top:1px solid var(--lp-border);border-bottom:1px solid var(--lp-border);}
+      .lp-cmd-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:9px;}
+      .lp-cmd{display:flex;align-items:flex-start;gap:9px;background:var(--lp-bg);border:1px solid var(--lp-border);border-radius:9px;padding:10px 13px;transition:border-color .15s,background .15s;cursor:default;}
+      .lp-cmd:hover{border-color:rgba(199,242,132,.25);background:var(--lp-surface2);}
+      .lp-cmd code{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--lp-accent);display:block;margin-bottom:3px;line-height:1.4;}
+      .lp-cmd span{font-size:11px;color:var(--lp-text2);line-height:1.45;}
+      .lp-steps{display:flex;flex-direction:column;gap:0;position:relative;max-width:540px;}
+      .lp-steps::before{content:'';position:absolute;left:18px;top:18px;bottom:18px;width:2px;background:linear-gradient(to bottom,var(--lp-accent),rgba(199,242,132,.04));}
+      .lp-step{display:flex;gap:16px;align-items:flex-start;padding:0 0 34px;position:relative;}
+      .lp-step-num{width:36px;height:36px;border-radius:50%;flex-shrink:0;background:var(--lp-accentBg);border:2px solid rgba(199,242,132,.3);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:var(--lp-accent);position:relative;z-index:1;}
+      .lp-step h3{font-size:15px;font-weight:700;color:var(--lp-text1);margin-bottom:5px;}
+      .lp-step p{font-size:12.5px;color:var(--lp-text2);line-height:1.6;}
+      .lp-panel{background:var(--lp-surface);border:1px solid var(--lp-border);border-radius:17px;padding:20px;display:flex;flex-direction:column;gap:9px;align-self:flex-start;position:sticky;top:80px;}
+      .lp-prow{display:flex;align-items:center;gap:9px;padding:9px 11px;background:var(--lp-bg);border:1px solid var(--lp-border);border-radius:9px;font-size:13px;color:var(--lp-text1);transition:border-color .15s;}
+      .lp-prow:hover{border-color:rgba(199,242,132,.2);}
+      .lp-icon-box{width:26px;height:26px;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+      .lp-green{color:var(--lp-accent);} .lp-red{color:var(--lp-red);} .lp-dim{color:var(--lp-text3);}
+      .lp-ints{display:flex;flex-wrap:wrap;gap:9px;margin-top:38px;}
+      .lp-chip{display:flex;align-items:center;gap:7px;background:var(--lp-surface);border:1px solid var(--lp-border);border-radius:9px;padding:7px 13px;font-size:12px;font-weight:600;color:var(--lp-text2);transition:border-color .15s,color .15s;cursor:default;}
+      .lp-chip:hover{border-color:rgba(199,242,132,.3);color:var(--lp-text1);}
+      .lp-chip-dot{width:6px;height:6px;border-radius:50%;background:var(--lp-accent);}
+      .lp-cta-banner{background:var(--lp-surface);border:1px solid var(--lp-border);border-radius:22px;padding:56px 44px;text-align:center;position:relative;overflow:hidden;margin:0 32px 72px;}
+      .lp-cta-banner::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,rgba(199,242,132,0.06) 0%,transparent 60%);pointer-events:none;}
+      .lp-footer{border-top:1px solid var(--lp-border);padding:28px 32px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;}
+      .lp-footer-logo{font-size:14px;font-weight:800;color:var(--lp-text3);}
+      .lp-footer-links{display:flex;gap:18px;}
+      .lp-footer-links a{font-size:12px;color:var(--lp-text3);text-decoration:none;transition:color .15s;}
+      .lp-footer-links a:hover{color:var(--lp-text2);}
+      .lp-social-links{display:flex;gap:9px;}
+      .lp-social{width:30px;height:30px;border-radius:7px;background:var(--lp-surface);border:1px solid var(--lp-border);display:flex;align-items:center;justify-content:center;color:var(--lp-text3);text-decoration:none;transition:color .15s,border-color .15s;}
+      .lp-social:hover{color:var(--lp-text2);border-color:var(--lp-border2);}
+      .lp-how-grid{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:start;margin-top:48px;}
+      @media(max-width:700px){.lp-nav{padding:14px 18px;}.lp-nav-links{display:none;}.lp-section{padding:64px 18px;}.lp-h2{font-size:28px;}.lp-cta-banner{padding:36px 20px;margin:0 18px 56px;}.lp-footer{padding:22px 18px;}.lp-hero{padding:100px 18px 64px;}.lp-how-grid{grid-template-columns:1fr;gap:32px;}}
+    `;
+    document.head.appendChild(s);
+    return () => { try { document.head.removeChild(s); } catch {} };
+  }, []);
+
+  return (
+    <div className="lp-root">
+      {/* NAV */}
+      <nav className="lp-nav">
+        <div className="lp-logo">
+          <div className="lp-logo-badge">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0b1219" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          Chat<span style={{color:"#c7f284"}}>Fi</span>
+        </div>
+        <div className="lp-nav-links">
+          <a href="#lp-features">Features</a>
+          <a href="#lp-how">How it works</a>
+          <a href="#lp-integrations">Integrations</a>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <button className="lp-btn-primary" onClick={onEnter}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Launch App
+          </button>
+        </div>
+      </nav>
+
+      {/* HERO */}
+      <section className="lp-hero">
+        <div className="lp-badge"><span className="lp-pulse"></span>Live on Solana Mainnet</div>
+        <h1 className="lp-h1">Your AI financial<br/>co-pilot on <span className="acc">Solana</span></h1>
+        <p className="lp-sub">Trade, earn, borrow, predict — all from a single chat. ChatFi connects you to Jupiter's full DeFi suite using plain English.</p>
+        <div className="lp-cta-row">
+          <button className="lp-btn-primary lg" onClick={onEnter}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Start Chatting — Free
+          </button>
+
+        </div>
+
+        {/* Chat Mockup */}
+        <div className="lp-mockup">
+          <div className="lp-topbar">
+            <div className="lp-dots"><span/><span/><span/></div>
+            <span className="lp-topbar-title">ChatFi · Solana</span>
+            <div className="lp-status"><span className="lp-pulse"></span>Connected</div>
+          </div>
+          <div className="lp-mbody">
+            <div className="lp-msg user">
+              <div className="lp-avatar lp-av-user">Y</div>
+              <div className="lp-bubble usr">swap 2 SOL to USDC</div>
+            </div>
+            <div className="lp-msg">
+              <div className="lp-avatar lp-av-ai">C</div>
+              <div className="lp-bubble ai">
+                <span style={{color:"#c7f284",fontWeight:700}}>✓ Best route found across 7 DEXs.</span><br/>
+                Swapping <strong>2 SOL</strong> → <strong>USDC</strong> via Jupiter v2.
+                <div className="lp-swap-mini">
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                    <div><div style={{fontSize:9,color:"#4d6a7a",textTransform:"uppercase",letterSpacing:".07em",marginBottom:2}}>Sent</div><div style={{fontSize:15,fontWeight:800,color:"#e8f4f0"}}>2.00 SOL</div></div>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M5 12h14M13 6l6 6-6 6" stroke="#4d6a7a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    <div style={{textAlign:"right"}}><div style={{fontSize:9,color:"#4d6a7a",textTransform:"uppercase",letterSpacing:".07em",marginBottom:2}}>Received</div><div style={{fontSize:15,fontWeight:800,color:"#c7f284"}}>296.42 USDC</div></div>
+                  </div>
+                  <div style={{marginTop:8,paddingTop:8,borderTop:"1px solid #1e2d3d",display:"flex",justifyContent:"space-between"}}>
+                    <span style={{fontSize:10,color:"#4d6a7a"}}>Fee: 0.001 SOL</span>
+                    <span style={{fontSize:11,fontWeight:700,color:"#c7f284"}}>✓ Executed</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="lp-msg user">
+              <div className="lp-avatar lp-av-user">Y</div>
+              <div className="lp-bubble usr">buy $50 of JUP, BONK and WIF</div>
+            </div>
+            <div className="lp-msg">
+              <div className="lp-avatar lp-av-ai">C</div>
+              <div className="lp-bubble ai">
+                <span style={{color:"#c7f284",fontWeight:700}}>Basket swap queued.</span><br/>
+                Buying <strong>$50 each</strong> of JUP, BONK & WIF from USDC — 3 transactions in sequence.<br/>
+                <span style={{fontSize:11,color:"#4d6a7a"}}>Estimated total: $150 USDC · Slippage: 0.5%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="lp-divider"/>
+
+      {/* STATS */}
+      <section className="lp-section" style={{padding:"54px 32px"}}>
+        <div className="lp-container">
+          <div className="lp-stats">
+            {[["20+","DEXs aggregated"],["$0","Extra trading fees"],["1s","Avg swap execution"],["∞","Tokens supported"]].map(([n,l])=>(
+              <div className="lp-stat" key={l}>
+                <div className="lp-stat-num" dangerouslySetInnerHTML={{__html:n.replace(/([+s∞])/g,'<span>$1</span>')}}/>
+                <div className="lp-stat-label">{l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="lp-divider"/>
+
+      {/* FEATURES */}
+      <section className="lp-section" id="lp-features">
+        <div className="lp-container">
+          <div className="lp-section-label">Everything DeFi</div>
+          <h2 className="lp-h2">One chat for all<br/>of Solana DeFi</h2>
+          <p className="lp-sdesc">No more switching between 10 tabs. ChatFi puts every Jupiter product behind a single natural-language interface.</p>
+          <div className="lp-grid">
+            {[
+              {icon:"#1a2e1a",stroke:"#c7f284",svg:<><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></>,title:"Instant Swaps",desc:"Best-price token swaps across 20+ DEXs on Solana. Type \"swap 5 SOL to JUP\" and it's done."},
+              {icon:"#1a2e1a",stroke:"#c7f284",svg:<><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></>,title:"Basket Swaps",desc:"Buy or sell multiple tokens in one command. ChatFi sequences the trades automatically."},
+              {icon:"#1a2e1a",stroke:"#c7f284",svg:<><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></>,title:"Limit & Trigger Orders",desc:"Limit orders, OCO and OTOCO orders in seconds. \"Buy SOL below $140\" just works."},
+              {icon:"#1a2e1a",stroke:"#c7f284",svg:<><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/></>,title:"Perpetual Futures",desc:"Long or short SOL, BTC, ETH with up to 100× leverage on Jupiter Perps — from chat."},
+              {icon:"#0f2233",stroke:"#38bdf8",svg:<><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></>,title:"Earn & Multiply",desc:"Deposit into Jupiter Earn for yield, or use Multiply for leveraged yield strategies."},
+              {icon:"#1e1a2e",stroke:"#a78bfa",svg:<><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></>,title:"DCA & Recurring",desc:"Dollar-cost average into any token on any schedule. \"Buy $20 of SOL every day for 30 days\"."},
+              {icon:"#0f2233",stroke:"#38bdf8",svg:<><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></>,title:"Prediction Markets",desc:"Bet on crypto prices, sports & more via Jupiter Predictions. Place positions directly in chat."},
+              {icon:"#1a2e1a",stroke:"#c7f284",svg:<><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></>,title:"Token Launcher",desc:"Create and launch your own token on Jupiter's Dynamic Bonding Curve — describe it, ChatFi fills the form."},
+              {icon:"#1a2e1a",stroke:"#c7f284",svg:<><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></>,title:"Portfolio Tracker",desc:"Fetch your full wallet, positions, open orders, and trade history in a single message."},
+            ].map(f=>(
+              <div className="lp-card" key={f.title}>
+                <div className="lp-feat-icon" style={{background:f.icon}}>
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke={f.stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{f.svg}</svg>
+                </div>
+                <h3>{f.title}</h3>
+                <p>{f.desc}</p>
+                <span className="lp-tag">Live</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="lp-divider"/>
+
+      {/* COMMANDS */}
+      <section className="lp-cmds-section lp-section" id="lp-commands">
+        <div className="lp-container">
+          <div className="lp-section-label">Natural Language</div>
+          <h2 className="lp-h2">Just say what you want</h2>
+          <p className="lp-sdesc" style={{marginBottom:36}}>ChatFi understands intent, not syntax. A few examples:</p>
+          <div className="lp-cmd-grid">
+            {[
+              ['"swap 5 SOL to USDC"','Instant swap at best price'],
+              ['"buy $100 each of JUP, BONK"','Basket swap in one go'],
+              ['"set limit buy: SOL at $140"','Off-chain trigger order'],
+              ['"long SOL 10x with $200"','Open a perps position'],
+              ['"DCA $20 SOL daily for 30 days"','Recurring order scheduled'],
+              ['"show my portfolio"','Full wallet + positions'],
+              ['"price of BONK"','Live price from Jupiter v3'],
+              ['"show trending tokens"','Top organic-score tokens'],
+              ['"earn yield on my USDC"','Jupiter Earn deposit'],
+              ['"alert me when SOL hits $200"','In-session price alert'],
+              ['"copy trades from <wallet>"','Mirror wallet activity'],
+              ['"lock 1000 JUP for 1 year"','Token vesting schedule'],
+            ].map(([cmd,desc])=>(
+              <div className="lp-cmd" key={cmd}>
+                <div><code>{cmd}</code><span>{desc}</span></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="lp-divider"/>
+
+      {/* HOW IT WORKS */}
+      <section className="lp-section" id="lp-how">
+        <div className="lp-container">
+          <div className="lp-section-label">Getting started</div>
+          <h2 className="lp-h2">Up and trading<br/>in 30 seconds</h2>
+          <div className="lp-how-grid">
+            <div className="lp-steps">
+              {[
+                ["1","Connect your wallet","Sign in with email, Google, Twitter or Discord — a Solana wallet is auto-created. Or connect Phantom, Backpack, Solflare and more."],
+                ["2","Type what you want","Describe what you'd like to do in plain English. ChatFi understands context and pre-fills every parameter."],
+                ["3","Confirm & execute","Review the transaction details, then approve in your wallet. Your swap, order or position is live on-chain."],
+                ["4","Track everything","Ask \"show my portfolio\" or \"my open orders\" at any time to stay on top of your positions."],
+              ].map(([n,title,desc],i)=>(
+                <div className="lp-step" key={n} style={i===3?{paddingBottom:0}:{}}>
+                  <div className="lp-step-num">{n}</div>
+                  <div><h3>{title}</h3><p>{desc}</p></div>
+                </div>
+              ))}
+            </div>
+            <div className="lp-panel">
+              <div style={{fontSize:11,fontWeight:700,color:"#4d6a7a",letterSpacing:".08em",textTransform:"uppercase",marginBottom:6}}>Live portfolio snapshot</div>
+              {[
+                {bg:"#1a2e1a",stroke:"#c7f284",svg:<circle cx="12" cy="12" r="10"/>,sym:"SOL",val:"$182.44",cls:"lp-green"},
+                {bg:"#1a2e1a",stroke:"#c7f284",svg:<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>,sym:"JUP",val:"$0.842",cls:"lp-green"},
+                {bg:"#0f2233",stroke:"#38bdf8",svg:<><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></>,sym:"USDC",val:"$1.00",cls:"lp-dim"},
+                {bg:"#2e1a1a",stroke:"#f28484",svg:<><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></>,sym:"BONK",val:"$0.0000183",cls:"lp-red"},
+              ].map(r=>(
+                <div className="lp-prow" key={r.sym}>
+                  <div className="lp-icon-box" style={{background:r.bg}}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={r.stroke} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{r.svg}</svg>
+                  </div>
+                  <span>{r.sym}</span>
+                  <span style={{marginLeft:"auto",fontWeight:700,fontSize:13}} className={r.cls}>{r.val}</span>
+                </div>
+              ))}
+              <div style={{marginTop:6,padding:"11px 13px",background:"var(--lp-bg)",border:"1px solid rgba(199,242,132,.15)",borderRadius:9}}>
+                <div style={{fontSize:10,color:"#4d6a7a",marginBottom:4,textTransform:"uppercase",letterSpacing:".07em"}}>Total Portfolio</div>
+                <div style={{fontSize:21,fontWeight:800,color:"#e8f4f0",letterSpacing:"-0.5px"}}>$4,218<span style={{color:"#c7f284"}}>.59</span></div>
+                <div style={{fontSize:11,color:"#68d391",marginTop:2}}>▲ +3.2% today</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="lp-divider"/>
+
+      {/* INTEGRATIONS */}
+      <section className="lp-section" id="lp-integrations">
+        <div className="lp-container">
+          <div className="lp-section-label">Built on Jupiter</div>
+          <h2 className="lp-h2">Every Jupiter product,<br/>one conversation</h2>
+          <p className="lp-sdesc">ChatFi is a natural-language interface to the entire Jupiter ecosystem — the most powerful DEX aggregator on Solana.</p>
+          <div className="lp-ints">
+            {["Jupiter Swap v2","Jupiter Trigger v2","Jupiter Recurring","Jupiter Perps","Jupiter Earn / Lend","Jupiter Multiply","Jupiter Predictions","Jupiter Studio (DBC)","Jupiter Portfolio","Jupiter Send","Jupiter Lock","Privy Embedded Wallets","Reown AppKit","Phantom · Backpack · Solflare"].map(i=>(
+              <div className="lp-chip" key={i}><span className="lp-chip-dot"/>{i}</div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="lp-divider"/>
+
+      {/* CTA BANNER */}
+      <section style={{padding:"72px 0 16px"}}>
+        <div className="lp-cta-banner">
+          <div className="lp-section-label" style={{marginBottom:12}}>Get started now</div>
+          <h2 className="lp-h2">The fastest path to<br/>Solana DeFi</h2>
+          <p style={{fontSize:15,color:"var(--lp-text2)",marginBottom:32}}>No forms, no tabs, no confusion. Just a chat and your next trade.</p>
+          <div className="lp-cta-row">
+            <button className="lp-btn-primary lg" onClick={onEnter}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Open ChatFi
+            </button>
+            <a className="lp-btn-ghost lg" href="https://twitter.com/chatfi_pro" target="_blank" rel="noreferrer">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.743l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+              Follow on X
+            </a>
+          </div>
+        </div>
+      </section>
+
+      {/* FOOTER */}
+      <footer className="lp-footer">
+        <div className="lp-footer-logo">Chat<span style={{color:"#c7f284"}}>Fi</span></div>
+        <div className="lp-footer-links">
+          <a href="#">Terms</a>
+          <a href="#">Privacy</a>
+          <a href="#">Docs</a>
+          <a href="#">Blog</a>
+        </div>
+        <div className="lp-social-links">
+          <a className="lp-social" href="https://twitter.com/chatfi_pro" target="_blank" rel="noreferrer">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.743l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+          </a>
+          <a className="lp-social" href="#" target="_blank" rel="noreferrer">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
+          </a>
+          <a className="lp-social" href="#" target="_blank" rel="noreferrer">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+          </a>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana.\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" };
+
+// Wrapper: shows landing on first visit, then the app
+function JupChatWithLanding() {
+  const [showLanding, setShowLanding] = useState(() => {
+    try { return !sessionStorage.getItem("chatfi-msgs"); } catch { return true; }
+  });
+  if (showLanding) return <LandingPage onEnter={() => setShowLanding(false)} />;
+  return <JupChatInner />;
+}
 
 function JupChatInner() {
   const [msgs, setMsgs] = useState(() => {
@@ -3039,7 +3427,7 @@ function JupChatInner() {
   // Real schema (Jupiter docs): { data: [ { eventId, category, volumeUsd,
   //   metadata:{title,closeTime,subtitle}, markets:[ { marketId, status,
   //   metadata:{title,isTeamMarket}, pricing:{buyYesPriceUsd,buyNoPriceUsd} } ] } ] }
-  const fetchPredictionMarkets = async (category = null, searchQuery = null) => {
+  const fetchPredictionMarkets = async (category = null, searchQuery = null, limit = 50) => {
     const extractEvents = (raw) => {
       if (Array.isArray(raw)) return raw;
       if (Array.isArray(raw?.data)) return raw.data;
@@ -3055,14 +3443,15 @@ function JupChatInner() {
         (e.markets||[]).some(mk => mk.metadata?.title?.toLowerCase().includes(lq))
       );
     };
+    const fetchLimit = Math.max(20, Math.min(limit || 50, 200)); // clamp between 20 and 200
     if (searchQuery) {
       try {
-        const data = await predFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=50&includeMarkets=true`);
+        const data = await predFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=${fetchLimit}&includeMarkets=true`);
         const events = extractEvents(data);
         if (events.length > 0) return { markets: events, source: "search" };
       } catch {}
       try {
-        const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: "200" });
+        const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: String(fetchLimit * 4) });
         const data = await predFetch(`${JUP_PRED_API}/events?${p.toString()}`);
         const all = extractEvents(data);
         const filtered = clientFilter(all, searchQuery);
@@ -3071,14 +3460,14 @@ function JupChatInner() {
       } catch {}
     }
     try {
-      const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: "100" });
+      const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: String(fetchLimit * 2) });
       if (category && category !== "null") p.set("category", category.toLowerCase());
       const data = await predFetch(`${JUP_PRED_API}/events?${p.toString()}`);
       const events = extractEvents(data);
       if (events.length > 0) return { markets: events, source: "api" };
     } catch {}
     try {
-      const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: "100" });
+      const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: String(fetchLimit * 2) });
       const data = await predFetch(`${JUP_PRED_API}/events?${p.toString()}`);
       const events = extractEvents(data);
       if (events.length > 0) return { markets: events, source: "api-all" };
@@ -5895,7 +6284,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         push("ai", text + "\n\nFetching prediction markets…");
         const cat = actionData?.sport || actionData?.category || null;
         const query = actionData?.query || null; // for specific league/competition search
-        const result = await fetchPredictionMarkets(cat, query);
+        const limit = parseInt(actionData?.limit) || 20;
+        const result = await fetchPredictionMarkets(cat, query, limit);
         if (result.markets?.length === 0 && result.source !== "empty") {
           // Could be a region issue — show helpful message
         }
@@ -10452,7 +10842,7 @@ export default function JupChat() {
         ],
       }}
     >
-      <JupChatInner />
+      <JupChatWithLanding />
     </PrivyProvider>
   );
 }
