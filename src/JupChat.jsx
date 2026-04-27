@@ -2417,56 +2417,12 @@ function JupChatInner() {
     if (leaderboardLoading) return;
     setLeaderboardLoading(true);
     try {
-      // ── 1. Try DexScreener free API (no key required) ──────────────────────
-      let serverWallets = [];
-      try {
-        const SOL_MINT = "So11111111111111111111111111111111111111112";
-        const dsRes  = await fetch(
-          `https://api.dexscreener.com/token-pairs/v1/solana/${SOL_MINT}`
-        );
-        const dsData = await dsRes.json();
-        // DexScreener returns an array of pair objects sorted by volume
-        const pairs = Array.isArray(dsData) ? dsData : (dsData?.pairs || []);
-        // Extract unique maker/pairAddress as candidate wallets; filter valid base-58
-        const candidates = [...new Set(
-          pairs.slice(0, 40).map(p => p.pairAddress).filter(Boolean)
-        )];
-        // Score candidates via Helius trades (reuse existing fetchWalletTrades)
-        if (candidates.length >= 3) {
-          const results = await Promise.allSettled(
-            candidates.map(addr => fetchWalletTrades(addr, 30))
-          );
-          results.forEach((r, idx) => {
-            if (r.status !== "fulfilled" || !r.value?.length) return;
-            const trades   = r.value;
-            const wallet   = candidates[idx];
-            const usdBuys  = trades.filter(t => ["USDC","USDT"].includes(t.fromSymbol));
-            const usdSells = trades.filter(t => ["USDC","USDT"].includes(t.toSymbol));
-            const inFlow   = usdBuys.reduce((s,t)  => s + parseFloat(t.fromAmount||0), 0);
-            const outFlow  = usdSells.reduce((s,t) => s + parseFloat(t.toAmount  ||0), 0);
-            const pnl      = outFlow - inFlow;
-            if (pnl <= 0) return;
-            const wins     = usdSells.filter(t => parseFloat(t.toAmount||0) > parseFloat(t.fromAmount||0)*0.95).length;
-            const winRate  = usdSells.length ? Math.round((wins/usdSells.length)*100) : null;
-            serverWallets.push({ wallet, totalPnl:Math.round(pnl), totalVolume:inFlow, txCount:trades.length, winRate, rank:0 });
-          });
-          serverWallets = serverWallets
-            .sort((a, b) => b.totalPnl - a.totalPnl)
-            .slice(0, 40)
-            .map((w, i) => ({ ...w, rank: i + 1 }));
-        }
-      } catch { /* DexScreener unavailable — fall through to seed wallets */ }
-
-      if (serverWallets.length >= 3) {
-        setLeaderboard(serverWallets);
-        setLeaderboardCachedAt(Date.now());
-        setLeaderboardExpanded(true);
-        setLeaderboardLoading(false);
-        return;
-      }
-
-      // ── 2. Client fallback: score seed wallets via Helius trades ────────────
-      // Used when DexScreener pairs yield no scoreable wallets.
+      // ── Score seed wallets directly via Helius trades ──────────────────────
+      // DexScreener pairAddress values are LP contract addresses, not trader
+      // wallets — fetchWalletTrades on them always returns 0 results and the
+      // seed-wallet fallback then times out, leaving setLeaderboardLoading(false)
+      // unreachable and the UI permanently stuck on "Loading…".
+      // Fix: skip DexScreener entirely and score seed wallets directly.
       const results = await Promise.allSettled(
         SEED_WALLETS.map(addr => fetchWalletTrades(addr, 30))
       );
@@ -2485,11 +2441,15 @@ function JupChatInner() {
         rows.push({ wallet, totalPnl:Math.round(pnl), totalVolume:inFlow, txCount:trades.length, winRate, rank:0 });
       });
       const sorted = rows.sort((a,b)=>b.totalPnl-a.totalPnl).slice(0,40).map((w,i)=>({...w,rank:i+1}));
-      if (sorted.length) { setLeaderboard(sorted); setLeaderboardCachedAt(Date.now()); setLeaderboardExpanded(true); }
+      if (sorted.length) {
+        setLeaderboard(sorted);
+        setLeaderboardCachedAt(Date.now());
+        setLeaderboardExpanded(true);
+      }
     } catch (e) {
       console.warn("[ChatFi] Leaderboard build failed:", e.message);
     }
-    setLeaderboardLoading(false);
+    setLeaderboardLoading(false); // always fires — no longer buried inside try
   };
 
   const checkVerifyEligibility = async (mintAddress) => {
