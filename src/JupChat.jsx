@@ -3665,7 +3665,7 @@ function JupChatInner() {
     // Get the asset mint from the vault object
     const assetMint = vault.assetMint;
     if (!assetMint) {
-      push("ai", `Could not resolve asset mint for **${vault.name}**. Please try again.`);
+      push("ai", `Could not resolve the asset mint address for **${vault.name}**. This usually means the vault list hasn't loaded yet — please wait a moment and try again, or refresh the page.`);
       return;
     }
     const decimals = vault.assetDecimals || 6;
@@ -3715,7 +3715,10 @@ function JupChatInner() {
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
 
     const assetMint = vault.assetMint;
-    if (!assetMint) { push("ai", `Could not resolve asset mint for **${vault.name}**. Please try again.`); return; }
+    if (!assetMint) {
+      push("ai", `Could not resolve the asset mint address for **${vault.name}**. This usually means the vault list hasn't loaded yet — please wait a moment and try again, or refresh the page.`);
+      return;
+    }
     const decimals = vault.assetDecimals || 6;
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
 
@@ -9798,8 +9801,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     const amt = ua > 1e6 ? (ua / Math.pow(10, dec)).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})
                               : ua > 0   ? ua.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})
                               : parseFloat(pos.value||0).toFixed(2);
-                    // Find matching vault in earnVaults for APY + withdraw
-                    const matchVault = earnVaults.find(v => v.token?.toUpperCase() === sym.toUpperCase());
+                    // Extract assetMint directly from position data as the ground truth
+                    const posAssetMint = pos.asset?.address || pos.assetMint || pos.mint || pos.assetAddress || null;
+                    // Find matching vault: prefer mint match, fall back to symbol match
+                    const matchVault = earnVaults.find(v =>
+                      (posAssetMint && v.assetMint && v.assetMint === posAssetMint) ||
+                      v.token?.toUpperCase() === sym.toUpperCase()
+                    );
                     return (
                       <div key={`earn-${i}`} style={{ padding:"12px 14px", border:`1px solid ${T.green}44`, borderRadius:10, background:`${T.green}08` }}>
                         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
@@ -9815,7 +9823,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         <button
                           onClick={() => {
                             const posAmt = ua > 1e6 ? ua / Math.pow(10, dec) : ua;
-                            const vault = matchVault || { name:`Jupiter Lend ${sym}`, token:sym, apyDisplay:"—", tvl:0 };
+                            // Always carry assetMint: use matchVault's if available, otherwise
+                            // fall back to the mint extracted directly from the position data
+                            const vault = matchVault
+                              ? matchVault
+                              : { name:`Jupiter Lend ${sym}`, token:sym, apyDisplay:"—", tvl:0,
+                                  assetMint: posAssetMint, assetDecimals: dec };
+                            if (!vault.assetMint && posAssetMint) vault.assetMint = posAssetMint;
                             setEarnWithdraw({ vault, amount:"", positionAmount: posAmt });
                             setShowEarnWithdraw(true);
                             setShowLendPos(false);
