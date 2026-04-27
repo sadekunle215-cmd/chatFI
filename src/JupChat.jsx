@@ -711,7 +711,7 @@ const fmt = (text = "") => {
     }
 
     // ── Normal paragraph line
-    html += `<span style="font-size:14px;line-height:1.6">${inlineMd(line)}</span><br/>`;
+    html += `<span style="font-size:14px;line-height:1.6;word-break:break-word;overflow-wrap:anywhere">${inlineMd(line)}</span><br/>`;
     i++;
   }
 
@@ -7384,13 +7384,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         {/* Messages */}
         <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"74px 20px 24px", backgroundImage:"radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)", backgroundSize:"24px 24px" }}>
           {msgs.map(m => (
-            <div key={m.id} className="msg-enter" style={{ marginBottom:20, display:"flex", gap:12, justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
+            <div key={m.id} className="msg-enter" style={{ marginBottom:20, display:"flex", gap:12, justifyContent:m.role==="user"?"flex-end":"flex-start", minWidth:0, overflow:"hidden" }}>
               {m.role==="ai" && (
                 <div style={{ width:32, height:32, borderRadius:"50%", overflow:"hidden", border:`1px solid ${T.border}`, flexShrink:0, marginTop:2 }}>
                 <img src={CHATFI_AVATAR} alt="ChatFi" style={{ width:"100%", height:"100%", objectFit:"cover" }}/>
               </div>
               )}
-              <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6 }}>
+              <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6, wordBreak:"break-word", overflowWrap:"anywhere", minWidth:0 }}>
                 {m.walletCard ? (() => {
                   const wc = m.walletCard;
                   const providerIcon = wc.provider === "google"
