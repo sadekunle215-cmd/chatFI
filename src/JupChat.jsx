@@ -4660,6 +4660,12 @@ function JupChatInner() {
   // Opens our custom modal which shows social login + external wallets
   const connectWallet = (pendingSwap) => {
     pendingSwapRef.current = pendingSwap || null;
+    // Smart routing: use whatever auth the user already has active
+    // 1. Privy already authenticated — re-trigger to surface the embedded wallet
+    if (privyReady && privyAuthed) { privyLogin(); return; }
+    // 2. Reown already connected — open AppKit selector directly
+    if (reownConnected) { reownOpen(); return; }
+    // 3. Nothing connected — show the connect modal
     setShowWalletModal(true);
   };
 
@@ -4723,7 +4729,13 @@ function JupChatInner() {
   const doSwap = async () => {
     const { from, fromMint, fromDecimals, to, toMint, toDecimals, amount } = swapCfg;
     if (!amount) return;
-    if (!walletFull) { push("ai","Connect your wallet first to execute a swap."); return; }
+    if (!walletFull) {
+      // Smart connect: use existing session if any, otherwise show modal
+      if (privyReady && privyAuthed) { privyLogin(); }
+      else if (reownConnected) { reownOpen(); }
+      else { setShowWalletModal(true); }
+      return;
+    }
     if (!fromMint || !toMint) {
       if (!fromMint && !toMint) {
         push("ai", `Could not resolve token addresses for **${from}** and **${to}**. Use the search dropdowns to find them on Jupiter.`);
@@ -5818,8 +5830,17 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           setShowSwap(true);
         };
         if (!walletFull) {
-          push("ai", text + "\n\nConnect your wallet first to swap.");
-          setTimeout(() => connectWallet({ from:fromSym, to:toSym }), 300);
+          // Resolve tokens and show the swap panel immediately — the Swap button
+          // inside the panel will re-check wallet and prompt connect on click.
+          // Also trigger smart connect so the right wallet method fires right away.
+          push("ai", text);
+          resolveAndSet(); // build swap config in background
+          setTimeout(() => {
+            // Smart connect: use existing session if any
+            if (privyReady && privyAuthed) { privyLogin(); }
+            else if (reownConnected) { reownOpen(); }
+            else { setShowWalletModal(true); }
+          }, 200);
         } else {
           push("ai", text);
           await resolveAndSet();
@@ -7459,8 +7480,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               )}
               <div style={{ display:"flex", gap:8 }}>
                 <button onClick={doSwap} disabled={!swapCfg.amount||swapStatus==="signing"} className="send-btn"
-                  style={{ flex:1, padding:"10px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:500, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-                  {swapStatus==="signing" ? <><span className="spinner"/> Signing…</> : `Swap ${swapCfg.from} → ${swapCfg.to}`}
+                  style={{ flex:1, padding:"10px", background: walletFull ? T.accent : T.accentBg, border: walletFull ? "none" : `1px solid ${T.accent}66`, borderRadius:8, color: walletFull ? "#0d1117" : T.accent, fontSize:14, fontWeight:500, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
+                  {swapStatus==="signing" ? <><span className="spinner"/> Signing…</> : walletFull ? `Swap ${swapCfg.from} → ${swapCfg.to}` : "🔗 Connect Wallet to Swap"}
                 </button>
                 <button onClick={() => setShowSwap(false)}
                   style={{ padding:"10px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:14, cursor:"pointer" }}>
