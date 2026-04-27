@@ -1196,14 +1196,12 @@ const BLOG_POSTS = [
 ];
 
 // ─── Landing Page ─────────────────────────────────────────────────────────────
-function LandingPage({ onEnter }) {
-  // Inject landing-specific styles once
-  useEffect(() => {
-    const id = "chatfi-landing-styles";
-    if (document.getElementById(id)) return;
-    const s = document.createElement("style");
-    s.id = id;
-    s.textContent = `
+// ── Inject landing styles at module load time (prevents FOUC) ────────────────
+(function injectLandingStyles() {
+  if (document.getElementById("chatfi-landing-styles")) return;
+  const s = document.createElement("style");
+  s.id = "chatfi-landing-styles";
+  s.textContent = `
       @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&family=JetBrains+Mono:wght@400;700&display=swap');
       .lp-root { --lp-bg:#0b1219;--lp-surface:#0e1820;--lp-surface2:#111c26;--lp-border:#1e2d3d;--lp-border2:#253545;--lp-text1:#e8f4f0;--lp-text2:#8fa8b8;--lp-text3:#4d6a7a;--lp-accent:#c7f284;--lp-accentBg:#1a2e1a;--lp-red:#f28484;--lp-purple:#a78bfa;--lp-teal:#38bdf8; font-family:'DM Sans','Segoe UI',sans-serif; background:var(--lp-bg); color:var(--lp-text1); min-height:100vh; overflow-x:hidden; overflow-y:auto; position:fixed; inset:0; z-index:200; }
       .lp-root *,lp-root *::before,.lp-root *::after{box-sizing:border-box;margin:0;padding:0;}
@@ -1302,10 +1300,11 @@ function LandingPage({ onEnter }) {
       .lp-social:hover{color:var(--lp-text2);border-color:var(--lp-border2);}
       .lp-how-grid{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:start;margin-top:48px;}
       @media(max-width:700px){.lp-nav{padding:14px 18px;}.lp-nav-links{display:none;}.lp-section{padding:64px 18px;}.lp-h2{font-size:28px;}.lp-cta-banner{padding:36px 20px;margin:0 18px 56px;}.lp-footer{padding:22px 18px;}.lp-hero{padding:100px 18px 64px;}.lp-how-grid{grid-template-columns:1fr;gap:32px;}}
-    `;
-    document.head.appendChild(s);
-    return () => { try { document.head.removeChild(s); } catch {} };
-  }, []);
+  `;
+  document.head.appendChild(s);
+}());
+
+function LandingPage({ onEnter }) {
 
   return (
     <div className="lp-root">
@@ -1591,46 +1590,9 @@ const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **Cha
 
 // Wrapper: shows landing on first visit, then the app
 function JupChatWithLanding() {
-  const [appReady, setAppReady] = useState(false);
   const [showLanding, setShowLanding] = useState(() => {
     try { return !sessionStorage.getItem("chatfi-entered"); } catch { return true; }
   });
-
-  useEffect(() => {
-    // Wait for fonts and styles to finish loading before showing any UI
-    document.fonts.ready.then(() => {
-      setAppReady(true);
-    });
-  }, []);
-
-  if (!appReady) {
-    return (
-      <div style={{
-        background: "#0a0a0a",
-        width: "100vw",
-        height: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}>
-        <div style={{
-          width: 56,
-          height: 56,
-          borderRadius: "50%",
-          border: "3px solid #1a1a1a",
-          borderTop: "3px solid #c8f135",
-          animation: "chatfi-spin 0.8s linear infinite",
-        }} />
-        <style>{`
-          @keyframes chatfi-spin {
-            from { transform: rotate(0deg); }
-            to   { transform: rotate(360deg); }
-          }
-        `}</style>
-      </div>
-    );
-  }
-
   if (showLanding) return <LandingPage onEnter={() => {
     try { sessionStorage.setItem("chatfi-entered", "1"); } catch {}
     setShowLanding(false);
