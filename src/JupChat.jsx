@@ -383,6 +383,78 @@ Rules:
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
 - CRITICAL — SHOW_RECURRING is fully supported. When user asks for a recurring/DCA order, you MUST return action:"SHOW_RECURRING" with all fields pre-filled from the user's message. Never tell the user to do it manually.
+- When user asks "what can you do", "what are your features", "list your features", "what do you support", "help", "what can I do here" → respond with action:null and a COMPLETE feature list covering every capability below. Format it clearly with categories. Never give a short or partial answer to this question:
+
+FULL FEATURE LIST (use this when asked what you can do — list ALL of these, never truncate):
+
+🔄 TRADING
+• Instant token swaps — any Solana token, best route across 20+ DEXs
+• Basket swaps — buy/sell multiple tokens in one command (e.g. "buy $100 each of SOL, JUP, BONK")
+• Limit orders (v2) — buy/sell automatically when price hits your target (off-chain vault, min $10)
+• OCO orders — take profit + stop loss in one bracket
+• OTOCO orders — place entry order that auto-creates TP/SL on fill
+• DCA / Recurring orders — auto-buy on a daily, weekly, or monthly schedule
+• Perpetual futures — long/short SOL, BTC, ETH, and more up to 100x leverage
+• Swap route viewer — see exact DEX path, AMMs used, and price impact per hop
+• Swap quote — get a live quote for any token pair before committing
+
+💰 EARN & LEND
+• Jupiter Earn — deposit assets (USDC, SOL, JLP, etc.) to earn live APY yield
+• Borrow — deposit collateral, borrow against it (up to 95% LTV)
+• Multiply / Leverage yield — loop positions for amplified staking returns
+• Flashloans — zero-fee atomic loans for arbitrage or collateral swaps
+• View & manage all open earn deposits, borrow positions, and multiply vaults
+• JupSOL — stake SOL into Jupiter's liquid staking token
+
+📊 PORTFOLIO & RESEARCH
+• Full portfolio — live token balances, DeFi positions, earn deposits, open orders, LP positions, airdrops
+• Token deep-dive — price, 24h change, market cap, supply, holders, liquidity, audit, safety score, organic volume
+• Trending tokens — top organic, top traded, top trending across 5m / 1h / 6h / 24h timeframes
+• New token listings — tokens that just launched their first liquidity pool
+• Verified tokens list — Jupiter-verified tokens only
+• LST tokens — all liquid staking tokens on Solana
+• Tokenized real-world stocks (xStocks / RWA) on Solana — trade stocks onchain 24/7
+• Trade journal — local history of all your swaps + estimated PnL
+• Price alerts — get notified in-chat the moment any token crosses your price threshold
+• Token verification eligibility — check if your token qualifies for Jupiter verification
+• Wallet analyser — paste any wallet address to see their trading style, behaviour profile, top tokens, and recent trades
+
+🔁 COPY TRADING
+• Copy trade / Mirror wallet — type "copy trades from <wallet>" to see and replicate recent swaps
+• Wallet behaviour analysis — full profile of any wallet: trading style (scalper/swing/position), top tokens, sentiment (accumulating/distributing), avg trade size
+• Top wallets leaderboard — live ranking of the most profitable Solana traders by 7d PnL; tap Mirror on any entry to copy them instantly
+
+🚀 TOKEN TOOLS
+• Create tokens via Jupiter Studio (Dynamic Bonding Curves) — launch your own token with a bonding curve
+• Claim creator trading fees from your DBC pools
+• Lock tokens with cliff + linear vesting schedules
+• View and claim vested tokens
+
+💸 SEND & SOCIAL
+• Send tokens to anyone via invite links — recipient doesn't need a wallet to claim
+• Claw back unclaimed invite sends
+• View full send history
+
+⚡ POWER COMMANDS (type these for instant deep analysis)
+• "Smart entry <TOKEN>" — live price + trending rank + swap quote analysis before you buy
+• "Exit my <TOKEN>" — momentum check + balance + best swap route before you sell
+• "Deep dive <TOKEN>" — full metadata, organic score, safety flags, liquidity depth, holder stats
+• "Morning briefing" / "Portfolio pulse" — parallel snapshot of your balances, earn positions, and open orders
+
+🏆 PREDICTION MARKETS
+• Browse live sports prediction markets (EPL, Champions League, NBA, and more)
+• Place bets with SOL or USDC
+• Claim prediction winnings
+
+🔔 ALERTS & AUTOMATION
+• Set price alerts on any token — fires a notification in-chat when the price is crossed
+• Recurring DCA orders run automatically on your schedule until cancelled
+
+🌐 GENERAL
+• Ask about any Solana token, protocol, or DeFi concept
+• Get live SOL price and market overview
+• Explain any Jupiter product (Earn, Lend, Perps, Studio, DCA, Limit, etc.)
+• Navigate directly to any Jupiter product by typing what you want to do
 - "smart entry X" / "best way to enter X" / "how should I buy X" → Power Command (client-side). Return action:null, text:"Running smart entry analysis for **X** — fetching live price, trending rank, and swap quote…"
 - "exit my X" / "best way to exit X" / "exit strategy X" → Power Command (client-side). Return action:null, text:"Analysing exit strategy for **X** — checking price momentum, balance, and best route…"
 - "deep dive X" / "full analysis X" / "research X" / "analyse X" / "tell me everything about X" → Power Command (client-side). Return action:null, text:"Running full deep dive on **X** — pulling metadata, organic score, safety flags, and liquidity depth…"
@@ -1915,49 +1987,67 @@ function JupChatInner() {
     return { trades, profile: { tradeCount: trades.length, topTokens, topPairs, tradingStyle, sentiment, avgUsd, buys, sells } };
   };
 
-  // ── Leaderboard — build client-side from known active Solana trader wallets ──
-  // Falls back to /api/leaderboard first; if that returns bad data (≤1 wallet or
-  // all negative), builds the list locally from a curated seed set via Helius.
+  // ── Leaderboard — real on-chain top traders via Birdeye API ─────────────────
+  // ⚠️  SERVER ACTION REQUIRED: update /api/leaderboard to proxy Birdeye:
+  //   GET https://public-api.birdeye.so/defi/v2/tokens/top_traders
+  //       ?address=So11111111111111111111111111111111111111112
+  //       &time_frame=7d&sort_by=PnL&sort_type=desc&limit=40
+  //   Headers: { "X-API-KEY": process.env.BIRDEYE_API_KEY, "x-chain": "solana" }
+  //   Shape returned to client: { data: { items: [{ address, pnl, volume, trade, winRate }] } }
+  // ── Leaderboard seed wallets (fallback when server isn't using Birdeye) ───────
+  // To get REAL live top-trader data, update your /api/leaderboard server route to:
+  //
+  //   const SOL_MINT = "So11111111111111111111111111111111111111112";
+  //   const res = await fetch(
+  //     `https://public-api.birdeye.so/defi/v2/tokens/top_traders?address=${SOL_MINT}&time_frame=1W&sort_by=PnL&sort_type=desc&limit=40`,
+  //     { headers: { "X-API-KEY": process.env.BIRDEYE_API_KEY, "x-chain": "solana" } }
+  //   );
+  //   const { data } = await res.json();
+  //   // map data.items → { leaderboard: [{address,pnl,volume,trade,winRate}] }
+  //   // Free Birdeye API key at: https://bds.birdeye.so
   const SEED_WALLETS = [
-    "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
-    "DfXygSmDjBpFhG9J6G6VjpKxDbFx8wjDiVhEa5N6dqXj",
-    "HN7cABqLq46Es1jh92dQQisAq662SmxELLLsHHe4YWrH",
-    "GjNau6UB2KJKJFpSsHQLzeFiNsNqbHAqenHqNjTPuY5A",
-    "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
-    "ASTyfSima4LLAdDgoFGkgqoKowG1LZFDr9fAQrg7iaJZ",
-    "7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5",
-    "E645TckHQnDcavVv92Etc6xSWQaq68wivAiirELtS3ej",
-    "CuieVDEDtLo7FypA9SbLM9saXFdb1dsshEkyErMqkRQq",
-    "8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W",
-    "4dDEjb43YFqFLTJkyJpJ3bTDhpn1Gg8TNcWvC5L5WVPK",
-    "AC5RDfQFmDS1deWZos921JfqscXdByf8BrmHR6W5aZ9P",
-    "3oSE9tXvxMFxWfZGqT8fGgjKorBpVCECovBiRkFNXXnU",
-    "Fu17GmNw1vBKUZovbmWLnfAJhRqMxpAiBJhpb2YGNpKA",
-    "BpFi7AiVCCW4ywxHNmJSKYFtSLjNi8gJNH6Tm1tKRdLp",
-    "2ojv9BAiHUrvsm9gxDe7fJSzbNZSJcxZvf8dqmWGHG8S",
-    "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-    "6oGsL2puUgySccKzn9XA9afqF217LfxP5ocq4B3LWsjy",
-    "9gRHHfM8DGCgcJDMCgLKrNEVFQMfSxYCsHBXANm9iE1G",
-    "DriFtupJYLTosbwoN8koMbEYSx54aFAVLddWsbksjwg7",
+    "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM", "DfXygSmDjBpFhG9J6G6VjpKxDbFx8wjDiVhEa5N6dqXj",
+    "HN7cABqLq46Es1jh92dQQisAq662SmxELLLsHHe4YWrH", "GjNau6UB2KJKJFpSsHQLzeFiNsNqbHAqenHqNjTPuY5A",
+    "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", "ASTyfSima4LLAdDgoFGkgqoKowG1LZFDr9fAQrg7iaJZ",
+    "7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5", "E645TckHQnDcavVv92Etc6xSWQaq68wivAiirELtS3ej",
+    "CuieVDEDtLo7FypA9SbLM9saXFdb1dsshEkyErMqkRQq", "8UJgxaiQx5nTrdDgph5FiahMmzduuLTLf5WmsPegYA6W",
+    "4dDEjb43YFqFLTJkyJpJ3bTDhpn1Gg8TNcWvC5L5WVPK", "AC5RDfQFmDS1deWZos921JfqscXdByf8BrmHR6W5aZ9P",
+    "3oSE9tXvxMFxWfZGqT8fGgjKorBpVCECovBiRkFNXXnU", "Fu17GmNw1vBKUZovbmWLnfAJhRqMxpAiBJhpb2YGNpKA",
+    "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263", "6oGsL2puUgySccKzn9XA9afqF217LfxP5ocq4B3LWsjy",
+    "9gRHHfM8DGCgcJDMCgLKrNEVFQMfSxYCsHBXANm9iE1G", "DriFtupJYLTosbwoN8koMbEYSx54aFAVLddWsbksjwg7",
+    "GUfCR9mK6azb9vcpsxgXyj7XRPAKJd4KMHTTVvtncGgp", "H6ARHf6YXhGYeQfUzQNGk6rDNnLBQKrenN712K4AQJEG",
+    "FWznbcNXWQuHTawe9RxvQ2LdCENssh12dsznf4RiouN5",  "4q2wPZMys1zCoAVpNipqEMFJQSeHHcWAGhkNxiBHsEoA",
+    "GJRs4FwHtemZ5ZE9x3FNvJ8TMwitKTh21yxdRPqn7QeN", "CakcnaRDHka2gXyfntd2RFCCErGLYBCTsHuqPFbKtMqE",
   ];
 
   const fetchLeaderboard = async () => {
     if (leaderboardLoading) return;
     setLeaderboardLoading(true);
     try {
-      // ── Try server endpoint first ──────────────────────────────────────────
+      // ── 1. Try server (should proxy Birdeye top_traders by PnL) ────────────
       let serverWallets = [];
       try {
-        const res  = await fetch("/api/leaderboard?limit=40");
+        const res  = await fetch("/api/leaderboard?limit=40&source=birdeye");
         const data = await res.json();
-        serverWallets = (data.leaderboard || [])
-          .filter(w => (w.totalPnl ?? w.pnl ?? 0) > 0)   // only profitable
-          .sort((a, b) => (b.totalPnl ?? b.pnl ?? 0) - (a.totalPnl ?? a.pnl ?? 0))
-          .slice(0, 40);
-      } catch { /* server down or bad JSON — fall through */ }
+        // Handle Birdeye shape { data: { items } } or legacy { leaderboard }
+        const items = data?.data?.items || data?.leaderboard || [];
+        serverWallets = items
+          .map((w, i) => ({
+            wallet:      w.address    || w.wallet,
+            totalPnl:    Math.round(w.pnl       ?? w.totalPnl   ?? 0),
+            totalVolume: Math.round(w.volume    ?? w.totalVolume ?? 0),
+            txCount:     w.trade      ?? w.txCount ?? 0,
+            // Birdeye returns winRate as 0-1 decimal; legacy may be 0-100
+            winRate:     w.winRate != null ? Math.round(w.winRate * (w.winRate <= 1 ? 100 : 1)) : null,
+            rank:        i + 1,
+          }))
+          .filter(w => w.wallet && w.totalPnl > 0)
+          .sort((a, b) => b.totalPnl - a.totalPnl)
+          .slice(0, 40)
+          .map((w, i) => ({ ...w, rank: i + 1 }));
+      } catch { /* server not yet proxying Birdeye — fall through */ }
 
       if (serverWallets.length >= 3) {
-        // Server gave us enough good data
         setLeaderboard(serverWallets);
         setLeaderboardCachedAt(Date.now());
         setLeaderboardExpanded(true);
@@ -1965,53 +2055,27 @@ function JupChatInner() {
         return;
       }
 
-      // ── Build leaderboard client-side from seed wallets via Helius ─────────
-      // Fetch trades for all seed wallets in parallel (limit 30 each for speed)
+      // ── 2. Client fallback: score seed wallets via Helius trades ────────────
+      // Used until server is updated to use Birdeye API key.
       const results = await Promise.allSettled(
         SEED_WALLETS.map(addr => fetchWalletTrades(addr, 30))
       );
-
       const rows = [];
       results.forEach((r, idx) => {
         if (r.status !== "fulfilled" || !r.value?.length) return;
-        const trades    = r.value;
-        const wallet    = SEED_WALLETS[idx];
-
-        // Volume (USD-denominated buys)
-        const usdBuys   = trades.filter(t => ["USDC","USDT"].includes(t.fromSymbol));
-        const totalVol  = usdBuys.reduce((s, t) => s + parseFloat(t.fromAmount || 0), 0);
-
-        // Rough PnL proxy: (sells back to USDC) − (buys from USDC)
-        const usdSells  = trades.filter(t => ["USDC","USDT"].includes(t.toSymbol));
-        const inFlow    = usdBuys.reduce((s, t)  => s + parseFloat(t.fromAmount || 0), 0);
-        const outFlow   = usdSells.reduce((s, t) => s + parseFloat(t.toAmount   || 0), 0);
-        const pnlProxy  = outFlow - inFlow;   // positive = realised profit so far
-
-        // Win rate: trades where outFlow token > inFlow token (rough)
-        const winCount  = usdSells.filter(t => parseFloat(t.toAmount || 0) > parseFloat(t.fromAmount || 0) * 0.95).length;
-        const winRate   = usdSells.length ? Math.round((winCount / usdSells.length) * 100) : null;
-
-        rows.push({
-          wallet,
-          totalPnl:    Math.round(pnlProxy),
-          totalVolume: totalVol,
-          txCount:     trades.length,
-          winRate,
-          rank:        0,   // assigned after sort
-        });
+        const trades   = r.value;
+        const wallet   = SEED_WALLETS[idx];
+        const usdBuys  = trades.filter(t => ["USDC","USDT"].includes(t.fromSymbol));
+        const usdSells = trades.filter(t => ["USDC","USDT"].includes(t.toSymbol));
+        const inFlow   = usdBuys.reduce((s,t)  => s + parseFloat(t.fromAmount||0), 0);
+        const outFlow  = usdSells.reduce((s,t) => s + parseFloat(t.toAmount  ||0), 0);
+        const pnl      = outFlow - inFlow;
+        const wins     = usdSells.filter(t => parseFloat(t.toAmount||0) > parseFloat(t.fromAmount||0)*0.95).length;
+        const winRate  = usdSells.length ? Math.round((wins/usdSells.length)*100) : null;
+        rows.push({ wallet, totalPnl:Math.round(pnl), totalVolume:inFlow, txCount:trades.length, winRate, rank:0 });
       });
-
-      // Sort by PnL desc, assign ranks, keep top 40
-      const sorted = rows
-        .sort((a, b) => b.totalPnl - a.totalPnl)
-        .slice(0, 40)
-        .map((w, i) => ({ ...w, rank: i + 1 }));
-
-      if (sorted.length) {
-        setLeaderboard(sorted);
-        setLeaderboardCachedAt(Date.now());
-        setLeaderboardExpanded(true);
-      }
+      const sorted = rows.sort((a,b)=>b.totalPnl-a.totalPnl).slice(0,40).map((w,i)=>({...w,rank:i+1}));
+      if (sorted.length) { setLeaderboard(sorted); setLeaderboardCachedAt(Date.now()); setLeaderboardExpanded(true); }
     } catch (e) {
       console.warn("[ChatFi] Leaderboard build failed:", e.message);
     }
@@ -5599,7 +5663,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
     // "delete chat" / "clear chat" / "new chat" — wipe chat history
     if (lower === "delete chat" || lower === "clear chat" || lower === "new chat" || lower === "clear conversation" || lower === "delete conversation" || lower === "delete messages" || lower === "clear messages" || lower === "delete all messages" || lower === "clear all messages") {
       setInput("");
-      push("user", raw);
+      // Close every panel so nothing is left stranded
+      setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
+      setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
+      setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false); setShowPerps(false);
+      setShowTokenCard(false); setTokenCardData(null);
+      setShowCopyTrade(false); setCopyTradeData(null);
       histRef.current = [];
       try { sessionStorage.removeItem("chatfi-msgs"); } catch {}
       setMsgs([INITIAL_MSG]);
@@ -6469,7 +6538,16 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             )}
           </div>
           <div style={{ padding:"10px 8px" }}>
-            <button onClick={() => { histRef.current=[]; try{sessionStorage.removeItem("chatfi-msgs");}catch{} setMsgs([INITIAL_MSG]); setChatHistory(h=>[{id:Date.now(),title:"New conversation",active:true},...h.map(c=>({...c,active:false}))]); }}
+            <button onClick={() => {
+              histRef.current=[];
+              try{sessionStorage.removeItem("chatfi-msgs");}catch{}
+              setMsgs([INITIAL_MSG]);
+              setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
+              setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
+              setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false); setShowPerps(false);
+              setShowTokenCard(false); setTokenCardData(null); setShowCopyTrade(false); setCopyTradeData(null);
+              setChatHistory(h=>[{id:Date.now(),title:"New conversation",active:true},...h.map(c=>({...c,active:false}))]);
+            }}
               style={{ width:"100%", padding:"8px 12px", background:"transparent", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer", textAlign:"left", display:"flex", alignItems:"center", gap:8 }}
               className="hov-row">
               <span style={{ fontSize:16 }}>+</span> New chat
