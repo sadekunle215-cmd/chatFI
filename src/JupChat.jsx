@@ -2417,30 +2417,55 @@ function JupChatInner() {
     if (leaderboardLoading) return;
     setLeaderboardLoading(true);
     try {
-      // ── Score seed wallets directly via Helius trades ──────────────────────
-      // DexScreener pairAddress values are LP contract addresses, not trader
-      // wallets — fetchWalletTrades on them always returns 0 results and the
-      // seed-wallet fallback then times out, leaving setLeaderboardLoading(false)
-      // unreachable and the UI permanently stuck on "Loading…".
-      // Fix: skip DexScreener entirely and score seed wallets directly.
-      const results = await Promise.allSettled(
-        SEED_WALLETS.map(addr => fetchWalletTrades(addr, 30))
-      );
+      // ── Score seed wallets via Jupiter Portfolio API (client-side, no backend needed) ──
+      // GET https://api.jup.ag/portfolio/v1/positions?walletAddress={addr}
+      // Returns holdings with unrealizedPnl, realizedPnl, totalValue — no Helius required.
+      // We batch in groups of 6 to avoid hammering the API.
+      const BATCH = 6;
       const rows = [];
-      results.forEach((r, idx) => {
-        if (r.status !== "fulfilled" || !r.value?.length) return;
-        const trades   = r.value;
-        const wallet   = SEED_WALLETS[idx];
-        const usdBuys  = trades.filter(t => ["USDC","USDT"].includes(t.fromSymbol));
-        const usdSells = trades.filter(t => ["USDC","USDT"].includes(t.toSymbol));
-        const inFlow   = usdBuys.reduce((s,t)  => s + parseFloat(t.fromAmount||0), 0);
-        const outFlow  = usdSells.reduce((s,t) => s + parseFloat(t.toAmount  ||0), 0);
-        const pnl      = outFlow - inFlow;
-        const wins     = usdSells.filter(t => parseFloat(t.toAmount||0) > parseFloat(t.fromAmount||0)*0.95).length;
-        const winRate  = usdSells.length ? Math.round((wins/usdSells.length)*100) : null;
-        rows.push({ wallet, totalPnl:Math.round(pnl), totalVolume:inFlow, txCount:trades.length, winRate, rank:0 });
-      });
-      const sorted = rows.sort((a,b)=>b.totalPnl-a.totalPnl).slice(0,40).map((w,i)=>({...w,rank:i+1}));
+
+      for (let i = 0; i < SEED_WALLETS.length; i += BATCH) {
+        const batch = SEED_WALLETS.slice(i, i + BATCH);
+        const results = await Promise.allSettled(
+          batch.map(addr =>
+            fetch(`${JUP_PORTFOLIO}/positions?walletAddress=${addr}`)
+              .then(r => r.ok ? r.json() : null)
+              .catch(() => null)
+          )
+        );
+        results.forEach((r, idx) => {
+          const data   = r.status === "fulfilled" ? r.value : null;
+          const wallet = batch[idx];
+          if (!data) return;
+
+          // positions array — each has unrealizedPnl + realizedPnl in USD
+          const positions = data?.positions || data?.data?.positions || [];
+          if (!positions.length) return;
+
+          const totalPnl = positions.reduce((s, p) => {
+            const uPnl = parseFloat(p.unrealizedPnl ?? p.unrealized_pnl ?? 0);
+            const rPnl = parseFloat(p.realizedPnl   ?? p.realized_pnl   ?? 0);
+            return s + uPnl + rPnl;
+          }, 0);
+
+          const totalVolume = positions.reduce((s, p) =>
+            s + parseFloat(p.totalValue ?? p.total_value ?? p.value ?? 0), 0
+          );
+
+          const txCount  = positions.length;
+          // Win rate: positions where unrealizedPnl > 0
+          const winners  = positions.filter(p => parseFloat(p.unrealizedPnl ?? p.unrealized_pnl ?? 0) > 0).length;
+          const winRate  = txCount ? Math.round((winners / txCount) * 100) : null;
+
+          rows.push({ wallet, totalPnl: Math.round(totalPnl), totalVolume: Math.round(totalVolume), txCount, winRate, rank: 0 });
+        });
+      }
+
+      const sorted = rows
+        .sort((a, b) => b.totalPnl - a.totalPnl)
+        .slice(0, 40)
+        .map((w, i) => ({ ...w, rank: i + 1 }));
+
       if (sorted.length) {
         setLeaderboard(sorted);
         setLeaderboardCachedAt(Date.now());
@@ -2449,7 +2474,7 @@ function JupChatInner() {
     } catch (e) {
       console.warn("[ChatFi] Leaderboard build failed:", e.message);
     }
-    setLeaderboardLoading(false); // always fires — no longer buried inside try
+    setLeaderboardLoading(false); // always fires
   };
 
   const checkVerifyEligibility = async (mintAddress) => {
