@@ -5766,11 +5766,42 @@ Order: \`${orderKey.slice(0,20)}…\`
   // ── Send message to Claude ──────────────────────────────────────────────────
   // ── Mirror-trade event: triggered by Copy Trade "Mirror" button ─────────────
   useEffect(() => {
-    const handler = (e) => {
-      const { from, to, amount } = e.detail || {};
-      if (from && to && amount) {
-        send(`Swap ${amount} ${from} to ${to}`);
+    const handler = async (e) => {
+      const { from, to, amount, fromMint: evtFromMint, toMint: evtToMint } = e.detail || {};
+      if (!from || !to || !amount) return;
+
+      const fromSym = from.toUpperCase();
+      const toSym   = to.toUpperCase();
+
+      // Resolve mints: prefer mints passed in event, then cache/known list, then Jupiter search
+      let fromMint = evtFromMint || tokenCacheRef.current[fromSym] || TOKEN_MINTS[fromSym];
+      let toMint   = evtToMint   || tokenCacheRef.current[toSym]   || TOKEN_MINTS[toSym];
+
+      if (!fromMint) {
+        // fromSymbol might itself be a full mint address (44-char base58)
+        if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(from)) {
+          fromMint = from;
+        } else {
+          const r = await resolveToken(fromSym).catch(() => null);
+          if (r) { fromMint = r.mint; tokenCacheRef.current[fromSym] = r.mint; tokenDecimalsRef.current[fromSym] = r.decimals; }
+        }
       }
+      if (!toMint) {
+        if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(to)) {
+          toMint = to;
+        } else {
+          const r = await resolveToken(toSym).catch(() => null);
+          if (r) { toMint = r.mint; tokenCacheRef.current[toSym] = r.mint; tokenDecimalsRef.current[toSym] = r.decimals; }
+        }
+      }
+
+      push("ai", `Mirroring swap: **${amount} ${fromSym} → ${toSym}**`);
+      setSwapCfg({
+        from: fromSym, fromMint: fromMint || null, fromDecimals: tokenDecimalsRef.current[fromSym] || 9,
+        to:   toSym,   toMint:   toMint   || null, toDecimals:   tokenDecimalsRef.current[toSym]   || 6,
+        amount,
+      });
+      setShowSwap(true);
     };
     window.addEventListener("chatfi-mirror-trade", handler);
     return () => window.removeEventListener("chatfi-mirror-trade", handler);
@@ -10508,7 +10539,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
         {/* ── Copy Trade Panel ──────────────────────────────────────────── */}
         {showCopyTrade && copyTradeData && (
-          <div style={{ margin:"0 16px 16px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+          <div style={{ margin:"0 16px 16px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, maxHeight:"80vh", overflowY:"auto", WebkitOverflowScrolling:"touch" }}>
             {/* Header */}
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -10560,6 +10591,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
             {/* Trade list */}
             <div style={{ fontSize:10, color:T.text3, letterSpacing:"0.07em", textTransform:"uppercase", marginBottom:8 }}>Last {copyTradeData.trades.length} Trades</div>
+            <div style={{ maxHeight:"40vh", overflowY:"auto", WebkitOverflowScrolling:"touch", paddingRight:2 }}>
             {copyTradeData.trades.map((t, i) => (
               <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8, gap:12, flexWrap:"wrap" }}>
                 <div style={{ flex:1, minWidth:0 }}>
@@ -10578,7 +10610,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       return next;
                     });
                     setTimeout(() => {
-                      const evt = new CustomEvent("chatfi-mirror-trade", { detail: { from: t.fromSymbol, to: t.toSymbol, amount: t.fromAmount } });
+                      const evt = new CustomEvent("chatfi-mirror-trade", { detail: { from: t.fromSymbol, to: t.toSymbol, amount: t.fromAmount, fromMint: t.fromMint || null, toMint: t.toMint || null } });
                       window.dispatchEvent(evt);
                     }, 100);
                   }}
@@ -10588,6 +10620,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 </button>
               </div>
             ))}
+            </div>
           </div>
         )}
 
