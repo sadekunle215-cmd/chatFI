@@ -1591,9 +1591,46 @@ const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **Cha
 
 // Wrapper: shows landing on first visit, then the app
 function JupChatWithLanding() {
+  const [appReady, setAppReady] = useState(false);
   const [showLanding, setShowLanding] = useState(() => {
     try { return !sessionStorage.getItem("chatfi-entered"); } catch { return true; }
   });
+
+  useEffect(() => {
+    // Wait for fonts and styles to finish loading before showing any UI
+    document.fonts.ready.then(() => {
+      setAppReady(true);
+    });
+  }, []);
+
+  if (!appReady) {
+    return (
+      <div style={{
+        background: "#0a0a0a",
+        width: "100vw",
+        height: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}>
+        <div style={{
+          width: 56,
+          height: 56,
+          borderRadius: "50%",
+          border: "3px solid #1a1a1a",
+          borderTop: "3px solid #c8f135",
+          animation: "chatfi-spin 0.8s linear infinite",
+        }} />
+        <style>{`
+          @keyframes chatfi-spin {
+            from { transform: rotate(0deg); }
+            to   { transform: rotate(360deg); }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
   if (showLanding) return <LandingPage onEnter={() => {
     try { sessionStorage.setItem("chatfi-entered", "1"); } catch {}
     setShowLanding(false);
