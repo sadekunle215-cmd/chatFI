@@ -1758,7 +1758,7 @@ function LandingPage({ onEnter }) {
       <footer className="lp-footer">
         <div className="lp-footer-logo">Chat<span style={{color:"#c7f284"}}>Fi</span></div>
         <div className="lp-footer-links">
-          <a href="#" onClick={e => { e.preventDefault(); setShowTerms(true); }}>Terms</a>
+          <a href="#">Terms</a>
           <a href="#">Privacy</a>
           <a href="#">Docs</a>
           <a href="#">Blog</a>
@@ -2066,7 +2066,6 @@ function JupChatInner() {
   const [showSocialsNav, setShowSocialsNav] = useState(false);
   const [showBlog, setShowBlog]             = useState(false);
   const [blogPostIndex, setBlogPostIndex]   = useState(null); // null = list, number = open post
-  const [showTerms, setShowTerms]           = useState(false);
 
   // Dynamic token cache — grows as user searches any token
   const tokenCacheRef    = useRef({ ...TOKEN_MINTS });
@@ -4454,6 +4453,9 @@ function JupChatInner() {
     push("ai", `Opening **${leverage}x ${vault.collateral}/${vault.debt}** Multiply position with **${colAmount} ${vault.collateral}**…`);
 
     try {
+      // DEBUG — remove after confirming vaultId
+      push("ai", `DEBUG: vaultId=${getRealVaultId(vault)} colRaw=${colRaw} leverageBps=${targetLeverageBps} vault=${vault.id}`);
+
       // 1. Get unsigned transaction from backend
       const { ok: mOk, data } = await safeApiFetch("/api/multiply", {
         method: "POST",
@@ -8456,106 +8458,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             </>
           );
         })()}
-
-        {/* ── Full-screen Terms Panel ───────────────────────────────────── */}
-        {showTerms && (
-          <div style={{
-            position:"fixed", inset:0, zIndex:9999,
-            background:T.bg, overflowY:"auto",
-            animation:"fadeIn .18s ease"
-          }}>
-            {/* Header */}
-            <div style={{ position:"sticky", top:0, zIndex:10, background:T.bg, borderBottom:`1px solid ${T.border}`, padding:"14px 20px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                <button onClick={() => setShowTerms(false)}
-                  style={{ background:"none", border:"none", color:T.text2, cursor:"pointer", fontSize:20, lineHeight:1, padding:"2px 6px" }}>←</button>
-                <span style={{ fontSize:15, fontWeight:700, color:T.text1 }}>Terms of Service</span>
-              </div>
-              <span style={{ fontSize:11, color:T.text3 }}>Effective Apr 28, 2026</span>
-            </div>
-
-            {/* Content */}
-            <div style={{ maxWidth:680, margin:"0 auto", padding:"32px 20px 80px" }}>
-
-              {/* Warning banner */}
-              <div style={{ background:"rgba(255,180,50,0.07)", border:"1px solid rgba(255,180,50,0.2)", borderRadius:10, padding:"14px 16px", marginBottom:28, fontSize:13, color:"#e0b060", lineHeight:1.6 }}>
-                <strong style={{ color:"#f5c060" }}>⚠ Important:</strong> ChatFi is a DeFi interface. You interact directly with blockchain protocols and bear full responsibility for your transactions.
-              </div>
-
-              {[
-                {
-                  num:"01", title:"Acceptance of Terms",
-                  body:"By accessing or using ChatFi, you agree to be bound by these Terms of Service. If you do not agree, cease using the Service immediately. Continued use constitutes ongoing acceptance of any updates."
-                },
-                {
-                  num:"02", title:"Description of Service",
-                  body:"ChatFi is a conversational interface for Solana DeFi protocols including Jupiter Swap, Trigger, Recurring, Perps, Earn/Lend, Multiply, Predictions, Studio (DBC), Portfolio, Send, and Lock. Wallet support via Privy (embedded) and Reown AppKit (Phantom, Backpack, Solflare). ChatFi is an interface layer only — we do not operate the underlying protocols."
-                },
-                {
-                  num:"03", title:"Eligibility & Access",
-                  body:"You must be 18+ years of age, not located in a sanctions-restricted jurisdiction (including the US, Cuba, Iran, North Korea, Syria, Russia), and have legal capacity to enter contracts. It is your sole responsibility to ensure compliance with local laws."
-                },
-                {
-                  num:"04", title:"Wallet & Custody",
-                  body:"ChatFi supports embedded wallets (Privy) and external wallets (Reown AppKit). You retain full control of your private keys at all times. ChatFi never has access to your seed phrase or private keys and cannot recover lost wallets or reverse blockchain transactions."
-                },
-                {
-                  num:"05", title:"DeFi & Protocol Risks",
-                  body:"DeFi carries significant risks including: smart contract vulnerabilities, extreme price volatility, impermanent loss, liquidation risk (Perps/Multiply), oracle failures, network congestion, and the irreversible nature of all on-chain transactions. Nothing on ChatFi constitutes financial, investment, tax, or legal advice."
-                },
-                {
-                  num:"06", title:"Prohibited Uses",
-                  body:"You agree not to use ChatFi for money laundering, terrorist financing, market manipulation, wash trading, sanctions circumvention, automated scraping, reverse engineering the Service, or any activity that violates applicable law. Violations may result in immediate termination of access."
-                },
-                {
-                  num:"07", title:"Fees & Transactions",
-                  body:"Interface fees, where applicable, are shown before transaction confirmation. Solana network fees and third-party protocol fees also apply. All fees are non-refundable once a transaction is broadcast to the blockchain. Slippage settings are your responsibility."
-                },
-                {
-                  num:"08", title:"Intellectual Property",
-                  body:"The ChatFi interface, branding, AI system, and software are the exclusive property of ChatFi and its licensors. You receive a limited, non-exclusive, non-transferable license to use the Service. Copying, modifying, or distributing ChatFi content without written permission is prohibited."
-                },
-                {
-                  num:"09", title:"Disclaimer of Warranties",
-                  body:'THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND. CHATFI DISCLAIMS ALL WARRANTIES INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, UNINTERRUPTED OPERATION, AND ACCURACY OF AI-GENERATED RESPONSES OR TRADE SUGGESTIONS.'
-                },
-                {
-                  num:"10", title:"Limitation of Liability",
-                  body:"TO THE MAXIMUM EXTENT PERMITTED BY LAW, CHATFI SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES INCLUDING LOSS OF FUNDS ARISING FROM YOUR USE OF THE SERVICE, PROTOCOL EXPLOITS, OR FORCE MAJEURE EVENTS. AGGREGATE LIABILITY SHALL NOT EXCEED FEES PAID IN THE PRIOR 30 DAYS."
-                },
-                {
-                  num:"11", title:"Privacy",
-                  body:"Wallet addresses and on-chain activity are publicly visible on the Solana blockchain. Privy handles authentication data per their SOC 2 policy. ChatFi may retain conversation logs to improve the AI service. We do not sell personal data to third parties."
-                },
-                {
-                  num:"12", title:"Changes & Termination",
-                  body:"ChatFi may modify these Terms at any time. Material changes will be communicated in-app. Continued use after changes constitutes acceptance. We may suspend or terminate your access without notice for conduct that violates these Terms."
-                },
-              ].map(sec => (
-                <div key={sec.num} style={{ marginBottom:28, paddingBottom:28, borderBottom:`1px solid ${T.border}` }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
-                    <span style={{ fontSize:10, color:T.accent, background:`${T.accent}18`, border:`1px solid ${T.accent}30`, padding:"3px 8px", borderRadius:4, fontWeight:600, letterSpacing:"0.05em" }}>{sec.num}</span>
-                    <h2 style={{ fontSize:15, fontWeight:700, color:T.text1, margin:0 }}>{sec.title}</h2>
-                  </div>
-                  <p style={{ fontSize:13, color:T.text2, lineHeight:1.75, margin:0 }}>{sec.body}</p>
-                </div>
-              ))}
-
-              {/* Contact */}
-              <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 24px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:16, flexWrap:"wrap" }}>
-                <div>
-                  <div style={{ fontSize:14, fontWeight:700, color:T.text1, marginBottom:4 }}>Questions about these terms?</div>
-                  <div style={{ fontSize:12, color:T.text2 }}>Reach us through our official channels.</div>
-                </div>
-                <button onClick={() => setShowTerms(false)}
-                  style={{ background:T.accent, color:"#0d1117", border:"none", borderRadius:100, padding:"10px 20px", fontWeight:700, fontSize:13, cursor:"pointer" }}>
-                  💬 Open ChatFi
-                </button>
-              </div>
-
-            </div>
-          </div>
-        )}
 
         {/* Messages */}
         <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"102px 20px 24px", backgroundImage:"radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)", backgroundSize:"24px 24px" }}>
