@@ -4567,7 +4567,9 @@ function JupChatInner() {
         multiplyHint = "\n\nTip: This vault requires opening your first position directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply). Once the position NFT is created, you can manage it here.";
       } else if (msg.includes("6025") || msg.includes("SlippageExceeded")) {
         multiplyHint = "\n\nTip: Slippage exceeded during the flashloan swap. Try reducing leverage (e.g. 2x instead of 3x), a smaller collateral amount, or wait for calmer market conditions.";
-      } else if (msg.includes("6001") || msg.includes("insufficient") || msg.includes("balance") || msg.includes("funds")) {
+      } else if (msg.toLowerCase().includes("vault assertion") || msg.toLowerCase().includes("assertion failed")) {
+        multiplyHint = "\n\nTip: The vault may be temporarily paused or have low liquidity. Wait 10–30 seconds and try again — or try a smaller amount.";
+      } else if (msg.includes("6001") || (msg.includes("insufficient") && !msg.includes("liquidity")) || msg.includes("balance") || msg.includes("funds")) {
         multiplyHint = "\n\nTip: Insufficient balance. Make sure you have enough of the collateral token in your wallet.";
       } else if (msg.includes("rent") || msg.includes("fee") || msg.includes("lamport")) {
         multiplyHint = "\n\nTip: Not enough SOL for transaction fees. You need at least 0.01 SOL.";
