@@ -1746,7 +1746,7 @@ function LandingPage({ onEnter }) {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
               Open ChatFi
             </button>
-            <a className="lp-btn-ghost lg" href="https://twitter.com/chatfi_pro" target="_blank" rel="noreferrer">
+            <a className="lp-btn-ghost lg" href="https://x.com/SamuelA6643" target="_blank" rel="noreferrer">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.743l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
               Follow on X
             </a>
@@ -1758,19 +1758,19 @@ function LandingPage({ onEnter }) {
       <footer className="lp-footer">
         <div className="lp-footer-logo">Chat<span style={{color:"#c7f284"}}>Fi</span></div>
         <div className="lp-footer-links">
-          <a href="#">Terms</a>
+          <a href="#" onClick={e => { e.preventDefault(); setShowTerms(true); }}>Terms</a>
           <a href="#">Privacy</a>
           <a href="#">Docs</a>
           <a href="#">Blog</a>
         </div>
         <div className="lp-social-links">
-          <a className="lp-social" href="https://twitter.com/chatfi_pro" target="_blank" rel="noreferrer">
+          <a className="lp-social" href="https://x.com/SamuelA6643" target="_blank" rel="noreferrer">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.743l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
           </a>
-          <a className="lp-social" href="#" target="_blank" rel="noreferrer">
+          <a className="lp-social" href="https://discord.com/users/sam0966643" target="_blank" rel="noreferrer">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
           </a>
-          <a className="lp-social" href="#" target="_blank" rel="noreferrer">
+          <a className="lp-social" href="https://t.me/Sam_6643" target="_blank" rel="noreferrer">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
           </a>
         </div>
@@ -2066,6 +2066,7 @@ function JupChatInner() {
   const [showSocialsNav, setShowSocialsNav] = useState(false);
   const [showBlog, setShowBlog]             = useState(false);
   const [blogPostIndex, setBlogPostIndex]   = useState(null); // null = list, number = open post
+  const [showTerms, setShowTerms]           = useState(false);
 
   // Dynamic token cache — grows as user searches any token
   const tokenCacheRef    = useRef({ ...TOKEN_MINTS });
@@ -8092,10 +8093,9 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         {/* ── Jupiter-style Transparent Nav ── */}
         {(() => {
           const socials = [
-            { label:"Twitter / X", icon:<SvgTwitterX size={15} color="currentColor"/>, url:"https://x.com/JupiterExchange" },
-            { label:"Discord",     icon:<SvgDiscord size={15} color="currentColor"/>,  url:"https://discord.gg/jup" },
-            { label:"Telegram",    icon:<SvgTelegram size={15} color="currentColor"/>, url:"https://t.me/jupiter_exchange" },
-            { label:"GitHub",      icon:<SvgGithub size={15} color="currentColor"/>,   url:"https://github.com/jup-ag" },
+            { label:"Twitter / X", icon:<SvgTwitterX size={15} color="currentColor"/>, url:"https://x.com/SamuelA6643" },
+            { label:"Discord",     icon:<SvgDiscord size={15} color="currentColor"/>,  url:"https://discord.com/users/sam0966643" },
+            { label:"Telegram",    icon:<SvgTelegram size={15} color="currentColor"/>, url:"https://t.me/Sam_6643" },
           ];
           return (
             <>
@@ -8143,7 +8143,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         boxShadow:"0 8px 32px rgba(0,0,0,0.5)",
                         animation:"fadeUp 0.18s ease",
                       }}>
-                        <div style={{ fontSize:10, color:T.text3, padding:"4px 10px 6px", textTransform:"uppercase", letterSpacing:"0.08em" }}>Follow Jupiter</div>
+                        <div style={{ fontSize:10, color:T.text3, padding:"4px 10px 6px", textTransform:"uppercase", letterSpacing:"0.08em" }}>Follow Us</div>
                         {socials.map(s => (
                           <a key={s.label} href={s.url} target="_blank" rel="noreferrer"
                             style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", borderRadius:9, color:T.text1, textDecoration:"none", fontSize:13, transition:"background 0.12s" }}
@@ -8293,7 +8293,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     ))}
                   </div>
                   <div style={{ marginTop:12, fontSize:11, color:T.text3, textAlign:"center" }}>
-                    Powered by <a href="https://jup.ag" target="_blank" rel="noreferrer" style={{ color:T.accent, textDecoration:"none", fontWeight:600 }}>Jupiter Exchange</a> — the #1 Solana DEX aggregator
+                    Nothing shared by the AI should be taken as financial advice
                   </div>
                 </div>
               )}
@@ -8456,6 +8456,106 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             </>
           );
         })()}
+
+        {/* ── Full-screen Terms Panel ───────────────────────────────────── */}
+        {showTerms && (
+          <div style={{
+            position:"fixed", inset:0, zIndex:9999,
+            background:T.bg, overflowY:"auto",
+            animation:"fadeIn .18s ease"
+          }}>
+            {/* Header */}
+            <div style={{ position:"sticky", top:0, zIndex:10, background:T.bg, borderBottom:`1px solid ${T.border}`, padding:"14px 20px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <button onClick={() => setShowTerms(false)}
+                  style={{ background:"none", border:"none", color:T.text2, cursor:"pointer", fontSize:20, lineHeight:1, padding:"2px 6px" }}>←</button>
+                <span style={{ fontSize:15, fontWeight:700, color:T.text1 }}>Terms of Service</span>
+              </div>
+              <span style={{ fontSize:11, color:T.text3 }}>Effective Apr 28, 2026</span>
+            </div>
+
+            {/* Content */}
+            <div style={{ maxWidth:680, margin:"0 auto", padding:"32px 20px 80px" }}>
+
+              {/* Warning banner */}
+              <div style={{ background:"rgba(255,180,50,0.07)", border:"1px solid rgba(255,180,50,0.2)", borderRadius:10, padding:"14px 16px", marginBottom:28, fontSize:13, color:"#e0b060", lineHeight:1.6 }}>
+                <strong style={{ color:"#f5c060" }}>⚠ Important:</strong> ChatFi is a DeFi interface. You interact directly with blockchain protocols and bear full responsibility for your transactions.
+              </div>
+
+              {[
+                {
+                  num:"01", title:"Acceptance of Terms",
+                  body:"By accessing or using ChatFi, you agree to be bound by these Terms of Service. If you do not agree, cease using the Service immediately. Continued use constitutes ongoing acceptance of any updates."
+                },
+                {
+                  num:"02", title:"Description of Service",
+                  body:"ChatFi is a conversational interface for Solana DeFi protocols including Jupiter Swap, Trigger, Recurring, Perps, Earn/Lend, Multiply, Predictions, Studio (DBC), Portfolio, Send, and Lock. Wallet support via Privy (embedded) and Reown AppKit (Phantom, Backpack, Solflare). ChatFi is an interface layer only — we do not operate the underlying protocols."
+                },
+                {
+                  num:"03", title:"Eligibility & Access",
+                  body:"You must be 18+ years of age, not located in a sanctions-restricted jurisdiction (including the US, Cuba, Iran, North Korea, Syria, Russia), and have legal capacity to enter contracts. It is your sole responsibility to ensure compliance with local laws."
+                },
+                {
+                  num:"04", title:"Wallet & Custody",
+                  body:"ChatFi supports embedded wallets (Privy) and external wallets (Reown AppKit). You retain full control of your private keys at all times. ChatFi never has access to your seed phrase or private keys and cannot recover lost wallets or reverse blockchain transactions."
+                },
+                {
+                  num:"05", title:"DeFi & Protocol Risks",
+                  body:"DeFi carries significant risks including: smart contract vulnerabilities, extreme price volatility, impermanent loss, liquidation risk (Perps/Multiply), oracle failures, network congestion, and the irreversible nature of all on-chain transactions. Nothing on ChatFi constitutes financial, investment, tax, or legal advice."
+                },
+                {
+                  num:"06", title:"Prohibited Uses",
+                  body:"You agree not to use ChatFi for money laundering, terrorist financing, market manipulation, wash trading, sanctions circumvention, automated scraping, reverse engineering the Service, or any activity that violates applicable law. Violations may result in immediate termination of access."
+                },
+                {
+                  num:"07", title:"Fees & Transactions",
+                  body:"Interface fees, where applicable, are shown before transaction confirmation. Solana network fees and third-party protocol fees also apply. All fees are non-refundable once a transaction is broadcast to the blockchain. Slippage settings are your responsibility."
+                },
+                {
+                  num:"08", title:"Intellectual Property",
+                  body:"The ChatFi interface, branding, AI system, and software are the exclusive property of ChatFi and its licensors. You receive a limited, non-exclusive, non-transferable license to use the Service. Copying, modifying, or distributing ChatFi content without written permission is prohibited."
+                },
+                {
+                  num:"09", title:"Disclaimer of Warranties",
+                  body:'THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND. CHATFI DISCLAIMS ALL WARRANTIES INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, UNINTERRUPTED OPERATION, AND ACCURACY OF AI-GENERATED RESPONSES OR TRADE SUGGESTIONS.'
+                },
+                {
+                  num:"10", title:"Limitation of Liability",
+                  body:"TO THE MAXIMUM EXTENT PERMITTED BY LAW, CHATFI SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES INCLUDING LOSS OF FUNDS ARISING FROM YOUR USE OF THE SERVICE, PROTOCOL EXPLOITS, OR FORCE MAJEURE EVENTS. AGGREGATE LIABILITY SHALL NOT EXCEED FEES PAID IN THE PRIOR 30 DAYS."
+                },
+                {
+                  num:"11", title:"Privacy",
+                  body:"Wallet addresses and on-chain activity are publicly visible on the Solana blockchain. Privy handles authentication data per their SOC 2 policy. ChatFi may retain conversation logs to improve the AI service. We do not sell personal data to third parties."
+                },
+                {
+                  num:"12", title:"Changes & Termination",
+                  body:"ChatFi may modify these Terms at any time. Material changes will be communicated in-app. Continued use after changes constitutes acceptance. We may suspend or terminate your access without notice for conduct that violates these Terms."
+                },
+              ].map(sec => (
+                <div key={sec.num} style={{ marginBottom:28, paddingBottom:28, borderBottom:`1px solid ${T.border}` }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+                    <span style={{ fontSize:10, color:T.accent, background:`${T.accent}18`, border:`1px solid ${T.accent}30`, padding:"3px 8px", borderRadius:4, fontWeight:600, letterSpacing:"0.05em" }}>{sec.num}</span>
+                    <h2 style={{ fontSize:15, fontWeight:700, color:T.text1, margin:0 }}>{sec.title}</h2>
+                  </div>
+                  <p style={{ fontSize:13, color:T.text2, lineHeight:1.75, margin:0 }}>{sec.body}</p>
+                </div>
+              ))}
+
+              {/* Contact */}
+              <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, padding:"20px 24px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:16, flexWrap:"wrap" }}>
+                <div>
+                  <div style={{ fontSize:14, fontWeight:700, color:T.text1, marginBottom:4 }}>Questions about these terms?</div>
+                  <div style={{ fontSize:12, color:T.text2 }}>Reach us through our official channels.</div>
+                </div>
+                <button onClick={() => setShowTerms(false)}
+                  style={{ background:T.accent, color:"#0d1117", border:"none", borderRadius:100, padding:"10px 20px", fontWeight:700, fontSize:13, cursor:"pointer" }}>
+                  💬 Open ChatFi
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
 
         {/* Messages */}
         <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"102px 20px 24px", backgroundImage:"radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)", backgroundSize:"24px 24px" }}>
@@ -11502,7 +11602,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       </>
                     )}
                     <div style={{ marginTop:8, fontSize:11, color:T.text3 }}>
-                      Slippage tolerance: {slippage} · Powered by Jupiter DEX aggregator
+                      Slippage tolerance: {slippage}
                     </div>
                   </>
                 );
@@ -11821,7 +11921,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             </button>
           </div>
           <div style={{ textAlign:"center", fontSize:10, color:T.text3, marginTop:6, letterSpacing:"0.02em" }}>
-            Not financial advice · Powered by Jupiter
+            Not financial advice · Nothing shared by the AI should be taken as financial advice
           </div>
         </div>
       </div>
