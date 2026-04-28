@@ -294,6 +294,18 @@ export default async function handler(req, res) {
       }
       if (borrowBN.isZero()) return res.status(400).json({ error: "Derived borrow amount is zero" });
 
+      // Minimum borrow guard — SDK rejects sub-threshold amounts with vault assertion errors.
+      // 1,000 base units covers both 6-decimal (USDC/USDT ~$0.001) and 9-decimal (SOL ~0.000001).
+      const MIN_BORROW = new BN("1000");
+      if (borrowBN.lt(MIN_BORROW)) {
+        return res.status(400).json({
+          error:
+            `Borrow amount too small (${borrowBN.toString()} base units). ` +
+            `At this leverage and collateral size the flash loan is below the vault minimum. ` +
+            `Use a higher leverage or a larger collateral amount.`,
+        });
+      }
+
       console.log(`[multiply/open] vault=${vaultId} posId=${positionId} col=${colBN} borrow=${borrowBN}`);
 
       // Resolve vault mints for this specific vaultId only
