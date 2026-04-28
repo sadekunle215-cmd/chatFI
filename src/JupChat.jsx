@@ -4453,9 +4453,6 @@ function JupChatInner() {
     push("ai", `Opening **${leverage}x ${vault.collateral}/${vault.debt}** Multiply position with **${colAmount} ${vault.collateral}**…`);
 
     try {
-      // DEBUG — remove after confirming vaultId
-      push("ai", `DEBUG: vaultId=${getRealVaultId(vault)} colRaw=${colRaw} leverageBps=${targetLeverageBps} vault=${vault.id}`);
-
       // 1. Get unsigned transaction from backend
       const { ok: mOk, data } = await safeApiFetch("/api/multiply", {
         method: "POST",
