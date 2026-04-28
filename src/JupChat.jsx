@@ -5459,8 +5459,8 @@ function JupChatInner() {
     if (privyReady && privyAuthed) { privyLogin(); return; }
     // 2. Reown already connected — open AppKit selector directly
     if (reownConnected) { reownOpen(); return; }
-    // 3. Nothing connected — show the connect modal
-    setShowWalletModal(true);
+    // 3. Nothing connected — open Reown modal directly
+    reownOpen();
   };
 
   // Connect via Privy social login (email / Google / Twitter / Discord)
@@ -5524,10 +5524,9 @@ function JupChatInner() {
     const { from, fromMint, fromDecimals, to, toMint, toDecimals, amount } = swapCfg;
     if (!amount) return;
     if (!walletFull) {
-      // Smart connect: use existing session if any, otherwise show modal
+      // Smart connect: use existing session if any, otherwise open Reown directly
       if (privyReady && privyAuthed) { privyLogin(); }
-      else if (reownConnected) { reownOpen(); }
-      else { setShowWalletModal(true); }
+      else { reownOpen(); }
       return;
     }
     if (!fromMint || !toMint) {
