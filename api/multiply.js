@@ -6,6 +6,13 @@
 // REQUIRED env var: SOLANA_RPC — must be a paid RPC (Helius/Triton/Quicknode).
 // The public mainnet-beta RPC will rate-limit and cause FUNCTION_INVOCATION_FAILED.
 // Set in Vercel: Settings → Environment Variables → SOLANA_RPC
+//
+// 2-TX FLOW (mirrors Jupiter's own UI):
+//   Tx 1 — action:"initPosition" → creates position NFT, returns { transaction, positionId }
+//   Tx 2 — action:"open"         → flashloan multiply using the real positionId
+//
+// GET ?getPositions=1&vaultId=X&signer=Y → returns existing positionIds for user/vault
+//   Use as fallback if you need to resume after a partial init.
 
 import {
   AddressLookupTableAccount,
@@ -22,8 +29,8 @@ import {
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import BN from "bn.js";
-import { getFlashloanIx, getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
-import { getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
+import { getFlashloanIx } from "@jup-ag/lend/flashloan";
+import { getInitPositionIx, getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
 import { Client } from "@jup-ag/lend-read";
 
 const MAX_REPAY    = MAX_REPAY_AMOUNT   ?? new BN("9007199254740991");
@@ -137,9 +144,46 @@ export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  // ── GET: health check + vault mint map ──────────────────────────────────────
+  if (!RPC_URL) return res.status(500).json({ error: "SOLANA_RPC env var not set." });
+
+  // ── GET: health check + vault mint map + optional position listing ──────────
   if (req.method === "GET") {
-    if (!RPC_URL) return res.status(500).json({ error: "SOLANA_RPC env var not set." });
+    const query = Object.fromEntries(new URL(req.url, "http://localhost").searchParams);
+
+    // GET ?getPositions=1&vaultId=X&signer=Y
+    // Returns the list of positionIds the user owns in this vault.
+    // Use as fallback/resume if Step 1 completed but Step 2 hasn't run yet.
+    if (query.getPositions && query.vaultId && query.signer) {
+      try {
+        const connection = new Connection(RPC_URL, { commitment: "confirmed" });
+        const client = new Client(connection);
+        const signerPk = new PublicKey(query.signer);
+        const vaultId  = Number(query.vaultId);
+
+        // Try known SDK method names (different SDK versions use different names)
+        let positions = [];
+        if (typeof client.vault.getPositionsByUser === "function") {
+          positions = await client.vault.getPositionsByUser({ vaultId, user: signerPk });
+        } else if (typeof client.vault.getUserPositions === "function") {
+          positions = await client.vault.getUserPositions({ vaultId, owner: signerPk });
+        } else if (typeof client.vault.getPositionsForOwner === "function") {
+          positions = await client.vault.getPositionsForOwner({ vaultId, owner: signerPk });
+        }
+
+        // Normalise — different SDK versions shape position objects differently
+        const ids = (positions || []).map(p =>
+          p.positionId ?? p.id ?? p.nftId ?? p.index ?? null
+        ).filter(id => id !== null);
+
+        console.log(`[getPositions] vault=${vaultId} signer=${query.signer.slice(0,8)} found=${ids.length}`);
+        return res.status(200).json({ positionIds: ids });
+      } catch (e) {
+        console.error("[getPositions] ERROR:", e.message);
+        return res.status(500).json({ error: e.message });
+      }
+    }
+
+    // Default GET: health + vault map
     try {
       const connection = new Connection(RPC_URL, { commitment: "confirmed" });
       const slot = await connection.getSlot();
@@ -172,12 +216,6 @@ export default async function handler(req, res) {
 
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  if (!RPC_URL) {
-    return res.status(500).json({
-      error: "SOLANA_RPC environment variable is not set. Add it in Vercel → Settings → Environment Variables.",
-    });
-  }
-
   let body;
   try { body = await parseBody(req); }
   catch (e) { return res.status(400).json({ error: e.message }); }
@@ -207,13 +245,46 @@ export default async function handler(req, res) {
 
   try {
 
-    // ── OPEN (Multiply) ───────────────────────────────────────────────────────
-    // Official single-tx flow:
-    //   flashBorrow(debt) → swap(debt→col) → operate(deposit col+initial, borrow debt) → flashPayback
-    // positionId: 0 = create new position. No separate init transaction needed.
+    // ── INIT POSITION (Step 1 of 2) ──────────────────────────────────────────
+    // Creates the position NFT on-chain. This must be sent and confirmed BEFORE
+    // the multiply (Step 2). Mirrors Jupiter's own "Step 1: Create Position" button.
+    //
+    // Returns: { transaction: base64, positionId: number }
+    // The positionId is needed for the "open" action (Step 2).
+    if (action === "initPosition") {
+      console.log(`[initPosition] vault=${vaultId} signer=${signer.slice(0,8)}`);
+
+      const result = await getInitPositionIx({
+        vaultId:    Number(vaultId),
+        signer:     signerPubkey,
+        connection,
+      });
+
+      // getInitPositionIx returns: { ixs, positionId, addressLookupTableAccounts }
+      // positionId is the newly assigned on-chain position index (e.g. 4881)
+      const { ixs, positionId: newPositionId, addressLookupTableAccounts } = result;
+
+      console.log(`[initPosition] positionId=${newPositionId} ixs=${ixs.length}`);
+
+      const transaction = await buildTx(connection, signerPubkey, ixs, addressLookupTableAccounts ?? []);
+      return res.status(200).json({
+        transaction,
+        positionId: newPositionId, // Pass back to client for use in Step 2
+      });
+    }
+
+    // ── OPEN / MULTIPLY (Step 2 of 2) ────────────────────────────────────────
+    // Requires a real positionId from initPosition (Step 1).
+    // positionId MUST be non-zero — 0 causes "Vault assertion failed".
+    // Flow: flashBorrow(debt) → swap(debt→col) → operate(deposit col, borrow debt) → flashPayback
     if (action === "open") {
       if (!initialColAmount) return res.status(400).json({ error: "open requires initialColAmount" });
       if (!targetLeverageBps && !debtAmountRaw) return res.status(400).json({ error: "open requires targetLeverageBps or debtAmount" });
+      if (!positionId || Number(positionId) === 0) {
+        return res.status(400).json({
+          error: "open requires a real positionId (non-zero). Run initPosition first to create the position NFT.",
+        });
+      }
 
       const initialColBN = new BN(initialColAmount.toString());
       if (initialColBN.isZero()) return res.status(400).json({ error: "initialColAmount must be non-zero" });
@@ -239,9 +310,9 @@ export default async function handler(req, res) {
       const colMint  = new PublicKey(vaultMints.supplyToken);
       const debtMint = new PublicKey(vaultMints.borrowToken);
 
-      console.log(`[open] vault=${vaultId} borrow=${borrowBN} initialCol=${initialColBN}`);
+      console.log(`[open] vault=${vaultId} pos=${positionId} borrow=${borrowBN} initialCol=${initialColBN}`);
 
-      // 1. Flash loan + quote in parallel to save time
+      // 1. Flash loan + quote in parallel
       const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN };
       const [{ borrowIx: flashBorrowIx, paybackIx: flashPaybackIx }, quoteRes] = await Promise.all([
         getFlashloanIx(flashParams),
@@ -255,7 +326,7 @@ export default async function handler(req, res) {
         return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
       }
 
-      // colAmount = initial collateral + swap output (outAmount per official docs)
+      // colAmount = initial collateral + swap output (per official docs)
       const swapOutputBN = new BN(quoteRes.outAmount.toString());
       const totalColBN   = initialColBN.add(swapOutputBN);
 
@@ -263,7 +334,7 @@ export default async function handler(req, res) {
       const [operateResult, swapApiRes] = await Promise.all([
         getOperateIx({
           vaultId:    Number(vaultId),
-          positionId: Number(positionId), // 0 = new position
+          positionId: Number(positionId), // REAL position ID from Step 1, not 0
           colAmount:  totalColBN,
           debtAmount: borrowBN,
           signer:     signerPubkey,
@@ -336,7 +407,6 @@ export default async function handler(req, res) {
         return res.status(502).json({ error: `Unwind quote failed: ${quoteRes.error ?? "No route"}` });
       }
 
-      // For full unwind: MAX constants. For partial: neg amounts with slippage floor
       const colOpAmount  = isFullUnwind ? MAX_WITHDRAW : flashColBN.neg();
       const debtOpAmount = isFullUnwind ? MAX_REPAY    : new BN(quoteRes.otherAmountThreshold.toString()).neg();
 
@@ -365,7 +435,6 @@ export default async function handler(req, res) {
       const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
       const allAlts  = dedupeAlts([...(operateResult.addressLookupTableAccounts ?? []), ...swapAlts]);
 
-      // Single tx: flashBorrow → swap → operate → flashPayback
       const allIxs = [flashBorrowIx, swapIx, ...operateResult.ixs, flashPaybackIx];
       console.log(`[unwind] ixs=${allIxs.length}`);
 
