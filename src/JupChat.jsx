@@ -1876,6 +1876,8 @@ function JupChatInner() {
 
   // UI
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [directMode,  setDirectMode]  = useState(false);
+  const [pendingDirectAction, setPendingDirectAction] = useState(null); // { type, label, exec }
   const [chatHistory, setChatHistory] = useState([{ id:"default", title:"New conversation", active:true }]);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
@@ -6319,6 +6321,31 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
     const raw = (override ?? input).trim();
     if (!raw || typing) return;
 
+    // ── Direct Mode confirmation intercept ───────────────────────────────────
+    if (pendingDirectAction) {
+      const answer = raw.toLowerCase().trim();
+      if (answer === "yes" || answer === "y" || answer === "confirm") {
+        setInput("");
+        push("user", raw);
+        setPendingDirectAction(null);
+        const { type } = pendingDirectAction;
+        if      (type === "swap")        { setShowSwap(false);        await doSwap(); }
+        else if (type === "earnDeposit") { setShowEarnDeposit(false); await doEarnDeposit(); }
+        else if (type === "earnWithdraw"){ setShowEarnWithdraw(false);await doEarnWithdraw(); }
+        else if (type === "send")        { setShowSend(false);        await doSend(); }
+        return;
+      } else if (answer === "no" || answer === "n" || answer === "cancel") {
+        setInput("");
+        push("user", raw);
+        setPendingDirectAction(null);
+        push("ai", "Transaction cancelled.");
+        return;
+      }
+      // Any other reply — cancel pending and continue normally
+      setPendingDirectAction(null);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     // ── Power Command intercept (runs before Claude call) ────────────────────
     const powerCmd = detectPowerCommand(raw);
     if (powerCmd) {
@@ -6511,6 +6538,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         } else {
           push("ai", text);
           await resolveAndSet();
+          // Direct mode: skip panel, ask for confirmation then execute
+          if (directMode) {
+            const { amount: a, from: f, to: t } = swapCfg;
+            const amt = actionData?.amount || actionData?.portion || a || "?";
+            push("ai", `⚡ **Direct Mode** — Swap **${amt} ${fromSym} → ${toSym}**\n\nReply **yes** to execute or **no** to cancel.`);
+            setPendingDirectAction({ type:"swap", label:`${amt} ${fromSym} → ${toSym}` });
+          }
         }
 
       } else if (action === "SHOW_TRIGGER") {
@@ -6603,7 +6637,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   autoAmt = actionData.amount;
                 }
                 setEarnDeposit({ vault: match, amount: autoAmt });
-                setShowEarnDeposit(true);
+                if (directMode && autoAmt) {
+                  push("ai", `⚡ **Direct Mode** — Deposit **${autoAmt} ${vaultSym}** into **${match.name}** (${match.apyDisplay} APY)\n\nReply **yes** to execute or **no** to cancel.`);
+                  setPendingDirectAction({ type:"earnDeposit", label:`${autoAmt} ${vaultSym} into ${match.name}` });
+                } else {
+                  setShowEarnDeposit(true);
+                }
               }
               return vaults;
             });
@@ -6795,13 +6834,16 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const upperTok = token.toUpperCase();
           const mint = tokenCacheRef.current[upperTok] || TOKEN_MINTS[upperTok] || TOKEN_MINTS.SOL;
           setSendCfg({ token: upperTok, amount, mint });
-          setSendStatus(null);
-          setSendLink("");
-          setSendRecipient("");
-          setSendTxSig("");
+          setSendStatus(null); setSendLink(""); setSendRecipient(""); setSendTxSig("");
           setSendMode(privyMode ? "direct" : "invite");
-          setShowSend(true);
-          push("ai", text);
+          if (directMode && amount && actionData?.recipient) {
+            setSendRecipient(actionData.recipient);
+            push("ai", `⚡ **Direct Mode** — Send **${amount} ${upperTok}** to \`${actionData.recipient.slice(0,8)}…\`\n\nReply **yes** to execute or **no** to cancel.`);
+            setPendingDirectAction({ type:"send", label:`${amount} ${upperTok} to ${actionData.recipient.slice(0,8)}…` });
+          } else {
+            setShowSend(true);
+            push("ai", text);
+          }
         }
 
       } else if (action === "FETCH_SEND_HISTORY") {
@@ -7248,6 +7290,25 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 {c.title}
               </div>
             ))}
+          </div>
+          <div style={{ padding:"10px 16px", borderTop:`1px solid ${T.border}` }}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+              <div>
+                <div style={{ fontSize:12, fontWeight:600, color:T.text1 }}>Direct Mode</div>
+                <div style={{ fontSize:10, color:T.text3, marginTop:1 }}>Transact without panels</div>
+              </div>
+              <button onClick={() => setDirectMode(d => !d)} style={{
+                width:44, height:24, borderRadius:12, border:"none", cursor:"pointer", padding:0,
+                background: directMode ? T.green : T.border,
+                transition:"background 0.2s", position:"relative", flexShrink:0,
+              }}>
+                <span style={{
+                  position:"absolute", top:3, left: directMode ? 23 : 3,
+                  width:18, height:18, borderRadius:"50%", background:"#fff",
+                  transition:"left 0.2s", display:"block", boxShadow:"0 1px 3px rgba(0,0,0,0.3)",
+                }} />
+              </button>
+            </div>
           </div>
           <div style={{ padding:"12px 16px", borderTop:`1px solid ${T.border}` }}>
             {wallet ? (
