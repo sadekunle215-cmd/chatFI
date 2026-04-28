@@ -114,24 +114,25 @@ async function buildTx(connection, signerPubkey, ixs, alts) {
   return Buffer.from(txBytes).toString("base64");
 }
 
-// ── Vault mint lookup — fetched dynamically from on-chain via SDK ─────────────
-// Cache per cold start to avoid repeated RPC calls
-let vaultMintsCache = null;
+// ── Vault mint lookup — fetches a SINGLE vault by ID (fast, no timeout risk) ──
+// Per-vaultId cache to avoid re-fetching the same vault within a cold start
+const vaultMintCache = {};
 
-async function getVaultMints(connection) {
-  if (vaultMintsCache) return vaultMintsCache;
+async function getVaultMintsById(connection, vaultId) {
+  const id = Number(vaultId);
+  if (vaultMintCache[id]) return vaultMintCache[id];
   const client = new Client(connection);
-  const vaults = await client.vault.getAllVaults();
-  const map = {};
-  for (const v of vaults) {
-    map[v.vaultId] = {
-      supplyToken: v.supplyToken.toBase58(),
-      borrowToken: v.borrowToken.toBase58(),
-    };
-  }
-  vaultMintsCache = map;
-  console.log(`[multiply] loaded ${Object.keys(map).length} vaults from chain`);
-  return map;
+  // getVaultByVaultId fetches ONE vault — replaces getAllVaults() which was
+  // fetching 100+ vaults on every cold start and hitting Vercel's 30s timeout
+  const v = await client.vault.getVaultByVaultId({ vaultId: id });
+  if (!v) throw new Error(`Unknown vaultId ${id}`);
+  const mints = {
+    supplyToken: v.supplyToken.toBase58(),
+    borrowToken: v.borrowToken.toBase58(),
+  };
+  vaultMintCache[id] = mints;
+  console.log(`[multiply] loaded vault ${id} col=${mints.supplyToken.slice(0,8)} debt=${mints.borrowToken.slice(0,8)}`);
+  return mints;
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -140,17 +141,13 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
   // ── GET: lightweight health check — just verify RPC is reachable ────────────
-  // getAllVaults() is too heavy (100+ RPC calls) for a health check.
-  // Vault mints are loaded dynamically from on-chain via SDK.
+  // No vault fetching here — getAllVaults() was too heavy and caused cold-start timeouts.
   if (req.method === "GET") {
     if (!RPC_URL) return res.status(500).json({ error: "SOLANA_RPC env var not set." });
     try {
       const connection = new Connection(RPC_URL, { commitment: "confirmed" });
-      const [slot, vaultMints] = await Promise.all([
-        connection.getSlot(),
-        getVaultMints(connection),
-      ]);
-      return res.status(200).json({ ok: true, slot, vaults: Object.entries(vaultMints).map(([id, v]) => ({ vaultId: Number(id), ...v })) });
+      const slot = await connection.getSlot();
+      return res.status(200).json({ ok: true, slot });
     } catch(e) {
       return res.status(500).json({ error: e.message });
     }
@@ -197,10 +194,8 @@ export default async function handler(req, res) {
 
       console.log(`[multiply/open] vault=${vaultId} posId=${positionId} col=${colBN} borrow=${borrowBN}`);
 
-      // Resolve vault mints dynamically from on-chain
-      const allVaultMints = await getVaultMints(connection);
-      const vaultMints = allVaultMints[Number(vaultId)];
-      if (!vaultMints) return res.status(400).json({ error: `Unknown vaultId ${vaultId}. Available: ${Object.keys(allVaultMints).join(", ")}` });
+      // Resolve vault mints for this specific vaultId only
+      const vaultMints = await getVaultMintsById(connection, vaultId);
       const colMint  = new PublicKey(vaultMints.supplyToken);
       const debtMint = new PublicKey(vaultMints.borrowToken);
 
@@ -282,9 +277,7 @@ export default async function handler(req, res) {
 
     // ── UNWIND ────────────────────────────────────────────────────────────────
     if (action === "unwind") {
-      const allVaultMints = await getVaultMints(connection);
-      const vaultMints = allVaultMints[Number(vaultId)];
-      if (!vaultMints) return res.status(400).json({ error: `Unknown vaultId ${vaultId}` });
+      const vaultMints = await getVaultMintsById(connection, vaultId);
       const colMint  = new PublicKey(vaultMints.supplyToken);
       const debtMint = new PublicKey(vaultMints.borrowToken);
       const isFullUnwind = !withdrawAmount;
