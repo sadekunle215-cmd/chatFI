@@ -4298,11 +4298,22 @@ function JupChatInner() {
     // We normalise every position into a consistent shape so the render never needs to guess field names.
     let earnPositions = [];
     const normaliseEarnPos = (e) => {
-      // token field is the real underlying asset (per Jupiter Earn API docs)
-      const tok     = e.token || e.asset || {};
-      const sym     = tok.symbol || e.assetSymbol || e.symbol || "";
-      const mint    = tok.address || tok.id || e.assetMint || e.mint || null;
-      const dec     = tok.decimals ?? e.decimals ?? 6;
+      // Jupiter Earn positions API: e.token = jlToken receipt (symbol "Earn", address = jlToken mint)
+      // e.assetMint (top-level) = the REAL underlying asset mint (USDG, USDC, SOL, etc.)
+      // e.asset (if present) = underlying asset descriptor with symbol/decimals
+      const tok           = e.token || {};
+      const underlyingTok = e.asset || e.underlyingToken || {};
+
+      // Underlying mint — MUST prefer e.assetMint over tok.address (tok.address is jlToken mint)
+      const mint = e.assetMint || e.mint || tok.address || tok.id || null;
+
+      // Underlying symbol — prefer e.asset.symbol; strip "jl" prefix from jlToken symbols ("jlUSDG"→"USDG")
+      const rawSym = underlyingTok.symbol || tok.symbol || e.assetSymbol || e.symbol || "";
+      const sym = rawSym.toLowerCase() === "earn"
+        ? (underlyingTok.symbol || "")               // "Earn" is the jlToken name — discard
+        : (rawSym.startsWith("jl") ? rawSym.slice(2) : rawSym);  // "jlUSDG" → "USDG"
+
+      const dec = underlyingTok.decimals ?? tok.decimals ?? e.decimals ?? 6;
       // underlyingBalance is already human-readable; underlyingAssets is the raw integer
       const ub      = parseFloat(e.underlyingBalance || 0);
       const ua      = parseFloat(e.underlyingAssets  || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
@@ -4315,8 +4326,8 @@ function JupChatInner() {
         _dec:   dec,
         _amt:   amount,
         _amtRaw: amountRaw,
-        _name:  tok.name || e.name || `Jupiter Lend ${sym}`,
-        _logoUrl: tok.logoURI || tok.logo_url || tok.icon || e.logoUrl || "",
+        _name:  underlyingTok.name || (sym ? `Jupiter Lend ${sym}` : null) || tok.name || e.name || "Jupiter Lend",
+        _logoUrl: underlyingTok.logoURI || underlyingTok.logo_url || tok.logoURI || tok.logo_url || tok.icon || e.logoUrl || "",
         ...e,   // keep raw fields for any other consumers
       };
     };
@@ -9893,16 +9904,23 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     const amt  = pos._amt  > 0
                       ? pos._amt.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:6})
                       : parseFloat(pos.value||0).toFixed(2);
-                    // Match vault by mint (most reliable) then symbol — purely for APY display
+                    // raw e.assetMint is the top-level underlying asset mint from the API response
+                    const rawAssetMint = pos.assetMint || pos.mint || null;
+                    // For symbol matching: also try stripping "jl" prefix in case normalise didn't catch it
+                    const symForMatch  = (sym && sym !== "Unknown" && sym !== "Earn") ? sym
+                      : (pos._sym?.startsWith("jl") ? pos._sym.slice(2) : null);
+                    // Match vault: prefer raw underlying assetMint, then normalised mint, then symbol
                     const matchVault = earnVaults.find(v =>
+                      (rawAssetMint && v.assetMint && v.assetMint === rawAssetMint) ||
                       (mint && v.assetMint && v.assetMint === mint) ||
-                      (sym  && sym !== "Unknown" && v.token?.toUpperCase() === sym.toUpperCase())
+                      (symForMatch && v.token?.toUpperCase() === symForMatch.toUpperCase())
                     );
-                    // Build the vault object the withdraw modal needs — mint comes from the position itself
+                    // Build the vault object the withdraw modal needs — always prefer underlying assetMint
+                    const resolvedMint = rawAssetMint || mint;
                     const withdrawVault = matchVault
-                      ? { ...matchVault, assetMint: matchVault.assetMint || mint }
-                      : { name: pos._name || `Jupiter Lend ${sym}`, token: sym,
-                          apyDisplay: "—", tvl: 0, assetMint: mint, assetDecimals: dec };
+                      ? { ...matchVault, assetMint: matchVault.assetMint || resolvedMint }
+                      : { name: pos._name || `Jupiter Lend ${sym || "?"}`, token: sym || symForMatch || "?",
+                          apyDisplay: "—", tvl: 0, assetMint: resolvedMint, assetDecimals: dec };
                     return (
                       <div key={`earn-${i}`} style={{ padding:"12px 14px", border:`1px solid ${T.green}44`, borderRadius:10, background:`${T.green}08` }}>
                         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
