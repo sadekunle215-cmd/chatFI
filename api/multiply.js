@@ -29,6 +29,28 @@ import { Client } from "@jup-ag/lend-read";
 const MAX_REPAY    = MAX_REPAY_AMOUNT   ?? new BN("9007199254740991");
 const MAX_WITHDRAW = MAX_WITHDRAW_AMOUNT ?? new BN("9007199254740991");
 
+// Vercel: disable automatic body parsing so GET requests don't throw
+// "Expected the value to satisfy a union of type | type, but received: """
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+// Helper to parse body manually for POST requests only
+async function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    if (req.method !== "POST") return resolve({});
+    let data = "";
+    req.on("data", chunk => { data += chunk; });
+    req.on("end", () => {
+      try { resolve(data ? JSON.parse(data) : {}); }
+      catch { reject(new Error("Invalid JSON body")); }
+    });
+    req.on("error", reject);
+  });
+}
+
 const RPC_URL  = process.env.SOLANA_RPC;
 const JUP_API_KEY = process.env.JUP_API_KEY || "";
 // Per official docs: use lite-api for swap quotes+instructions inside flashloan txs
@@ -264,8 +286,9 @@ export default async function handler(req, res) {
     });
   }
 
+  const body = await parseBody(req);
   const { action = "open", vaultId, positionId = 0, initialColAmount,
-          targetLeverageBps, withdrawAmount, colAmount, debtAmount, signer } = req.body;
+          targetLeverageBps, withdrawAmount, colAmount, debtAmount, signer } = body;
 
   if (!vaultId || !signer) return res.status(400).json({ error: "Missing vaultId or signer" });
 
