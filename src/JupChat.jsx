@@ -384,7 +384,8 @@ Rules:
 - "my trades" / "trade history" / "trade journal" / "my PnL" / "what have I traded" / "show my swaps" / "trading history" → SHOW_TRADE_JOURNAL
 - "swap all tokens in my wallet to X" / "convert everything to X" / "swap all my tokens except Y to X" / "dump my whole wallet into X" / "liquidate everything to X" / "sell all tokens except X" → SWAP_ALL_WALLET — use when user does NOT name specific tokens; client will read live wallet
 - "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" / "swap X JUP and Y BONK to USDC" / "swap all these tokens to USDC" / "swap max/all of A B C to X" / "dump all my A B C into X" → BASKET_SWAP — parse each token, amount mode, and direction into trades array; default from:"USDC" when buying, default to:"USDC" when selling/dumping
-- "sell X and then set a limit order" / "sell my tokens and buy BTC at $Y" / "dump my bags and DCA into SOL" / "sell BONK SOL JUP and use $N for a limit order" / "sell everything then lock" / "sell then earn" / any intent that combines SELLING tokens WITH a follow-up action using proceeds → CHAINED_ACTIONS — step 1 is always BASKET_SWAP (or SHOW_SWAP for single token) selling to USDC, step 2 is the follow-up action. CRITICAL: when user says "$N out of proceeds" or "use $N from the sale", set amountUSD:"N" in the follow-up step. When user says "use all proceeds" or doesn't specify an amount, set portion:"all" in the follow-up step.
+- "sell X and then set a limit order" / "sell my tokens and buy BTC at $Y" / "dump my bags and DCA into SOL" / "sell BONK SOL JUP and use $N for a limit order" / "sell everything then lock" / "sell then earn" / any intent that combines SELLING tokens WITH a follow-up action using proceeds → CHAINED_ACTIONS — step 1 is always BASKET_SWAP (or SHOW_SWAP for single token) selling to USDC, step 2 is the follow-up action. CRITICAL: when user says "$N out of proceeds" or "use $N from the sale", set amountUSD:"N" in the follow-up step. When user says "use all proceeds" or doesn't specify an amount, set portion:"all" in the follow-up step. IMPORTANT: CHAINED_ACTIONS is ONLY for sell→proceed flows. Do NOT use it when the user wants to BUY tokens AND set a limit/trigger order — those are independent actions, use CHAINED_ACTIONS with step 1 as BASKET_SWAP (buying) and step 2 as SHOW_TRIGGER_V2/SHOW_RECURRING, and make sure the trades array in step 1 is fully populated with all tokens and amounts the user named.
+- "buy $X each of A B C and use $N for a limit/trigger order on Y" / "buy multiple tokens and set a trigger" / "buy A B C and also set a limit order" / any intent that combines BUYING multiple tokens WITH a separate trigger/limit/DCA order → CHAINED_ACTIONS with step 1 as BASKET_SWAP (trades array = all the buy trades, from:"USDC" for each) and step 2 as SHOW_TRIGGER_V2 or SHOW_RECURRING. CRITICAL: fully populate trades array in step 1 — e.g. "buy 1 USDC of bonk, pengu, jup, fartcoin" → trades:[{from:"USDC",to:"BONK",amountUSD:"1"},{from:"USDC",to:"PENGU",amountUSD:"1"},{from:"USDC",to:"JUP",amountUSD:"1"},{from:"USDC",to:"FARTCOIN",amountUSD:"1"}].
 - "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
@@ -5513,17 +5514,6 @@ function JupChatInner() {
           if (inj?.signTransaction) { const r=[]; for (const tx of txs) r.push(await inj.signTransaction(tx)); return r; }
           throw new Error("Wallet does not support signAllTransactions. Please reconnect.");
         },
-        signMessage: async (msg) => {
-          // Reown provider may expose signMessage directly
-          if (typeof reownProvider.signMessage === "function") return reownProvider.signMessage(msg);
-          // Fall back to injected wallet (Phantom / Solflare / Backpack)
-          const inj = window?.phantom?.solana || window?.backpack?.solana || window?.solflare || window?.solana || null;
-          if (inj?.signMessage) return inj.signMessage(msg);
-          throw new Error(
-            "Your wallet does not support message signing required for Trigger orders. " +
-            "Try Phantom or Solflare browser extension, or use a Limit order via a supported wallet."
-          );
-        },
         isReown: true,
       };
     }
@@ -7594,15 +7584,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             const step = steps[i];
             const stepAction = step.action;
             const stepData   = step.actionData || {};
-            if (i > 0) {
-              // Small pause between steps so UI can settle
-              await new Promise(r => setTimeout(r, 600));
-              push("ai", `▶ Step ${i + 1} of ${steps.length}: preparing **${stepAction.replace(/_/g," ").toLowerCase()}**…`);
-            }
+            // Small pause between steps, show label for every step
+            if (i > 0) await new Promise(r => setTimeout(r, 600));
+            push("ai", `▶ Step ${i + 1} of ${steps.length}: preparing **${stepAction.replace(/_/g," ").toLowerCase()}**…`);
             // For each step type, directly trigger the same logic as the main dispatcher
             if (stepAction === "BASKET_SWAP") {
               const bTrades = stepData.trades || [];
-              if (!bTrades.length) { push("ai", "No trades in basket step."); continue; }
+              if (!bTrades.length) { push("ai", "Basket step had no trades — please rephrase and try again."); continue; }
               if (!walletFull) { push("ai", "Connect your wallet first to execute this step."); break; }
 
               // ── Resolve all unknown mints first ──────────────────────────────
