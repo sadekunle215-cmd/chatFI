@@ -178,7 +178,6 @@ const TOKEN_MINTS = {
   PYTH:    "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
   MSOL:    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
   JITOSOL: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",
-  JUPSOL:  "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZbosLmK1yeR",
   BSOL:    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",
   SAMO:    "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
   ORCA:    "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",
@@ -193,7 +192,7 @@ const TOKEN_MINTS = {
 
 const TOKEN_DECIMALS = {
   SOL:9, JUP:6, BONK:5, WIF:6, USDC:6, USDT:6, RAY:6, PYTH:6,
-  MSOL:9, JITOSOL:9, JUPSOL:9, BSOL:9, SAMO:9, ORCA:6, POPCAT:9, TRUMP:6,
+  MSOL:9, JITOSOL:9, BSOL:9, SAMO:9, ORCA:6, POPCAT:9, TRUMP:6,
   BTC:8, WBTC:8, ETH:8, WETH:8,
 };
 
@@ -208,7 +207,6 @@ const TOKEN_LOGO_URLS = {
   RAY:     "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R/logo.png",
   MSOL:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So/logo.png",
   JITOSOL: "https://storage.googleapis.com/token-metadata/JitoSOL-256.png",
-  JUPSOL:  "https://static.jup.ag/jupsol/icon.png",
   BSOL:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1/logo.png",
   ORCA:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE/logo.png",
   SAMO:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU/logo.png",
@@ -227,13 +225,12 @@ const PRED_CATEGORIES = ["sports","crypto","politics","esports","culture","econo
 // Jupiter Multiply vaults — leveraged looping strategies via Jupiter Lend
 const MULTIPLY_VAULTS = [
   // vaultId: on-chain vault ID used by getOperateIx. colDecimals/debtDecimals for amount conversion.
-  // IDs verified against Jupiter URL pattern: jup.ag/lend/multiply/{vaultId}
-  { id:"jupsol-sol",  vaultId:4,  collateral:"JupSOL", debt:"SOL",  colDecimals:9, debtDecimals:9, maxLev:"10x", ltv:"90%", desc:"Loop JupSOL vs SOL. Earn staking yield amplified. Best for SOL bulls.", risk:"Medium", url:"https://jup.ag/lend/multiply/jupsol-sol"  },
+  { id:"jupsol-sol",  vaultId:3,  collateral:"JupSOL", debt:"SOL",  colDecimals:9, debtDecimals:9, maxLev:"10x", ltv:"90%", desc:"Loop JupSOL vs SOL. Earn staking yield amplified. Best for SOL bulls.", risk:"Medium", url:"https://jup.ag/lend/multiply/jupsol-sol"  },
   { id:"jitosol-sol", vaultId:2,  collateral:"JitoSOL",debt:"SOL",  colDecimals:9, debtDecimals:9, maxLev:"10x", ltv:"90%", desc:"Loop JitoSOL vs SOL. Earn Jito staking + MEV rewards amplified.",      risk:"Medium", url:"https://jup.ag/lend/multiply/jitosol-sol" },
   { id:"sol-usdc",    vaultId:1,  collateral:"SOL",    debt:"USDC", colDecimals:9, debtDecimals:6, maxLev:"5x",  ltv:"80%", desc:"Leverage SOL exposure against USDC. Higher upside and downside.",       risk:"High",   url:"https://jup.ag/lend/multiply/sol-usdc"    },
   { id:"jlp-usdc",    vaultId:5,  collateral:"JLP",    debt:"USDC", colDecimals:6, debtDecimals:6, maxLev:"5x",  ltv:"90%", desc:"Loop JLP (Jupiter LP token) vs USDC. Earn JLP fees amplified.",         risk:"Medium", url:"https://jup.ag/lend/multiply/jlp-usdc"    },
   { id:"usdc-usdt",   vaultId:7,  collateral:"USDC",   debt:"USDT", colDecimals:6, debtDecimals:6, maxLev:"20x", ltv:"95%", desc:"Stable-stable loop. Very low risk, amplify stablecoin yield.",           risk:"Low",    url:"https://jup.ag/lend/multiply"             },
-  { id:"wbtc-usdc",   vaultId:3,  collateral:"WBTC",   debt:"USDC", colDecimals:8, debtDecimals:6, maxLev:"5x",  ltv:"80%", desc:"Leverage BTC exposure against USDC.",                                   risk:"High",   url:"https://jup.ag/lend/multiply/wbtc-usdc"   },
+  { id:"wbtc-usdc",   vaultId:4,  collateral:"WBTC",   debt:"USDC", colDecimals:8, debtDecimals:6, maxLev:"5x",  ltv:"80%", desc:"Leverage BTC exposure against USDC.",                                   risk:"High",   url:"https://jup.ag/lend/multiply/wbtc-usdc"   },
   { id:"jup-usdc",    vaultId:6,  collateral:"JUP",    debt:"USDC", colDecimals:6, debtDecimals:6, maxLev:"4x",  ltv:"75%", desc:"Use JUP as collateral, loop to amplify JUP exposure.",                   risk:"High",   url:"https://jup.ag/lend/multiply"             },
 ];
 
@@ -326,7 +323,7 @@ Available actions:
 - "BASKET_PREDICTION" → actionData: { "bets": [ { "searchQuery": "Arsenal Atletico", "outcome": "Arsenal FC", "side": "yes", "amount": "10" }, { "searchQuery": "Man City Chelsea", "outcome": "Draw", "side": "no", "amount": "15" } ] } — place up to 10 prediction bets in sequence. Use when user specifies multiple matches and outcomes in one message. Each bet has same fields as PLACE_PREDICTION.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — portion: "all"|"half"|"quarter"|"N%"
 - "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — leveraged looping via Jupiter Lend flashloans. Explain mechanics + show vaults.
-- "SHOW_BORROW"        → actionData: { "collateral": "SOL", "debt": "USDC", "colAmount": "10", "borrowAmount": "200", "reason": "brief why" } — deposit collateral into a Jupiter Lend vault and borrow against it. colAmount = collateral to deposit; borrowAmount = debt token to receive. Available vaults: SOL→USDC (vault 1, 80% LTV), JitoSOL→SOL (vault 2, 90%), WBTC→USDC (vault 3, 80%), JupSOL→SOL (vault 4, 90%), JLP→USDC (vault 5, 90%), JUP→USDC (vault 6, 75%), USDC→USDT (vault 7, 95%).
+- "SHOW_BORROW"        → actionData: { "collateral": "SOL", "debt": "USDC", "colAmount": "10", "borrowAmount": "200", "reason": "brief why" } — deposit collateral into a Jupiter Lend vault and borrow against it. colAmount = collateral to deposit; borrowAmount = debt token to receive. Available vaults: SOL→USDC (vault 1, 80% LTV), JitoSOL→SOL (vault 2, 90%), JupSOL→SOL (vault 3, 90%), WBTC→USDC (vault 4, 80%), JLP→USDC (vault 5, 90%), JUP→USDC (vault 6, 75%), USDC→USDT (vault 7, 95%).
 - "SHOW_LEND_POSITIONS" → actionData: {} — show user's open Lend positions (borrow/multiply) with unwind buttons AND earn positions with withdraw buttons
 - "CLAIM_PAYOUTS"    → actionData: {} — triggers fetch of claimable prediction positions
 - "SHOW_SEND"        → actionData: { "token": "SOL", "amount": "1", "reason": "brief why" } — send tokens via Jupiter invite link. Recipient claims without needing a wallet upfront.
@@ -4435,10 +4432,7 @@ function JupChatInner() {
     return realVaultMap[key] ?? vault.vaultId; // prefer real, fall back to hardcoded
   };
 
-  // ── Jupiter Multiply — 2-tx flow matching Jupiter's own UI ───────────────────
-  // Tx1: initPosition → creates the position NFT, returns real positionId
-  // Tx2: open         → flashloan multiply using that positionId (not 0)
-  // positionId:0 causes "Vault assertion failed" — must init first.
+  // ── Jupiter Multiply — calls /api/multiply serverless → signs → sends ────────
   const doMultiply = async () => {
     const { vault, colAmount, leverage } = multiplyPos;
     if (!vault || !colAmount || parseFloat(colAmount) <= 0) return;
@@ -4448,186 +4442,116 @@ function JupChatInner() {
     if (!provider.signTransaction) { push("ai", "Your wallet does not support transaction signing."); return; }
 
     const colDecimals  = vault.colDecimals  ?? 9;
+    const debtDecimals = vault.debtDecimals ?? 6;
     const colRaw  = Math.floor(parseFloat(colAmount) * Math.pow(10, colDecimals));
+    // targetLeverage passed as integer multiplier × 100 (e.g. 2x → 200, 3x → 300)
+    // debtAmount is NOT pre-calculated here — the server uses targetLeverage to derive it via getOperateIx
     const targetLeverageBps = Math.round(parseFloat(leverage) * 100); // e.g. 200 for 2x
 
     setMultiplyStatus("signing");
     setShowMultiplyForm(false);
-
-    // ── STEP 1: Create Position NFT ──────────────────────────────────────────
-    push("ai", `Opening **${leverage}x ${vault.collateral}/${vault.debt}** Multiply position…\n\n**Step 1/2:** Creating position NFT — please approve the wallet prompt.`);
-
-    let realPositionId = null;
+    push("ai", `Opening **${leverage}x ${vault.collateral}/${vault.debt}** Multiply position with **${colAmount} ${vault.collateral}**…`);
 
     try {
-      const { ok: initOk, data: initData } = await safeApiFetch("/api/multiply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action:  "initPosition",
-          vaultId: getRealVaultId(vault),
-          signer:  walletFull,
-        }),
-      });
+      // DEBUG — remove after confirming vaultId
+      push("ai", `DEBUG: vaultId=${getRealVaultId(vault)} colRaw=${colRaw} leverageBps=${targetLeverageBps} vault=${vault.id}`);
 
-      if (initData.error) throw new Error(`Step 1 failed: ${initData.error}`);
-      if (!initData.transaction) throw new Error("Step 1: No transaction returned.");
-
-      // Sign + send Step 1
-      const initTx = VersionedTransaction.deserialize(b64ToBytes(initData.transaction));
-      const signedInitTx = await provider.signTransaction(initTx);
-
-      const initRpcRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: {
-          jsonrpc: "2.0", id: 1,
-          method: "sendTransaction",
-          params: [bytesToB64(signedInitTx.serialize()), { encoding: "base64", skipPreflight: false, maxRetries: 3, preflightCommitment: "confirmed" }],
-        },
-      });
-      const initSignature = initRpcRes?.result;
-      if (!initSignature) throw new Error(initRpcRes?.error?.message || "Step 1 tx failed to send.");
-
-      push("ai", `**Step 1/2:** Position NFT transaction sent (\`${initSignature.slice(0,16)}…\`) — waiting for confirmation…`);
-
-      // Poll until confirmed — do NOT proceed to Step 2 until Step 1 is on-chain.
-      // Also checks lastValidBlockHeight (from server) to detect blockhash expiry early,
-      // matching the connection.confirmTransaction({ signature, ...latestBlockhash }) pattern
-      // from the SKILL.md examples.
-      let initStatus = null;
-      const lvbh = initData.lastValidBlockHeight ?? null;
-      for (let attempt = 0; attempt < 6; attempt++) {
-        await new Promise(r => setTimeout(r, 5000));
-
-        // Check blockhash expiry — if current block > lastValidBlockHeight the tx was dropped
-        if (lvbh) {
-          const slotRes = await jupFetch(SOLANA_RPC, {
-            method: "POST",
-            body: { jsonrpc: "2.0", id: 1, method: "getBlockHeight", params: [] },
-          });
-          const blockHeight = slotRes?.result;
-          if (blockHeight && blockHeight > lvbh) {
-            throw new Error("Step 1 transaction expired (blockhash too old). Please retry — this is a network timing issue, not a wallet error.");
-          }
-        }
-
-        const confirmRes = await jupFetch(SOLANA_RPC, {
-          method: "POST",
-          body: {
-            jsonrpc: "2.0", id: 1,
-            method: "getSignatureStatuses",
-            params: [[initSignature], { searchTransactionHistory: true }],
-          },
-        });
-        initStatus = confirmRes?.result?.value?.[0];
-        if (initStatus?.err) throw new Error("Step 1 failed on-chain: " + JSON.stringify(initStatus.err));
-        if (initStatus?.confirmationStatus === "confirmed" || initStatus?.confirmationStatus === "finalized") break;
-      }
-      if (!initStatus) throw new Error("Step 1 timed out — network may be congested. Please retry.");
-
-      // Get positionId — server returns nftId/positionId from getOperateIx(positionId:0).
-      // Fall back to querying on-chain if not in response.
-      if (initData.positionId != null && Number(initData.positionId) !== 0) {
-        realPositionId = Number(initData.positionId);
-        console.log("[doMultiply] positionId from initData:", realPositionId);
-      } else {
-        // Fallback: ask server to scan on-chain for our positions in this vault
-        console.log("[doMultiply] positionId not in response — querying getPositions...");
-        await new Promise(r => setTimeout(r, 2000));
-        const posRes = await fetch(
-          `/api/multiply?getPositions=1&vaultId=${getRealVaultId(vault)}&signer=${walletFull}`
-        ).then(r => r.json()).catch(() => ({ positionIds: [] }));
-
-        if (posRes.positionIds?.length > 0) {
-          realPositionId = Math.max(...posRes.positionIds);
-          console.log("[doMultiply] positionId from getPositions:", realPositionId);
-        }
-      }
-
-      if (!realPositionId || realPositionId === 0) {
-        throw new Error(
-          "Could not determine positionId after Step 1. " +
-          "Your position NFT was created — please visit jup.ag/lend/multiply to finish opening the position manually, " +
-          "or retry here in a few seconds."
-        );
-      }
-
-    } catch (err) {
-      setMultiplyStatus("error");
-      const msg = err?.message || "Unknown error in Step 1";
-      push("ai", `Multiply failed at Step 1 (Create Position): ${msg}\n\nIf the position NFT was already created, you can complete the position at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).`);
-      setMultiplyStatus(null);
-      return;
-    }
-
-    // ── STEP 2: Flashloan Multiply ────────────────────────────────────────────
-    push("ai", `**Step 2/2:** Position #${realPositionId} created ✓ — now opening **${leverage}x** leverage. Please approve the next wallet prompt.`);
-
-    try {
+      // 1. Get unsigned transaction from backend
       const { ok: mOk, data } = await safeApiFetch("/api/multiply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action:            "open",
-          vaultId:           getRealVaultId(vault),
-          positionId:        realPositionId,       // ← real ID, NOT 0
-          initialColAmount:  colRaw.toString(),
-          targetLeverageBps: targetLeverageBps,
-          signer:            walletFull,
+          action:              "open",
+          vaultId:             getRealVaultId(vault),
+          positionId:          0,
+          initialColAmount:    colRaw.toString(),
+          targetLeverageBps:   targetLeverageBps,
+          signer:              walletFull,
         }),
       });
-
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned from multiply API.");
 
+      // 2a. Send setup tx first (ATA creation + position init — legacy format)
+      if (data.setupTransaction) {
+        push("ai", "Setting up position accounts…");
+        const setupBytes = b64ToBytes(data.setupTransaction);
+        // Setup tx is a legacy Transaction (not versioned) — deserialize accordingly
+        let setupTx;
+        try {
+          setupTx = Transaction.from(setupBytes);
+        } catch {
+          setupTx = VersionedTransaction.deserialize(setupBytes);
+        }
+        const signedSetup = await provider.signTransaction(setupTx);
+        const setupSerialized = signedSetup.serialize ? signedSetup.serialize() : signedSetup.serialize();
+        const setupRes = await jupFetch(SOLANA_RPC, {
+          method: "POST",
+          body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(setupSerialized), { encoding:"base64", skipPreflight:false }] },
+        });
+        const setupSig = setupRes?.result;
+        if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction failed.");
+        // Poll until setup tx confirms on-chain before sending main flashloan tx
+        // (hard sleep is unreliable — slow chain can leave position NFT not yet created → error 6011)
+        {
+          const deadline = Date.now() + 60_000;
+          while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 2000));
+            const statusRes = await jupFetch(SOLANA_RPC, {
+              method: "POST",
+              body: { jsonrpc:"2.0", id:1, method:"getSignatureStatuses",
+                      params:[[setupSig], { searchTransactionHistory: true }] },
+            });
+            const st = statusRes?.result?.value?.[0];
+            if (st?.err) throw new Error("Setup tx failed on-chain: " + JSON.stringify(st.err));
+            if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) break;
+          }
+        }
+      }
+
+      // 2b. Deserialize + sign main multiply tx
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
       const signedTx = await provider.signTransaction(tx);
 
-      // skipPreflight:true for multiply — simulation misreads atomic flashloan
+      // 3. Send via RPC — use skipPreflight:true for multiply (simulation misreads atomic flashloan)
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: {
-          jsonrpc: "2.0", id: 1,
-          method: "sendTransaction",
-          params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }],
-        },
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
       const signature = rpcRes?.result;
-      if (!signature) throw new Error(rpcRes?.error?.message || "Multiply transaction failed to send.");
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
-      // Verify tx landed on-chain
+      // Verify tx landed on-chain before confirming success
       await new Promise(r => setTimeout(r, 3000));
       const confirmRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: {
-          jsonrpc: "2.0", id: 1,
-          method: "getSignatureStatuses",
-          params: [[signature], { searchTransactionHistory: true }],
-        },
+        body: { jsonrpc:"2.0", id:1, method:"getSignatureStatuses", params:[[signature],{searchTransactionHistory:true}] },
       });
       const txStatus = confirmRes?.result?.value?.[0];
       if (txStatus?.err) {
+        // Transaction landed but failed on-chain — treat as error, NOT success
         throw new Error("On-chain error: " + JSON.stringify(txStatus.err));
       }
-
+      // Only reach here if tx actually succeeded
       setMultiplyStatus("done");
-      push("ai", `Multiply position opened ✓\n\n**${leverage}x ${vault.collateral}/${vault.debt}**\nCollateral: **${colAmount} ${vault.collateral}** · Position #${realPositionId}\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})\n\nManage your position at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).`);
+      push("ai", `Multiply position opened\n\n**${leverage}x ${vault.collateral}/${vault.debt}**\nCollateral: **${colAmount} ${vault.collateral}**\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})\n\nNote:️ Monitor your position at [jup.ag/lend/multiply](https://jup.ag/lend/multiply) — your Position NFT is in your wallet.`);
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
-
     } catch (err) {
       setMultiplyStatus("error");
       const msg = err?.message || "Unknown error";
       // Decode Jupiter Lend on-chain error codes
       const LEND_ERRORS = {
-        6011: "InvalidPositionId — position account mismatch.",
-        6025: "SlippageExceeded — the flashloan swap exceeded slippage tolerance. Try lower leverage or smaller amount.",
+        6011: "InvalidPositionId — the position account doesn't exist yet. Open your first position at jup.ag/lend/multiply first.",
+        6025: "SlippageExceeded — the flashloan swap exceeded slippage tolerance. Try a lower leverage or smaller amount.",
         6001: "InsufficientCollateral — not enough collateral for this leverage level.",
         6003: "BorrowCapExceeded — vault borrow cap reached. Try a smaller amount.",
-        6010: "InvalidVaultId — vault configuration mismatch.",
+        6010: "InvalidVaultId — vault configuration mismatch. Please refresh and try again.",
         6015: "PositionNotHealthy — position would be under-collateralised at this leverage.",
       };
+      // Match decimal code from InstructionError JSON: {"Custom":6025}
       const customMatch = msg.match(/"Custom"\s*:\s*(\d+)/);
+      // Also match hex or plain error codes
       const codeMatch = customMatch || msg.match(/custom program error: (0x[0-9a-f]+)|Error Code: (\d+)|error code.*?(\d{4})/i);
       let decodedErr = msg;
       if (codeMatch) {
@@ -4635,22 +4559,25 @@ function JupChatInner() {
         const code = raw?.startsWith("0x") ? parseInt(raw, 16) : parseInt(raw || codeMatch[2] || codeMatch[3]);
         if (LEND_ERRORS[code]) decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`;
       }
+      // Fallback: scan raw message for known code numbers
       if (decodedErr === msg) {
         for (const code of Object.keys(LEND_ERRORS).map(Number)) {
           if (msg.includes(String(code))) { decodedErr = `Error ${code}: ${LEND_ERRORS[code]}`; break; }
         }
       }
-      let hint = `\n\nYour position NFT (#${realPositionId}) was created. You can complete the position manually at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).`;
-      if (msg.includes("6025") || msg.includes("SlippageExceeded")) {
-        hint = "\n\nTip: Slippage exceeded. Try reducing leverage or use a smaller collateral amount.";
+      let multiplyHint = "\n\nOpen [jup.ag/lend/multiply](https://jup.ag/lend/multiply) to check your positions.";
+      if (msg.includes("6011") || msg.includes("InvalidPositionId")) {
+        multiplyHint = "\n\nTip: This vault requires opening your first position directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply). Once the position NFT is created, you can manage it here.";
+      } else if (msg.includes("6025") || msg.includes("SlippageExceeded")) {
+        multiplyHint = "\n\nTip: Slippage exceeded during the flashloan swap. Try reducing leverage (e.g. 2x instead of 3x), a smaller collateral amount, or wait for calmer market conditions.";
       } else if (msg.toLowerCase().includes("vault assertion") || msg.toLowerCase().includes("assertion failed")) {
-        hint = "\n\nTip: Vault may be temporarily paused. Wait 10–30 seconds and retry.";
-      } else if (msg.includes("insufficient") || msg.includes("balance") || msg.includes("funds")) {
-        hint = "\n\nTip: Insufficient balance. Make sure you have enough collateral in your wallet.";
+        multiplyHint = "\n\nTip: The vault may be temporarily paused or have low liquidity. Wait 10–30 seconds and try again — or try a smaller amount.";
+      } else if (msg.includes("6001") || (msg.includes("insufficient") && !msg.includes("liquidity")) || msg.includes("balance") || msg.includes("funds")) {
+        multiplyHint = "\n\nTip: Insufficient balance. Make sure you have enough of the collateral token in your wallet.";
       } else if (msg.includes("rent") || msg.includes("fee") || msg.includes("lamport")) {
-        hint = "\n\nTip: Not enough SOL for transaction fees. You need at least 0.01 SOL.";
+        multiplyHint = "\n\nTip: Not enough SOL for transaction fees. You need at least 0.01 SOL.";
       }
-      push("ai", `Multiply failed at Step 2 (Flashloan): ${decodedErr}${hint}`);
+      push("ai", `Multiply failed: ${decodedErr}${multiplyHint}`);
     }
     setMultiplyStatus(null);
   };
@@ -4839,7 +4766,22 @@ function JupChatInner() {
       if (!ok || data.error) throw new Error(data.error || "Borrow API error");
       if (!data.transaction) throw new Error("No transaction returned from borrow API.");
 
-      // 2. Sign + send operate transaction (deposit + borrow)
+      // 2. If setupTransaction exists — sign + send it first (creates position NFT)
+      if (data.setupTransaction) {
+        const setupBytes  = b64ToBytes(data.setupTransaction);
+        const setupTx     = Transaction.from(setupBytes);
+        const signedSetup = await provider.signTransaction(setupTx);
+        const setupRes    = await jupFetch(SOLANA_RPC, {
+          method: "POST",
+          body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedSetup.serialize()), { encoding:"base64", skipPreflight:false }] },
+        });
+        const setupSig = setupRes?.result;
+        if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction (create position) failed to send.");
+        // Wait for position to be confirmed before operating
+        await new Promise(r => setTimeout(r, 4000));
+      }
+
+      // 3. Sign + send operate transaction (deposit + borrow)
       const bytes     = b64ToBytes(data.transaction);
       const tx        = VersionedTransaction.deserialize(bytes);
       const signedTx  = await provider.signTransaction(tx);
