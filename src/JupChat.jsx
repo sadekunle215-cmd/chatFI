@@ -967,28 +967,30 @@ function TrendingTicker({ onTokenClick }) {
     let cancelled = false;
     const load = async () => {
       try {
-        // Fetch top trending 24h tokens from Jupiter trending category API
+        // Use the same endpoint the app uses for FETCH_TOKEN_CATEGORY toptrending
         const trendRes = await fetch(
-          "https://tokens.jup.ag/tokens/trending?interval=24h&limit=20",
-          { signal: AbortSignal.timeout(8000) }
+          "https://api.jup.ag/tokens/v2/toptrending/24h?limit=20"
         );
+        if (!trendRes.ok) throw new Error("trending fetch failed");
         const trendList = await trendRes.json();
         const tokenArr = Array.isArray(trendList) ? trendList : [];
         if (!tokenArr.length) { if (!cancelled) setLoaded(true); return; }
 
-        // Fetch live prices for all mints in one call
-        const mints = tokenArr.map(t => t.address).join(",");
+        // Fetch live prices using the same price API v3 the app uses
+        const mints = tokenArr.map(t => t.address || t.id || t.mint).filter(Boolean).join(",");
         const priceRes = await fetch(
-          `https://api.jup.ag/price/v2?ids=${mints}`,
-          { signal: AbortSignal.timeout(8000) }
+          `https://api.jup.ag/price/v3?ids=${mints}`
         );
-        const priceData = await priceRes.json();
+        const priceData = priceRes.ok ? await priceRes.json() : {};
 
         const enriched = tokenArr
           .map(t => {
-            const p = priceData?.data?.[t.address];
-            const price = p?.price ? parseFloat(p.price) : null;
-            return { ...t, price };
+            const addr = t.address || t.id || t.mint;
+            const p = priceData?.[addr];
+            // v3 returns { usdPrice, priceChange24h, ... } keyed by mint
+            const price = p?.usdPrice ? parseFloat(p.usdPrice) : null;
+            const priceChange24h = t.priceChange24h ?? p?.priceChange24h ?? null;
+            return { ...t, price, priceChange24h };
           })
           .filter(t => t.price != null)
           .slice(0, 15);
@@ -1000,7 +1002,7 @@ function TrendingTicker({ onTokenClick }) {
     };
 
     load();
-    const interval = setInterval(load, 60_000);
+    const interval = setInterval(load, 60000);
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
