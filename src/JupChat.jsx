@@ -286,7 +286,7 @@ JUPITER ROUTING KNOWLEDGE:
 • Useful for: understanding swap execution, comparing routes, verifying slippage before swapping.
 • Route data: routeInfo.marketInfos[] with dex name, input/output amounts, price impact.
 
- No code fences, no markdown, no text outside the JSON object. Output starts with { and ends with }:
+ CRITICAL OUTPUT FORMAT: Your ENTIRE response must be a single raw JSON object. No code fences, no preamble, no text before or after. The response MUST start with { and end with }. If you output anything outside the JSON object the UI will break and show raw JSON to the user:
 {
   "text": "your message to the user",
   "action": null,
@@ -6599,10 +6599,20 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
       let parsed;
       try {
-        const cleanText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        // Strip markdown fences if present
+        let cleanText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        // If model wrapped JSON in surrounding text, extract the first {...} block
+        if (!cleanText.startsWith("{")) {
+          const braceMatch = cleanText.match(/\{[\s\S]*\}/);
+          if (braceMatch) cleanText = braceMatch[0];
+        }
         parsed = JSON.parse(cleanText);
+      } catch {
+        // Full parse failed — try to salvage just the "text" field with regex
+        const textMatch = rawText.match(/"text"\s*:\s*"((?:[^\\"]|\\[\s\S])*)"/s);
+        const salvaged  = textMatch ? textMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\") : rawText;
+        parsed = { text: salvaged, action: null, actionData: {} };
       }
-      catch { parsed = { text:rawText, action:null, actionData:{} }; }
 
       const { text, action, actionData } = parsed;
       histRef.current = [...histRef.current, { role:"assistant", content:rawText }];
