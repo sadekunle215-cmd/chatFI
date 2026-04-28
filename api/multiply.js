@@ -30,7 +30,13 @@ const MAX_REPAY    = MAX_REPAY_AMOUNT   ?? new BN("9007199254740991");
 const MAX_WITHDRAW = MAX_WITHDRAW_AMOUNT ?? new BN("9007199254740991");
 
 const RPC_URL  = process.env.SOLANA_RPC;
-const LITE_API = "https://lite-api.jup.ag/swap/v1";
+const JUP_API_KEY = process.env.JUP_API_KEY || "";
+const SWAP_API = "https://api.jup.ag/swap/v1";
+
+const jupHeaders = {
+  "Content-Type": "application/json",
+  ...(JUP_API_KEY ? { "x-api-key": JUP_API_KEY } : {}),
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function toIx(ix) {
@@ -203,7 +209,7 @@ export default async function handler(req, res) {
       const [flashBorrowIx, flashPayIx, quoteRes] = await Promise.all([
         getFlashBorrowIx(flashParams),
         getFlashPaybackIx(flashParams),
-        fetch(`${LITE_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${borrowBN.toString()}&slippageBps=${slippageBps}`)
+        fetch(`${SWAP_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${borrowBN.toString()}&slippageBps=${slippageBps}`, { headers: jupHeaders })
           .then(r => r.json()),
       ]);
 
@@ -229,9 +235,9 @@ export default async function handler(req, res) {
         connection,
       });
 
-      const swapApiRes = await fetch(`${LITE_API}/swap-instructions`, {
+      const swapApiRes = await fetch(`${SWAP_API}/swap-instructions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: jupHeaders,
         body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
       }).then(r => r.json());
 
@@ -286,7 +292,7 @@ export default async function handler(req, res) {
       const [flashBorrowIx, flashPayIx, quoteRes] = await Promise.all([
         getFlashBorrowIx(flashParams),
         getFlashPaybackIx(flashParams),
-        fetch(`${LITE_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=150`)
+        fetch(`${SWAP_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=150`, { headers: jupHeaders })
           .then(r => r.json()),
       ]);
 
@@ -297,9 +303,9 @@ export default async function handler(req, res) {
       const opDebtAmount = isFullUnwind ? MAX_REPAY    : new BN(quoteRes.otherAmountThreshold.toString()).neg();
 
       const [swapApiRes, operateResult] = await Promise.all([
-        fetch(`${LITE_API}/swap-instructions`, {
+        fetch(`${SWAP_API}/swap-instructions`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: jupHeaders,
           body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
         }).then(r => r.json()),
         getOperateIx({
