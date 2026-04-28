@@ -131,7 +131,7 @@ async function getVaultMints(connection, vaultId) {
   const id = Number(vaultId);
   if (vaultMintCache[id]) return vaultMintCache[id];
   const client = new Client(connection);
-  const v = await client.vault.getVaultByVaultId({ vaultId: id });
+  const v = await client.vault.getVaultByVaultId(id);
   if (!v) throw new Error(`Unknown vaultId ${id}`);
   const mints = { supplyToken: v.supplyToken.toBase58(), borrowToken: v.borrowToken.toBase58() };
   vaultMintCache[id] = mints;
@@ -160,20 +160,14 @@ export default async function handler(req, res) {
         const signerPk = new PublicKey(query.signer);
         const vaultId  = Number(query.vaultId);
 
-        // Try known SDK method names (different SDK versions use different names)
-        let positions = [];
-        if (typeof client.vault.getPositionsByUser === "function") {
-          positions = await client.vault.getPositionsByUser({ vaultId, user: signerPk });
-        } else if (typeof client.vault.getUserPositions === "function") {
-          positions = await client.vault.getUserPositions({ vaultId, owner: signerPk });
-        } else if (typeof client.vault.getPositionsForOwner === "function") {
-          positions = await client.vault.getPositionsForOwner({ vaultId, owner: signerPk });
-        }
+        // Per SKILL.md: getAllUserPositions(userPublicKey) returns all positions across vaults.
+        // Each position has p.nftId (the position NFT ID) and p.vault.constantViews.vaultId.
+        const allPositions = await client.vault.getAllUserPositions(signerPk);
+        const positions = (allPositions || []).filter(
+          p => p.vault?.constantViews?.vaultId === vaultId
+        );
 
-        // Normalise — different SDK versions shape position objects differently
-        const ids = (positions || []).map(p =>
-          p.positionId ?? p.id ?? p.nftId ?? p.index ?? null
-        ).filter(id => id !== null);
+        const ids = positions.map(p => p.nftId).filter(id => id != null);
 
         console.log(`[getPositions] vault=${vaultId} signer=${query.signer.slice(0,8)} found=${ids.length}`);
         return res.status(200).json({ positionIds: ids });
@@ -190,7 +184,7 @@ export default async function handler(req, res) {
       const KNOWN_VAULT_IDS = [1, 2, 3, 4, 5, 6, 7];
       const client = new Client(connection);
       const results = await Promise.allSettled(
-        KNOWN_VAULT_IDS.map(id => client.vault.getVaultByVaultId({ vaultId: id }))
+        KNOWN_VAULT_IDS.map(id => client.vault.getVaultByVaultId(id))
       );
       const vaults = results
         .map((r, i) => {
@@ -382,11 +376,13 @@ export default async function handler(req, res) {
 
       let flashColBN;
       if (isFullUnwind) {
-        const client = new Client(connection);
-        const pos = await client.vault.getUserPosition({ vaultId: Number(vaultId), positionId: Number(positionId) });
+        // Per SKILL.md: getAllUserPositions returns positions with .nftId and .supply (collateral).
+        const allPositions = await client.vault.getAllUserPositions(signerPubkey);
+        const pos = allPositions.find(
+          p => p.vault?.constantViews?.vaultId === Number(vaultId) && p.nftId === Number(positionId)
+        );
         if (!pos) return res.status(400).json({ error: `Position ${positionId} not found in vault ${vaultId}` });
-        const state = await client.vault.getCurrentPositionState({ vaultId: Number(vaultId), position: pos });
-        flashColBN = state.colRaw.muln(101).divn(100); // 1% buffer
+        flashColBN = pos.supply.muln(101).divn(100); // 1% buffer on actual collateral
       } else {
         flashColBN = new BN(withdrawAmount.toString());
       }
