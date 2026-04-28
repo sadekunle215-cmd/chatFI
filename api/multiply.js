@@ -210,31 +210,24 @@ export default async function handler(req, res) {
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
 
-      // Step 1: call getOperateIx with positionId:0 to get the real positionId
-      // Per docs: "When positionId is 0, the first call creates a new position and returns positionId"
-      const initOperateResult = await getOperateIx({
+      // Step 1: create position NFT — getInitPositionIx returns the real nftId
+      // This MUST be confirmed on-chain before the main flashloan tx (error 6011 = position doesn't exist yet)
+      const { ix: initIx, nftId } = await getInitPositionIx({
         vaultId:    Number(vaultId),
-        positionId: 0,
+        connection,
+        signer:     signerPubkey,
+      });
+      console.log(`[multiply/open] nftId=${nftId}`);
+
+      // Step 2: build operate ix with the real nftId so account derivation is correct
+      const operateResult = await getOperateIx({
+        vaultId:    Number(vaultId),
+        positionId: nftId,
         colAmount:  colBN.add(new BN(quoteRes.outAmount.toString())),
         debtAmount: borrowBN,
         signer:     signerPubkey,
         connection,
       });
-      const realPositionId = initOperateResult.positionId ?? 0;
-      console.log(`[multiply/open] realPositionId=${realPositionId}`);
-
-      // Step 2: if positionId changed, re-call with the real ID for correct account derivation
-      let operateResult = initOperateResult;
-      if (realPositionId !== 0) {
-        operateResult = await getOperateIx({
-          vaultId:    Number(vaultId),
-          positionId: realPositionId,
-          colAmount:  colBN.add(new BN(quoteRes.outAmount.toString())),
-          debtAmount: borrowBN,
-          signer:     signerPubkey,
-          connection,
-        });
-      }
 
       const swapApiRes = await fetch(`${LITE_API}/swap-instructions`, {
         method: "POST",
@@ -255,23 +248,19 @@ export default async function handler(req, res) {
       ]);
       const ataIxs = [colAtaIx, debtAtaIx].filter(Boolean);
 
-      // Use positionId 0 — getOperateIx handles init internally per docs.
-      // We send with skipPreflight:true on the frontend to bypass simulation 6011.
+      // setupTransaction: position NFT init + ATAs (legacy tx, confirmed before main tx)
+      const { blockhash: setupBlockhash } = await connection.getLatestBlockhash("confirmed");
+      const setupLegacyTx = new Transaction({ feePayer: signerPubkey, recentBlockhash: setupBlockhash });
+      setupLegacyTx.add(initIx);
+      ataIxs.forEach(ix => setupLegacyTx.add(ix));
+      const setupTransaction = Buffer.from(setupLegacyTx.serialize({ requireAllSignatures: false })).toString("base64");
+
+      // Main tx: flashloan loop — skipPreflight:true required (simulation can't verify atomic flashloan)
       const mainIxs = [flashBorrowIx, swapIx, ...operateResult.ixs, flashPayIx];
-      console.log(`[multiply/open] ataIxs=${ataIxs.length} mainIxs=${mainIxs.length}`);
+      console.log(`[multiply/open] setupIxs=${1 + ataIxs.length} mainIxs=${mainIxs.length} nftId=${nftId}`);
 
       const transaction = await buildTx(connection, signerPubkey, mainIxs, allAlts);
-
-      // Setup tx for ATAs only (legacy format)
-      let setupTransaction = null;
-      if (ataIxs.length > 0) {
-        const { blockhash } = await connection.getLatestBlockhash("confirmed");
-        const legacyTx = new Transaction({ feePayer: signerPubkey, recentBlockhash: blockhash });
-        ataIxs.forEach(ix => legacyTx.add(ix));
-        setupTransaction = Buffer.from(legacyTx.serialize({ requireAllSignatures: false })).toString("base64");
-      }
-
-      return res.status(200).json({ transaction, setupTransaction });
+      return res.status(200).json({ transaction, setupTransaction, positionId: nftId });
     }
 
     // ── UNWIND ────────────────────────────────────────────────────────────────
