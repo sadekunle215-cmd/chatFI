@@ -22,7 +22,7 @@ import {
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import BN from "bn.js";
-import { getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
+import { getFlashloanIx, getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
 import { getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
 import { Client } from "@jup-ag/lend-read";
 
@@ -243,9 +243,8 @@ export default async function handler(req, res) {
 
       // 1. Flash loan + quote in parallel to save time
       const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN };
-      const [flashBorrowIx, flashPaybackIx, quoteRes] = await Promise.all([
-        getFlashBorrowIx(flashParams),
-        getFlashPaybackIx(flashParams),
+      const [{ borrowIx: flashBorrowIx, paybackIx: flashPaybackIx }, quoteRes] = await Promise.all([
+        getFlashloanIx(flashParams),
         fetch(
           `${LITE_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${borrowBN.toString()}&slippageBps=300`,
           { headers: jupHeaders }
@@ -325,9 +324,8 @@ export default async function handler(req, res) {
 
       // 1. Flash loan + quote in parallel
       const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN };
-      const [flashBorrowIx, flashPaybackIx, quoteRes] = await Promise.all([
-        getFlashBorrowIx(flashParams),
-        getFlashPaybackIx(flashParams),
+      const [{ borrowIx: flashBorrowIx, paybackIx: flashPaybackIx }, quoteRes] = await Promise.all([
+        getFlashloanIx(flashParams),
         fetch(
           `${LITE_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=100`,
           { headers: jupHeaders }
