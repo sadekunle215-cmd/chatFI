@@ -3,9 +3,13 @@ import { Connection, Transaction, VersionedTransaction, Keypair, PublicKey, Syst
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 // ── Reown AppKit (external wallet connect — Phantom, Backpack, etc.) ─────────
-import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect, useWalletInfo } from "@reown/appkit/react";
-import { SolanaAdapter } from "@reown/appkit-adapter-solana";
-import { solana as solanaMainnet } from "@reown/appkit/networks";
+// Loaded dynamically to avoid Vite TDZ bundling crash on mobile ("Cannot access 'js' before initialization")
+// Static imports of @reown/appkit trigger circular deps that crash before React mounts.
+let useAppKit        = () => ({ open: () => {} });
+let useAppKitAccount = () => ({ address: null, isConnected: false });
+let useAppKitProvider= () => ({ walletProvider: null });
+let useDisconnect    = () => ({ disconnect: () => {} });
+let useWalletInfo    = () => ({ walletInfo: null });
 
 // ── Privy (social / email login with embedded Solana wallet) ─────────────────
 import { PrivyProvider, usePrivy, useWallets, useSolanaWallets } from "@privy-io/react-auth";
@@ -520,29 +524,55 @@ const T = {
   mono:     "'JetBrains Mono',monospace",
 };
 
-// ── Reown AppKit Init ────────────────────────────────────────────────────────
-// Get a free projectId at https://cloud.reown.com
-const REOWN_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f"; // replace with your own
-let _reownInitError = null;
-let _solanaAdapter = null;
-try {
-  _solanaAdapter = new SolanaAdapter();
-  createAppKit({
-    adapters: [_solanaAdapter],
-    networks: [solanaMainnet],
-    projectId: REOWN_PROJECT_ID,
-    metadata: {
-      name: "ChatFi",
-      description: "ChatFi — Your personal AI tools on Solana",
-      url: typeof window !== "undefined" ? window.location.origin : "https://chatfi.app",
-      icons: ["https://jup.ag/favicon.ico"],
-    },
-    features: { analytics: false },
-  });
-} catch (e) {
-  _reownInitError = e?.message || String(e);
-  console.error("[ChatFi] Reown AppKit init failed:", e);
-}
+// ── Reown AppKit — lazy init ─────────────────────────────────────────────────
+// Avoids the Vite TDZ crash: @reown/appkit has circular deps that trigger
+// "Cannot access 'js' before initialization" when bundled statically on mobile.
+const REOWN_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f";
+let _reownInitError  = null;
+let _reownInitDone   = false;
+let _reownInitPromise = null;
+
+const initReown = () => {
+  if (_reownInitDone) return Promise.resolve();
+  if (_reownInitPromise) return _reownInitPromise;
+  _reownInitPromise = (async () => {
+    try {
+      const [{ createAppKit, useAppKit: _uAK, useAppKitAccount: _uAKA, useAppKitProvider: _uAKP, useDisconnect: _uD, useWalletInfo: _uWI },
+             { SolanaAdapter },
+             { solana: solanaMainnet }] = await Promise.all([
+        import("@reown/appkit/react"),
+        import("@reown/appkit-adapter-solana"),
+        import("@reown/appkit/networks"),
+      ]);
+      // Replace stub hooks with real ones
+      useAppKit         = _uAK;
+      useAppKitAccount  = _uAKA;
+      useAppKitProvider = _uAKP;
+      useDisconnect     = _uD;
+      useWalletInfo     = _uWI;
+
+      const adapter = new SolanaAdapter();
+      createAppKit({
+        adapters: [adapter],
+        networks: [solanaMainnet],
+        projectId: REOWN_PROJECT_ID,
+        metadata: {
+          name: "ChatFi",
+          description: "ChatFi — Your personal AI tools on Solana",
+          url: typeof window !== "undefined" ? window.location.origin : "https://chatfi.app",
+          icons: ["https://jup.ag/favicon.ico"],
+        },
+        features: { analytics: false },
+      });
+      _reownInitDone = true;
+      console.log("[ChatFi] Reown AppKit loaded ✓");
+    } catch (e) {
+      _reownInitError = e?.message || String(e);
+      console.error("[ChatFi] Reown AppKit lazy init failed:", e);
+    }
+  })();
+  return _reownInitPromise;
+};
 
 const fmt = (text = "") => {
   // Inline markdown helpers
@@ -1830,8 +1860,15 @@ function JupChatInner() {
   const CHATFI_THRESHOLD = 10000;
   const isPremium = (portfolio["CHATFI"] || 0) >= CHATFI_THRESHOLD;
 
+  // ── Reown AppKit — lazy load + re-render when ready ───────────────────────
+  const [reownReady, setReownReady] = useState(false);
+  useEffect(() => {
+    initReown().then(() => setReownReady(true));
+  }, []);
+
   // ── Reown AppKit hooks ─────────────────────────────────────────────────────
-  // Guarded: if createAppKit() failed at module level, these hooks throw — catch and degrade.
+  // Stubs are replaced by real hooks once initReown() resolves.
+  // Wrapped in try/catch: stubs are plain fns, real hooks throw if context missing.
   const { open: reownOpen }                                     = (() => { try { return useAppKit(); } catch { return { open: () => {} }; } })();
   const { address: reownAddress, isConnected: reownConnected }  = (() => { try { return useAppKitAccount(); } catch { return { address: null, isConnected: false }; } })();
   const { walletProvider: reownProvider }                       = (() => { try { return useAppKitProvider("solana"); } catch { return { walletProvider: null }; } })();
