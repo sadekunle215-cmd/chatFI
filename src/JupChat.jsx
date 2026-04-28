@@ -337,6 +337,7 @@ Available actions:
 - "SET_PRICE_ALERT" → actionData: { "token": "SOL", "condition": "above"|"below", "price": "200" } — set an in-session price alert; ChatFi notifies in chat when price crosses the threshold.
 - "SHOW_TRADE_JOURNAL" → actionData: { "period": "all"|"today"|"week" } — show the user's local trade history and estimated PnL.
 - "BASKET_SWAP"     → actionData: { "trades": [...] } — execute multiple swaps in sequence. Each trade supports THREE amount modes (pick one): amountUSD:"100" (spend $100 of from token), amount:"5.4" (native token units — parse k/K suffix as ×1000, m/M as ×1000000), or portion:"all"|"max"|"half"|"quarter"|"N%" (wallet balance fraction). from/to can vary per trade (many-to-one and one-to-many both work). Examples: "buy $100 each of SOL JUP BONK" → [{from:"USDC",to:"SOL",amountUSD:"100"},…]; "swap 5.4 JUP, 158.4k BONK to USDC" → [{from:"JUP",to:"USDC",amount:"5.4"},{from:"BONK",to:"USDC",amount:"158400"}]; "swap max of SOL PENGU to USDC" → [{from:"SOL",to:"USDC",portion:"max"},{from:"PENGU",to:"USDC",portion:"max"}]; "swap half my JUP and all my FARTCOIN to SOL" → [{from:"JUP",to:"SOL",portion:"half"},{from:"FARTCOIN",to:"SOL",portion:"all"}].
+- "SWAP_ALL_WALLET" → actionData: { "to": "USDC", "exclude": ["SOL","USDC"] } — use ONLY when user says "swap everything/all tokens in my wallet" or "swap all tokens except X" and does NOT name specific tokens. The client will read the live wallet balances and build the trades list. "exclude" must always contain the target "to" token plus any tokens the user explicitly wants to keep. Examples: "swap all tokens to USDC except SOL" → to:"USDC", exclude:["SOL","USDC"]; "convert my whole wallet to SOL except USDC" → to:"SOL", exclude:["SOL","USDC"]; "dump everything to USDC" → to:"USDC", exclude:["USDC"]. CRITICAL: use BASKET_SWAP (not this) when user names the specific tokens to swap.
 - "CHAINED_ACTIONS"  → actionData: { "steps": [...] } — for multi-step intent where the user wants to sell/swap THEN immediately do something with the proceeds (limit order, DCA, lock, earn deposit, send). Each step is a full action object: { "action": "BASKET_SWAP"|"SHOW_SWAP"|"SHOW_TRIGGER_V2"|"SHOW_RECURRING"|"SHOW_LOCK"|"FETCH_EARN"|"SHOW_SEND", "actionData": {...} }. The UI executes steps sequentially, showing a confirmation between each. Use this ONLY when user intent is explicitly chained (sell X → then do Y with proceeds). Examples: "sell my BONK and JUP to USDC then set a $50 limit order for BTC" → step1: BASKET_SWAP sell BONK+JUP→USDC, step2: SHOW_TRIGGER_V2 buy BTC with amountUSD:"50" from USDC. "sell all my memecoins and DCA $20/day into SOL" → step1: BASKET_SWAP sell all→USDC, step2: SHOW_RECURRING USDC→SOL amountPerCycle:"20". NOTE: For the follow-up step, use amountUSD when the user specifies a dollar amount from proceeds (e.g. "$50 out of the proceeds"), or portion:"all" when user wants to use all proceeds.
 - "COPY_TRADE"      → actionData: { "wallet": "WALLET_ADDRESS", "limit": 5 } — fetch and show recent swaps from another wallet so user can mirror them. limit default 5.
 
@@ -381,6 +382,7 @@ Rules:
 - "show route" / "how is swap routed" / "which DEX" / "route breakdown" / "swap path" / "which AMM" → SHOW_ROUTE
 - "alert me when" / "notify me when" / "price alert" / "tell me when X hits $Y" / "alert when X above/below" → SET_PRICE_ALERT — extract token, condition (above/below), price
 - "my trades" / "trade history" / "trade journal" / "my PnL" / "what have I traded" / "show my swaps" / "trading history" → SHOW_TRADE_JOURNAL
+- "swap all tokens in my wallet to X" / "convert everything to X" / "swap all my tokens except Y to X" / "dump my whole wallet into X" / "liquidate everything to X" / "sell all tokens except X" → SWAP_ALL_WALLET — use when user does NOT name specific tokens; client will read live wallet
 - "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" / "swap X JUP and Y BONK to USDC" / "swap all these tokens to USDC" / "swap max/all of A B C to X" / "dump all my A B C into X" → BASKET_SWAP — parse each token, amount mode, and direction into trades array; default from:"USDC" when buying, default to:"USDC" when selling/dumping
 - "sell X and then set a limit order" / "sell my tokens and buy BTC at $Y" / "dump my bags and DCA into SOL" / "sell BONK SOL JUP and use $N for a limit order" / "sell everything then lock" / "sell then earn" / any intent that combines SELLING tokens WITH a follow-up action using proceeds → CHAINED_ACTIONS — step 1 is always BASKET_SWAP (or SHOW_SWAP for single token) selling to USDC, step 2 is the follow-up action. CRITICAL: when user says "$N out of proceeds" or "use $N from the sale", set amountUSD:"N" in the follow-up step. When user says "use all proceeds" or doesn't specify an amount, set portion:"all" in the follow-up step.
 - "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
@@ -7230,6 +7232,140 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             return `${i+1}. ${t.type} — ${d}`;
           }).join("\n");
           push("ai", text + `\n\n**Trade Journal** (${trades.length} trades${period !== "all" ? `, ${period}` : ""}):\n${lines}`);
+        }
+
+      // ── SWAP_ALL_WALLET — swap every token in wallet (except excluded) ────────
+      } else if (action === "SWAP_ALL_WALLET") {
+        if (!walletFull) { push("ai", "Connect your wallet first."); }
+        else {
+          const toSym      = (actionData?.to || "USDC").toUpperCase();
+          const excludeRaw = actionData?.exclude || [];
+          const excluded   = new Set([toSym, ...excludeRaw.map(s => s.toUpperCase())]);
+
+          // Build trades from live portfolio state — only tokens with balance > 0
+          const trades = Object.entries(portfolio)
+            .filter(([sym, bal]) => bal > 0 && !excluded.has(sym.toUpperCase()))
+            .map(([sym]) => ({ from: sym.toUpperCase(), to: toSym, portion: "all" }));
+
+          if (!trades.length) {
+            const excList = [...excluded].filter(s => s !== toSym).join(", ") || "none";
+            push("ai", `No swappable tokens found in your wallet (excluding ${excList}). Make sure your wallet is loaded — try *show my portfolio* first.`);
+          } else {
+            // Hand off to BASKET_SWAP logic by re-dispatching with the resolved trades
+            const syntheticData = { trades };
+            // Inline execute — same path as BASKET_SWAP
+            push("ai", `Found **${trades.length} token${trades.length > 1 ? "s" : ""}** to swap → ${toSym}. Preparing…`);
+            const provider = getActiveProvider();
+            if (!provider) { push("ai", "Wallet not connected. Please connect your wallet first."); return; }
+            let done = 0, failed = 0;
+
+            const BASKET_SLIPPAGE_BPS = 50;
+            const resolvedTrades = trades.map(t => {
+              const p   = "all";
+              const bal = portfolio[t.from] ?? 0;
+              return { ...t, amount: bal > 0 ? String(bal) : undefined, amountUSD: null };
+            });
+
+            const _allSyms = [...new Set(resolvedTrades.flatMap(t => [t.from, t.to]))];
+            const _unknown = _allSyms.filter(s => !tokenCacheRef.current[s] && !TOKEN_MINTS[s]);
+            if (_unknown.length > 0) await Promise.all(_unknown.map(s => resolveToken(s).catch(() => null)));
+
+            const tradeMeta = resolvedTrades.map(t => {
+              const fromMint = tokenCacheRef.current[t.from] || TOKEN_MINTS[t.from];
+              const toMint   = tokenCacheRef.current[t.to]   || TOKEN_MINTS[t.to];
+              const fromDec  = tokenDecimalsRef.current[t.from] ?? TOKEN_DECIMALS[t.from] ?? 6;
+              const toDec    = tokenDecimalsRef.current[t.to]   ?? TOKEN_DECIMALS[t.to]   ?? 9;
+              const rawAmt   = parseFloat(t.amount || "0");
+              const atomicAmt = Math.floor(rawAmt * Math.pow(10, fromDec));
+              return { fromSym: t.from, toSym: t.to, fromMint, toMint, fromDec, toDec, inUnits: rawAmt, atomicAmt };
+            });
+
+            const fetchOrder = async (m) => {
+              if (!m.fromMint || !m.toMint) throw new Error("unknown token");
+              const orderRes = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${m.fromMint}&outputMint=${m.toMint}&amount=${m.atomicAmt}&taker=${walletFull}&slippageBps=${BASKET_SLIPPAGE_BPS}`);
+              if (orderRes?.error) throw new Error(typeof orderRes.error === "object" ? JSON.stringify(orderRes.error) : orderRes.error);
+              if (!orderRes?.transaction) throw new Error(`No transaction — ${JSON.stringify(orderRes).slice(0,120)}`);
+              return orderRes;
+            };
+
+            const initialOrders = await Promise.all(tradeMeta.map(async m => {
+              try   { return { ok: true, order: await fetchOrder(m), meta: m }; }
+              catch(e) { return { ok: false, err: e?.message || "order failed", meta: m }; }
+            }));
+
+            const invalid = initialOrders.filter(o => !o.ok);
+            invalid.forEach(o => { failed++; push("ai", `Failed: ${o.meta.fromSym}→${o.meta.toSym}: ${o.err}`); });
+            const validOrders = initialOrders.filter(o => o.ok);
+
+            if (validOrders.length === 0) { push("ai", `**Basket done** — ${done} succeeded, ${failed} failed`); return; }
+
+            push("ai", `Requesting wallet approval for **${validOrders.length} swaps**…`);
+            let batchSignedTxs = [];
+            const batchTxObjects = validOrders.map(o =>
+              VersionedTransaction.deserialize(Uint8Array.from(atob(o.order.transaction), c=>c.charCodeAt(0)))
+            );
+            try {
+              if (provider.signAllTransactions) {
+                batchSignedTxs = await provider.signAllTransactions(batchTxObjects);
+              } else {
+                for (const tx of batchTxObjects) batchSignedTxs.push(await provider.signTransaction(tx));
+              }
+            } catch(e) {
+              validOrders.forEach(o => { failed++; push("ai", `Failed: ${o.meta.fromSym}→${o.meta.toSym}: ${e?.message || "signing cancelled"}`); });
+              push("ai", `**Basket done** — ${done} succeeded, ${failed} failed`);
+              setTyping(false); return;
+            }
+
+            const RPC_URL_EXEC = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+            const connExec = new Connection(RPC_URL_EXEC, "confirmed");
+            setTyping(false);
+
+            const waitConfirmed = async (sig, maxMs = 30000) => {
+              const start = Date.now();
+              while (Date.now() - start < maxMs) {
+                const res = await connExec.getSignatureStatuses([sig], { searchTransactionHistory: true });
+                const st  = res?.value?.[0];
+                if (st?.err) throw new Error("On-chain error: " + JSON.stringify(st.err));
+                if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") return st;
+                await new Promise(r => setTimeout(r, 1500));
+              }
+              throw new Error("Timeout — check Solscan for status");
+            };
+
+            for (let i = 0; i < validOrders.length; i++) {
+              const o = validOrders[i];
+              const m = o.meta;
+              if (i > 0) await new Promise(r => setTimeout(r, 1200));
+              let stx = batchSignedTxs[i];
+              let currentOrder = o.order;
+              try {
+                let execRes = await jupFetch(JUP_SWAP_EXEC, { method:"POST", body:{ signedTransaction: bytesToB64(stx.serialize()), requestId: currentOrder.requestId } });
+                const errStr = execRes?.error ? JSON.stringify(execRes.error) : "";
+                if (errStr.includes("3O05") || errStr.includes("6O23") || errStr.includes("6023")) {
+                  try {
+                    currentOrder = await fetchOrder(m);
+                    const freshTx = VersionedTransaction.deserialize(Uint8Array.from(atob(currentOrder.transaction), c=>c.charCodeAt(0)));
+                    stx = await provider.signTransaction(freshTx);
+                    execRes = await jupFetch(JUP_SWAP_EXEC, { method:"POST", body:{ signedTransaction: bytesToB64(stx.serialize()), requestId: currentOrder.requestId } });
+                  } catch { /* fall through */ }
+                }
+                if (execRes?.error) throw new Error(typeof execRes.error === "object" ? JSON.stringify(execRes.error) : execRes.error);
+                const sig = execRes?.signature || execRes?.txid;
+                if (!sig) throw new Error("No signature returned");
+                await waitConfirmed(sig);
+                done++;
+                const rawOut = execRes?.outAmount ?? execRes?.outputAmount ?? execRes?.out_amount ?? currentOrder?.outAmount ?? null;
+                const outAmt = rawOut != null ? (Number(rawOut) / Math.pow(10, m.toDec)).toFixed(4) : "?";
+                push("ai", `[swap-card|${m.fromSym}|${m.toSym}|${m.inUnits.toFixed(4)}|~${outAmt}|${execRes?.feeBps ? execRes.feeBps+"bps" : ""}|${sig}|ok]`);
+                logTrade({ type:"swap", from:m.fromSym, to:m.toSym, amount:m.inUnits.toFixed(4), out:outAmt, tx:sig });
+              } catch(e) {
+                failed++;
+                push("ai", `[swap-card|${m.fromSym}|${m.toSym}|${m.inUnits?.toFixed(4)||"?"}|—|—|—|err]\nFailed: ${m.fromSym}→${m.toSym}: ${e?.message || "failed"}`);
+              }
+            }
+            logTrade({ type:"basket", summary: trades.map(t=>`${t.from}→${t.to}`).join(", ") });
+            push("ai", `**Basket done** — ${done} succeeded, ${failed} failed`);
+          }
         }
 
       // ── BASKET_SWAP ────────────────────────────────────────────────────────
