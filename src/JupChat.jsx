@@ -4482,7 +4482,7 @@ function JupChatInner() {
         }
         const signedSetup = await provider.signTransaction(setupTx);
         const setupSerialized = signedSetup.serialize ? signedSetup.serialize() : signedSetup.serialize();
-        const setupRes = await jupFetch("SOLANA_RPC", {
+        const setupRes = await jupFetch(SOLANA_RPC, {
           method: "POST",
           body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(setupSerialized), { encoding:"base64", skipPreflight:false }] },
         });
@@ -4497,16 +4497,16 @@ function JupChatInner() {
       const signedTx = await provider.signTransaction(tx);
 
       // 3. Send via RPC — use skipPreflight:true for multiply (simulation misreads atomic flashloan)
-      const rpcRes = await jupFetch("SOLANA_RPC", {
+      const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:false }] },
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
       // Verify tx landed on-chain before confirming success
       await new Promise(r => setTimeout(r, 3000));
-      const confirmRes = await jupFetch("SOLANA_RPC", {
+      const confirmRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
         body: { jsonrpc:"2.0", id:1, method:"getSignatureStatuses", params:[[signature],{searchTransactionHistory:true}] },
       });
@@ -4839,7 +4839,7 @@ function JupChatInner() {
       const bytes    = b64ToBytes(data.transaction);
       const tx       = VersionedTransaction.deserialize(bytes);
       const signedTx = await provider.signTransaction(tx);
-      const rpcRes   = await jupFetch("SOLANA_RPC", {
+      const rpcRes   = await jupFetch(SOLANA_RPC, {
         method:"POST",
         body:{ jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
@@ -9757,23 +9757,17 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 Note: Borrowing accrues interest. Keep LTV below the liquidation threshold or your collateral may be sold.
               </div>
 
-              {/* Coming Soon notice */}
-              <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, padding:"14px 16px", marginBottom:12, textAlign:"center" }}>
-                <div style={{ fontSize:13, fontWeight:700, color:T.accent, marginBottom:4 }}>In-App Borrow — Coming Soon</div>
-                <div style={{ fontSize:11, color:T.text2, marginBottom:12, lineHeight:1.6 }}>
-                  The Jupiter Lend Borrow API is not yet publicly available.<br/>
-                  Use the Jupiter app to open or manage borrow positions.
-                </div>
-                <a href={`https://jup.ag/lend`} target="_blank" rel="noreferrer"
-                  style={{ display:"inline-block", padding:"9px 22px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:700, textDecoration:"none" }}>
-                  Open Jupiter Lend ↗
-                </a>
+              <div style={{ display:"flex", gap:8 }}>
+                <button onClick={doBorrow}
+                  disabled={!borrowCfg.colAmount || parseFloat(borrowCfg.colAmount) <= 0 || !borrowCfg.borrowAmount || parseFloat(borrowCfg.borrowAmount) <= 0 || borrowStatus === "signing"}
+                  style={{ flex:1, padding:"11px", background: (!borrowCfg.colAmount || !borrowCfg.borrowAmount || borrowStatus==="signing") ? T.border : T.teal, border:"none", borderRadius:10, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>
+                  {borrowStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#fff", display:"inline-block", marginRight:6 }}/> Signing…</> : `Deposit & Borrow ${borrowCfg.debt}`}
+                </button>
+                <button onClick={() => setShowBorrow(false)}
+                  style={{ padding:"11px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:14, cursor:"pointer" }}>
+                  Cancel
+                </button>
               </div>
-
-              <button onClick={() => setShowBorrow(false)}
-                style={{ width:"100%", padding:"9px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
-                Close
-              </button>
             </div>
           )}
 
@@ -10868,18 +10862,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   Risk: Liquidation if LTV breached. High borrow rate may erode yield. Start conservative at 2x–3x. Monitor at jup.ag/lend.
                 </div>
               </div>
-              {/* Coming Soon notice */}
-              <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, padding:"14px 16px", marginBottom:14, textAlign:"center" }}>
-                <div style={{ fontSize:13, fontWeight:700, color:T.accent, marginBottom:4 }}>In-App Multiply — Coming Soon</div>
-                <div style={{ fontSize:11, color:T.text2, marginBottom:12, lineHeight:1.6 }}>
-                  The Jupiter Multiply API is not yet publicly available for in-app transactions.<br/>
-                  Use the vault links below to open or manage positions directly on Jupiter.
-                </div>
-                <a href="https://jup.ag/lend/multiply" target="_blank" rel="noreferrer"
-                  style={{ display:"inline-block", padding:"9px 22px", background:T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:13, fontWeight:700, textDecoration:"none" }}>
-                  Open Jupiter Multiply ↗
-                </a>
-              </div>
 
               {/* Filter tabs */}
               <div style={{ display:"flex", gap:6, marginBottom:12, flexWrap:"wrap" }}>
@@ -10938,7 +10920,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:2, color:T.text1, display:"flex", alignItems:"center", gap:10 }}>
                   {v.collateral}/{v.debt} Multiply
-                  <span style={{ fontSize:10, padding:"2px 7px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, color:T.accent, fontWeight:600 }}>COMING SOON</span>
                 </div>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>
                   Max {v.maxLev} · {v.risk} Risk · Max LTV {v.ltv}
@@ -10987,16 +10968,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   </div>
                 )}
 
-                {/* Deep link CTA */}
-                <div style={{ background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, padding:"12px 14px", marginBottom:12 }}>
-                  <div style={{ fontSize:12, color:T.text2, marginBottom:8, lineHeight:1.5 }}>
-                    Ready to open? Jupiter handles the flashloan transaction securely. Tap below to open your position directly on Jupiter Lend.
-                  </div>
-                  <a href={v.url} target="_blank" rel="noreferrer"
-                    style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, width:"100%", padding:"11px", background:T.accent, borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:700, textDecoration:"none" }}>
-                    Open {multiplyPos.leverage}x Position on Jupiter ↗
-                  </a>
-                </div>
+                {/* Confirm button */}
+                <button onClick={doMultiply}
+                  disabled={!multiplyPos.colAmount || parseFloat(multiplyPos.colAmount) <= 0 || multiplyStatus === "signing"}
+                  style={{ width:"100%", padding:"11px", background: (!multiplyPos.colAmount || multiplyStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
+                  {multiplyStatus === "signing"
+                    ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Opening Position…</>
+                    : `Open ${multiplyPos.leverage}x ${v.collateral}/${v.debt} Position`}
+                </button>
 
                 <button onClick={() => setShowMultiplyForm(false)}
                   style={{ width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
