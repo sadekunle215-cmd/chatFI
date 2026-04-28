@@ -4482,34 +4482,50 @@ function JupChatInner() {
         body: {
           jsonrpc: "2.0", id: 1,
           method: "sendTransaction",
-          params: [bytesToB64(signedInitTx.serialize()), { encoding: "base64", skipPreflight: false }],
+          params: [bytesToB64(signedInitTx.serialize()), { encoding: "base64", skipPreflight: false, maxRetries: 3, preflightCommitment: "confirmed" }],
         },
       });
       const initSignature = initRpcRes?.result;
       if (!initSignature) throw new Error(initRpcRes?.error?.message || "Step 1 tx failed to send.");
 
       push("ai", `**Step 1/2:** Position NFT transaction sent (\`${initSignature.slice(0,16)}…\`) — waiting for confirmation…`);
-      await new Promise(r => setTimeout(r, 4000));
 
-      // Confirm Step 1 landed on-chain
-      const initConfirm = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: {
-          jsonrpc: "2.0", id: 1,
-          method: "getSignatureStatuses",
-          params: [[initSignature], { searchTransactionHistory: true }],
-        },
-      });
-      const initStatus = initConfirm?.result?.value?.[0];
-      if (initStatus?.err) {
-        throw new Error("Step 1 failed on-chain: " + JSON.stringify(initStatus.err));
-      }
-      if (!initStatus) {
-        // Not yet indexed — wait a bit more
-        await new Promise(r => setTimeout(r, 3000));
-      }
+      // Poll until confirmed — do NOT proceed to Step 2 until Step 1 is on-chain.
+      // Also checks lastValidBlockHeight (from server) to detect blockhash expiry early,
+      // matching the connection.confirmTransaction({ signature, ...latestBlockhash }) pattern
+      // from the SKILL.md examples.
+      let initStatus = null;
+      const lvbh = initData.lastValidBlockHeight ?? null;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        await new Promise(r => setTimeout(r, 5000));
 
-      // Get positionId — server returns it from getInitPositionIx if SDK provides it.
+        // Check blockhash expiry — if current block > lastValidBlockHeight the tx was dropped
+        if (lvbh) {
+          const slotRes = await jupFetch(SOLANA_RPC, {
+            method: "POST",
+            body: { jsonrpc: "2.0", id: 1, method: "getBlockHeight", params: [] },
+          });
+          const blockHeight = slotRes?.result;
+          if (blockHeight && blockHeight > lvbh) {
+            throw new Error("Step 1 transaction expired (blockhash too old). Please retry — this is a network timing issue, not a wallet error.");
+          }
+        }
+
+        const confirmRes = await jupFetch(SOLANA_RPC, {
+          method: "POST",
+          body: {
+            jsonrpc: "2.0", id: 1,
+            method: "getSignatureStatuses",
+            params: [[initSignature], { searchTransactionHistory: true }],
+          },
+        });
+        initStatus = confirmRes?.result?.value?.[0];
+        if (initStatus?.err) throw new Error("Step 1 failed on-chain: " + JSON.stringify(initStatus.err));
+        if (initStatus?.confirmationStatus === "confirmed" || initStatus?.confirmationStatus === "finalized") break;
+      }
+      if (!initStatus) throw new Error("Step 1 timed out — network may be congested. Please retry.");
+
+      // Get positionId — server returns nftId/positionId from getOperateIx(positionId:0).
       // Fall back to querying on-chain if not in response.
       if (initData.positionId != null && Number(initData.positionId) !== 0) {
         realPositionId = Number(initData.positionId);
@@ -4573,7 +4589,7 @@ function JupChatInner() {
         body: {
           jsonrpc: "2.0", id: 1,
           method: "sendTransaction",
-          params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }],
+          params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }],
         },
       });
       const signature = rpcRes?.result;
