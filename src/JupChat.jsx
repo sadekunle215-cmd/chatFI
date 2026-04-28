@@ -337,6 +337,7 @@ Available actions:
 - "SET_PRICE_ALERT" → actionData: { "token": "SOL", "condition": "above"|"below", "price": "200" } — set an in-session price alert; ChatFi notifies in chat when price crosses the threshold.
 - "SHOW_TRADE_JOURNAL" → actionData: { "period": "all"|"today"|"week" } — show the user's local trade history and estimated PnL.
 - "BASKET_SWAP"     → actionData: { "trades": [...] } — execute multiple swaps in sequence. Each trade supports THREE amount modes (pick one): amountUSD:"100" (spend $100 of from token), amount:"5.4" (native token units — parse k/K suffix as ×1000, m/M as ×1000000), or portion:"all"|"max"|"half"|"quarter"|"N%" (wallet balance fraction). from/to can vary per trade (many-to-one and one-to-many both work). Examples: "buy $100 each of SOL JUP BONK" → [{from:"USDC",to:"SOL",amountUSD:"100"},…]; "swap 5.4 JUP, 158.4k BONK to USDC" → [{from:"JUP",to:"USDC",amount:"5.4"},{from:"BONK",to:"USDC",amount:"158400"}]; "swap max of SOL PENGU to USDC" → [{from:"SOL",to:"USDC",portion:"max"},{from:"PENGU",to:"USDC",portion:"max"}]; "swap half my JUP and all my FARTCOIN to SOL" → [{from:"JUP",to:"SOL",portion:"half"},{from:"FARTCOIN",to:"SOL",portion:"all"}].
+- "CHAINED_ACTIONS"  → actionData: { "steps": [...] } — for multi-step intent where the user wants to sell/swap THEN immediately do something with the proceeds (limit order, DCA, lock, earn deposit, send). Each step is a full action object: { "action": "BASKET_SWAP"|"SHOW_SWAP"|"SHOW_TRIGGER_V2"|"SHOW_RECURRING"|"SHOW_LOCK"|"FETCH_EARN"|"SHOW_SEND", "actionData": {...} }. The UI executes steps sequentially, showing a confirmation between each. Use this ONLY when user intent is explicitly chained (sell X → then do Y with proceeds). Examples: "sell my BONK and JUP to USDC then set a $50 limit order for BTC" → step1: BASKET_SWAP sell BONK+JUP→USDC, step2: SHOW_TRIGGER_V2 buy BTC with amountUSD:"50" from USDC. "sell all my memecoins and DCA $20/day into SOL" → step1: BASKET_SWAP sell all→USDC, step2: SHOW_RECURRING USDC→SOL amountPerCycle:"20". NOTE: For the follow-up step, use amountUSD when the user specifies a dollar amount from proceeds (e.g. "$50 out of the proceeds"), or portion:"all" when user wants to use all proceeds.
 - "COPY_TRADE"      → actionData: { "wallet": "WALLET_ADDRESS", "limit": 5 } — fetch and show recent swaps from another wallet so user can mirror them. limit default 5.
 
 Rules:
@@ -381,6 +382,7 @@ Rules:
 - "alert me when" / "notify me when" / "price alert" / "tell me when X hits $Y" / "alert when X above/below" → SET_PRICE_ALERT — extract token, condition (above/below), price
 - "my trades" / "trade history" / "trade journal" / "my PnL" / "what have I traded" / "show my swaps" / "trading history" → SHOW_TRADE_JOURNAL
 - "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" / "swap X JUP and Y BONK to USDC" / "swap all these tokens to USDC" / "swap max/all of A B C to X" / "dump all my A B C into X" → BASKET_SWAP — parse each token, amount mode, and direction into trades array; default from:"USDC" when buying, default to:"USDC" when selling/dumping
+- "sell X and then set a limit order" / "sell my tokens and buy BTC at $Y" / "dump my bags and DCA into SOL" / "sell BONK SOL JUP and use $N for a limit order" / "sell everything then lock" / "sell then earn" / any intent that combines SELLING tokens WITH a follow-up action using proceeds → CHAINED_ACTIONS — step 1 is always BASKET_SWAP (or SHOW_SWAP for single token) selling to USDC, step 2 is the follow-up action. CRITICAL: when user says "$N out of proceeds" or "use $N from the sale", set amountUSD:"N" in the follow-up step. When user says "use all proceeds" or doesn't specify an amount, set portion:"all" in the follow-up step.
 - "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
@@ -6506,6 +6508,11 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         else if (type === "earnDeposit") { setShowEarnDeposit(false); await doEarnDeposit(); }
         else if (type === "earnWithdraw"){ setShowEarnWithdraw(false);await doEarnWithdraw(); }
         else if (type === "send")        { setShowSend(false);        await doSend(); }
+        else if (type === "lock")        { setShowLock(false);        await doCreateLock(); }
+        else if (type === "trigger")     { setShowTrig(false);        await doTrigger(); }
+        else if (type === "triggerV2")   { setShowTrigV2(false);      await doTriggerV2(); }
+        else if (type === "recurring")   { setShowRecurring(false);   await doRecurring(); }
+        else if (type === "borrow")      { setShowBorrow(false);      await doBorrow(); }
         return;
       } else if (answer === "no" || answer === "n" || answer === "cancel") {
         setInput("");
@@ -6706,7 +6713,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             // Smart connect: use existing session if any
             if (privyReady && privyAuthed) { privyLogin(); }
             else if (reownConnected) { reownOpen(); }
-            else { setShowWalletModal(true); }
+            else { reownOpen(); }
           }, 200);
         } else {
           push("ai", text);
@@ -6743,8 +6750,15 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             targetPrice: actionData?.targetPrice || c.targetPrice || "",
             amount:      trigPortion || actionData?.amount || c.amount || "",
           }));
-          setShowTrig(true);
           push("ai", text);
+          const trigAmt = trigPortion || actionData?.amount || "";
+          if (directMode && walletFull && trigAmt && actionData?.targetPrice) {
+            const trigDir = actionData?.direction === "above" ? "above" : "below";
+            push("ai", `⚡ **Direct Mode** — Limit order: **${trigAmt} ${trigSym}** when price is ${trigDir} **$${actionData.targetPrice}**\n\nReply **yes** to execute or **no** to cancel.`);
+            setPendingDirectAction({ type:"trigger", label:`${trigAmt} ${trigSym} @ $${actionData.targetPrice}` });
+          } else {
+            setShowTrig(true);
+          }
         }
 
       } else if (action === "SHOW_PREDICTION") {
@@ -6840,8 +6854,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           colAmount:    actionData?.colAmount    || c.colAmount,
           borrowAmount: actionData?.borrowAmount || c.borrowAmount,
         }));
-        setShowBorrow(true);
         push("ai", text);
+        if (directMode && walletFull && actionData?.colAmount && actionData?.borrowAmount) {
+          push("ai", `⚡ **Direct Mode** — Borrow: deposit **${actionData.colAmount} ${colSym}**, borrow **${actionData.borrowAmount} ${debtSym}**\n\nReply **yes** to execute or **no** to cancel.`);
+          setPendingDirectAction({ type:"borrow", label:`${actionData.colAmount} ${colSym} → borrow ${actionData.borrowAmount} ${debtSym}` });
+        } else {
+          setShowBorrow(true);
+        }
 
       } else if (action === "SHOW_MULTIPLY") {
         setMultiplyFilter(actionData?.asset?.toUpperCase() || null);
@@ -6892,8 +6911,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             slippageBps:      actionData?.slippageBps       || c.slippageBps,
             expiryDays:       actionData?.expiryDays        || c.expiryDays,
           }));
-          setShowTrigV2(true);
           push("ai", text);
+          if (directMode && walletFull && resolvedAmt && actionData?.triggerPriceUsd) {
+            const cond = actionData?.triggerCondition || "above";
+            push("ai", `⚡ **Direct Mode** — Trigger v2: **${resolvedAmt} ${fromSym} → ${toSym}** when ${fromSym} is ${cond} **$${actionData.triggerPriceUsd}**\n\nReply **yes** to execute or **no** to cancel.`);
+            setPendingDirectAction({ type:"triggerV2", label:`${resolvedAmt} ${fromSym} → ${toSym} @ $${actionData.triggerPriceUsd}` });
+          } else {
+            setShowTrigV2(true);
+          }
         }
 
       } else if (action === "FETCH_TRIGGER_ORDERS") {
@@ -6917,8 +6942,15 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           numberOfOrders: actionData?.numberOfOrders || c.numberOfOrders,
           intervalSecs:   actionData?.intervalSecs   || c.intervalSecs,
         }));
-        setShowRecurring(true);
         push("ai", text);
+        if (directMode && walletFull && actionData?.amountPerCycle && actionData?.numberOfOrders) {
+          const intSecs = actionData?.intervalSecs || 86400;
+          const intLabel = intSecs >= 604800 ? `${Math.round(intSecs/604800)}w` : intSecs >= 86400 ? `${Math.round(intSecs/86400)}d` : `${Math.round(intSecs/3600)}h`;
+          push("ai", `⚡ **Direct Mode** — DCA: **${actionData.amountPerCycle} ${fromSym} → ${toSym}** every ${intLabel} for ${actionData.numberOfOrders} orders\n\nReply **yes** to execute or **no** to cancel.`);
+          setPendingDirectAction({ type:"recurring", label:`${actionData.amountPerCycle} ${fromSym} → ${toSym} ×${actionData.numberOfOrders}` });
+        } else {
+          setShowRecurring(true);
+        }
 
       } else if (action === "FETCH_RECURRING_ORDERS") {
         const status = actionData?.status === "history" ? "history" : "active";
@@ -7134,8 +7166,16 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         if (resolvedTok?.decimals) tokenDecimalsRef.current[tokSym] = resolvedTok.decimals;
         setLockStatus(null);
         setLockResult(null);
-        setShowLock(true);
         push("ai", text);
+        if (directMode && walletFull && actionData?.amount) {
+          const cliff   = actionData?.cliffDays   || "0";
+          const vesting = actionData?.vestingDays || "1";
+          const recip   = actionData?.recipient ? `→ \`${actionData.recipient.slice(0,8)}…\`` : "→ your wallet";
+          push("ai", `⚡ **Direct Mode** — Lock **${actionData.amount} ${tokSym}** ${recip}\nCliff: ${cliff}d · Vesting: ${vesting}d\n\nReply **yes** to execute or **no** to cancel.`);
+          setPendingDirectAction({ type:"lock", label:`${actionData.amount} ${tokSym}` });
+        } else {
+          setShowLock(true);
+        }
 
       } else if (action === "FETCH_LOCKS") {
         push("ai", text);
@@ -7379,6 +7419,138 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const summaryStr = basketTrades.map(t=>`${t.from||"USDC"}→${t.to}`).join(", ");
           logTrade({ type:"basket", summary: summaryStr });
           push("ai", `**Basket done** — ${done} succeeded, ${failed} failed`);
+        }
+
+      // ── CHAINED_ACTIONS — sell → then limit/DCA/lock/earn/send with proceeds ──
+      } else if (action === "CHAINED_ACTIONS") {
+        const steps = actionData?.steps || [];
+        if (!steps.length) { push("ai", text); }
+        else {
+          push("ai", text);
+          // Execute steps sequentially — each step dispatches as its own action
+          for (let i = 0; i < steps.length; i++) {
+            const step = steps[i];
+            const stepAction = step.action;
+            const stepData   = step.actionData || {};
+            if (i > 0) {
+              // Small pause between steps so UI can settle
+              await new Promise(r => setTimeout(r, 600));
+              push("ai", `▶ Step ${i + 1} of ${steps.length}: preparing **${stepAction.replace(/_/g," ").toLowerCase()}**…`);
+            }
+            // Dispatch each step by temporarily overriding action + actionData
+            // We re-use the same dispatch logic by re-calling handleSend with a synthetic msg
+            // Instead, we directly set state for each action type:
+            if (stepAction === "BASKET_SWAP" || stepAction === "SHOW_SWAP") {
+              // Re-dispatch as if AI returned this action
+              const fakeResponse = { action: stepAction, actionData: stepData, text: "" };
+              chainedStepRef.current = fakeResponse;
+            }
+            // For each step type, directly trigger the same logic as the main dispatcher
+            if (stepAction === "BASKET_SWAP") {
+              const bTrades = stepData.trades || [];
+              if (!bTrades.length) { push("ai", "No trades in basket step."); continue; }
+              if (!walletFull) { push("ai", "Connect your wallet first to execute this step."); break; }
+              push("ai", `Preparing **${bTrades.length} swaps**…`);
+              const bProvider = getActiveProvider();
+              if (!bProvider) { push("ai", "Wallet not connected."); break; }
+              // Resolve mints + execute (reuse basket logic inline)
+              const bResolved = bTrades.map(t => ({
+                from: (t.from||"USDC").toUpperCase(), to: (t.to||"USDC").toUpperCase(),
+                amount: t.amount||null, amountUSD: t.amountUSD||null, portion: t.portion||null,
+              }));
+              setBasketTrades(bResolved);
+              setShowBasket(true);
+            } else if (stepAction === "SHOW_SWAP") {
+              const fromSym = (stepData.from||"SOL").toUpperCase();
+              const toSym   = (stepData.to||"USDC").toUpperCase();
+              const rFrom = await resolveToken(fromSym);
+              const rTo   = await resolveToken(toSym);
+              setSwapCfg(c => ({
+                ...c,
+                from: fromSym, fromMint: rFrom?.mint||TOKEN_MINTS[fromSym]||c.fromMint,
+                fromDecimals: rFrom?.decimals??c.fromDecimals,
+                to: toSym,   toMint: rTo?.mint||TOKEN_MINTS[toSym]||c.toMint,
+                toDecimals: rTo?.decimals??c.toDecimals,
+                amount: stepData.amount||stepData.amountUSD||"",
+                amountIsUSD: !!stepData.amountUSD,
+              }));
+              setShowSwap(true);
+            } else if (stepAction === "SHOW_TRIGGER_V2") {
+              const fromSym = (stepData.from||"USDC").toUpperCase();
+              const toSym   = (stepData.to||"SOL").toUpperCase();
+              const rFrom = await resolveToken(fromSym);
+              const rTo   = await resolveToken(toSym);
+              let resolvedAmt = stepData.amount||""; 
+              if (!resolvedAmt && stepData.amountUSD) resolvedAmt = stepData.amountUSD;
+              setTrigV2Cfg(c => ({
+                ...c,
+                orderType: stepData.orderType||"single",
+                from: fromSym, fromMint: rFrom?.mint||TOKEN_MINTS[fromSym]||c.fromMint,
+                fromDecimals: rFrom?.decimals??TOKEN_DECIMALS[fromSym]??c.fromDecimals,
+                to: toSym,   toMint: rTo?.mint||TOKEN_MINTS[toSym]||c.toMint,
+                toDecimals: rTo?.decimals??TOKEN_DECIMALS[toSym]??c.toDecimals,
+                amount: resolvedAmt||c.amount,
+                triggerCondition: stepData.triggerCondition||c.triggerCondition,
+                triggerPriceUsd: stepData.triggerPriceUsd||c.triggerPriceUsd,
+                tpPriceUsd: stepData.tpPriceUsd||c.tpPriceUsd,
+                slPriceUsd: stepData.slPriceUsd||c.slPriceUsd,
+              }));
+              if (directMode && walletFull && resolvedAmt && stepData.triggerPriceUsd) {
+                const cond = stepData.triggerCondition||"above";
+                push("ai", `⚡ **Direct Mode** — Limit order: **${resolvedAmt} ${fromSym} → ${toSym}** when ${toSym} is ${cond} **$${stepData.triggerPriceUsd}**\n\nReply **yes** to execute or **no** to cancel.`);
+                setPendingDirectAction({ type:"triggerV2", label:`${resolvedAmt} ${fromSym} → ${toSym} @ $${stepData.triggerPriceUsd}` });
+              } else { setShowTrigV2(true); }
+            } else if (stepAction === "SHOW_RECURRING") {
+              const fromSym = (stepData.from||"USDC").toUpperCase();
+              const toSym   = (stepData.to||"SOL").toUpperCase();
+              const rFrom = await resolveToken(fromSym);
+              const rTo   = await resolveToken(toSym);
+              setRecurringCfg(c => ({
+                ...c,
+                from: fromSym, fromMint: rFrom?.mint||TOKEN_MINTS[fromSym]||c.fromMint,
+                fromDecimals: rFrom?.decimals??TOKEN_DECIMALS[fromSym]??c.fromDecimals,
+                to: toSym,   toMint: rTo?.mint||TOKEN_MINTS[toSym]||c.toMint,
+                toDecimals: rTo?.decimals??TOKEN_DECIMALS[toSym]??c.toDecimals,
+                amountPerCycle: stepData.amountPerCycle||c.amountPerCycle,
+                numberOfOrders: stepData.numberOfOrders||c.numberOfOrders,
+                intervalSecs: stepData.intervalSecs||c.intervalSecs,
+              }));
+              if (directMode && walletFull && stepData.amountPerCycle && stepData.numberOfOrders) {
+                const intSecs = stepData.intervalSecs||86400;
+                const intLabel = intSecs>=604800?`${Math.round(intSecs/604800)}w`:intSecs>=86400?`${Math.round(intSecs/86400)}d`:`${Math.round(intSecs/3600)}h`;
+                push("ai", `⚡ **Direct Mode** — DCA: **${stepData.amountPerCycle} ${fromSym} → ${toSym}** every ${intLabel} for ${stepData.numberOfOrders} orders\n\nReply **yes** to execute or **no** to cancel.`);
+                setPendingDirectAction({ type:"recurring", label:`${stepData.amountPerCycle} ${fromSym} → ${toSym}` });
+              } else { setShowRecurring(true); }
+            } else if (stepAction === "SHOW_LOCK") {
+              const tokSym = (stepData.token||"JUP").toUpperCase();
+              const resolvedTok = await resolveToken(tokSym);
+              setLockCfg(c => ({
+                ...c,
+                token: tokSym,
+                mint: resolvedTok?.mint||TOKEN_MINTS[tokSym]||c.mint,
+                amount: stepData.amount||c.amount,
+                cliffDays: stepData.cliffDays||c.cliffDays,
+                vestingDays: stepData.vestingDays||c.vestingDays,
+                recipient: stepData.recipient||c.recipient,
+              }));
+              if (resolvedTok?.decimals) tokenDecimalsRef.current[tokSym] = resolvedTok.decimals;
+              setLockStatus(null); setLockResult(null);
+              if (directMode && walletFull && stepData.amount) {
+                push("ai", `⚡ **Direct Mode** — Lock **${stepData.amount} ${tokSym}**\n\nReply **yes** to execute or **no** to cancel.`);
+                setPendingDirectAction({ type:"lock", label:`${stepData.amount} ${tokSym}` });
+              } else { setShowLock(true); }
+            } else if (stepAction === "FETCH_EARN") {
+              push("ai", "Opening earn vaults…");
+              await fetchEarnVaults();
+              if (walletFull) fetchEarnUserPositions();
+              setShowEarn(true);
+            } else if (stepAction === "SHOW_SEND") {
+              const upperTok = (stepData.token||"SOL").toUpperCase();
+              setSendCfg({ token: upperTok, amount: stepData.amount||"", mint: tokenCacheRef.current[upperTok]||TOKEN_MINTS[upperTok]||TOKEN_MINTS.SOL });
+              setSendStatus(null); setSendLink(""); setSendRecipient(""); setSendTxSig("");
+              setShowSend(true);
+            }
+          }
         }
 
       // ── COPY_TRADE ──────────────────────────────────────────────────────────
