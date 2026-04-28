@@ -225,10 +225,11 @@ export default async function handler(req, res) {
       const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN };
       let flashBorrowIx, flashPayIx;
       try {
-        [flashBorrowIx, flashPayIx] = await Promise.all([
-          getFlashBorrowIx(flashParams),
-          getFlashPaybackIx(flashParams),
-        ]);
+        // Sequential — both fns read vault liquidity state; concurrent calls race each other → assertion failure
+        flashBorrowIx = await getFlashBorrowIx(flashParams)
+          .catch(e => { throw new Error(`getFlashBorrowIx failed: ${e.message}`); });
+        flashPayIx    = await getFlashPaybackIx(flashParams)
+          .catch(e => { throw new Error(`getFlashPaybackIx failed: ${e.message}`); });
       } catch (e) {
         return res.status(502).json({ error: `Flash loan setup failed: ${e.message}` });
       }
@@ -317,10 +318,11 @@ export default async function handler(req, res) {
       const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN };
       let flashBorrowIx, flashPayIx;
       try {
-        [flashBorrowIx, flashPayIx] = await Promise.all([
-          getFlashBorrowIx(flashParams),
-          getFlashPaybackIx(flashParams),
-        ]);
+        // Sequential — both fns read vault liquidity state; concurrent calls race each other → assertion failure
+        flashBorrowIx = await getFlashBorrowIx(flashParams)
+          .catch(e => { throw new Error(`getFlashBorrowIx failed: ${e.message}`); });
+        flashPayIx    = await getFlashPaybackIx(flashParams)
+          .catch(e => { throw new Error(`getFlashPaybackIx failed: ${e.message}`); });
       } catch (e) {
         return res.status(502).json({ error: `Flash loan setup failed: ${e.message}` });
       }
