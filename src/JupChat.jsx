@@ -3634,17 +3634,26 @@ function JupChatInner() {
       const earnRaw = await earnRes.json();
       let earnArr = Array.isArray(earnRaw) ? earnRaw
         : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
-        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || [];
-      if (!Array.isArray(earnArr)) {
-        earnArr = Object.values(earnRaw).filter(v => v && typeof v === "object" && !Array.isArray(v));
+        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || null;
+      // Also try Object.values when earnArr is empty/null — handles { "WALLET": [...] } shape
+      if (!Array.isArray(earnArr) || earnArr.length === 0) {
+        const vals = Object.values(earnRaw);
+        const flat = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
+        if (flat.length > 0) earnArr = flat;
+        else if (!Array.isArray(earnArr)) earnArr = [];
       }
       const map = {};
       earnArr.forEach(e => {
-        const sym = (e.asset?.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
+        // Jupiter Earn /positions returns { token: { symbol, address, decimals }, underlyingBalance, underlyingAssets, shares }
+        // e.token is the primary field — e.asset is a fallback for older response shapes.
+        const tok = e.token || e.asset || {};
+        const sym = (tok.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
         if (!sym) return;
-        const dec = e.asset?.decimals ?? e.decimals ?? 6;
+        const dec = tok.decimals ?? e.decimals ?? 6;
+        // underlyingBalance is already human-readable; underlyingAssets is the raw integer — match normaliseEarnPos logic
+        const ub  = parseFloat(e.underlyingBalance || 0);
         const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
-        const amount = ua > 1e6 ? ua / Math.pow(10, dec) : ua;
+        const amount = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
         const shares = parseFloat(e.shares || 0);
         if (amount > 0 || shares > 0) {
           map[sym] = { amount, amountRaw: ua, shares, decimals: dec };
@@ -4317,10 +4326,18 @@ function JupChatInner() {
       const earnRaw = await earnRes.json();
       let earnArr = Array.isArray(earnRaw) ? earnRaw
         : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
-        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || [];
-      if (!Array.isArray(earnArr)) {
-        const vals = Object.values(earnRaw).filter(v => v && typeof v === "object" && !Array.isArray(v));
-        earnArr = vals.length ? vals : [];
+        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || null;
+      // If still not an array (or is empty), try Object.values to handle wallet-keyed responses
+      // like { "WALLET_ADDRESS": [...positions...] } — also flattens array-valued props
+      // NOTE: also check earnArr.length === 0 so we retry even if the named-key fallback returned []
+      if (!Array.isArray(earnArr) || earnArr.length === 0) {
+        const vals = Object.values(earnRaw);
+        const flat = vals.flatMap(v =>
+          Array.isArray(v) ? v :
+          (v && typeof v === "object" ? [v] : [])
+        );
+        if (flat.length > 0) earnArr = flat;
+        else if (!Array.isArray(earnArr)) earnArr = [];
       }
       earnPositions = earnArr
         .map(normaliseEarnPos)
