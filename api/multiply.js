@@ -114,18 +114,25 @@ async function buildTx(connection, signerPubkey, ixs, alts) {
   return Buffer.from(txBytes).toString("base64");
 }
 
-// ── Known vault mint pairs — avoids getVaultConfig() RPC call on every request ─
-// Source: on-chain via getAllVaults(). Update if Jupiter adds new vaults.
-// vaultId → { supplyToken (collateral mint), borrowToken (debt mint) }
-const VAULT_MINTS = {
-  1: { supplyToken: "So11111111111111111111111111111111111111112",  borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // SOL / USDC
-  2: { supplyToken: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn", borrowToken: "So11111111111111111111111111111111111111112"  }, // JitoSOL / SOL
-  3: { supplyToken: "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v",  borrowToken: "So11111111111111111111111111111111111111112"  }, // JupSOL / SOL
-  4: { supplyToken: "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh", borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // WBTC / USDC
-  5: { supplyToken: "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4",  borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // JLP / USDC
-  6: { supplyToken: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",  borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // JUP / USDC
-  7: { supplyToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", borrowToken: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"  }, // USDC / USDT
-};
+// ── Vault mint lookup — fetched dynamically from on-chain via SDK ─────────────
+// Cache per cold start to avoid repeated RPC calls
+let vaultMintsCache = null;
+
+async function getVaultMints(connection) {
+  if (vaultMintsCache) return vaultMintsCache;
+  const client = new Client(connection);
+  const vaults = await client.vault.getAllVaults();
+  const map = {};
+  for (const v of vaults) {
+    map[v.vaultId] = {
+      supplyToken: v.supplyToken.toBase58(),
+      borrowToken: v.borrowToken.toBase58(),
+    };
+  }
+  vaultMintsCache = map;
+  console.log(`[multiply] loaded ${Object.keys(map).length} vaults from chain`);
+  return map;
+}
 
 // ── Handler ────────────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
@@ -134,13 +141,16 @@ export default async function handler(req, res) {
 
   // ── GET: lightweight health check — just verify RPC is reachable ────────────
   // getAllVaults() is too heavy (100+ RPC calls) for a health check.
-  // Vault mints are hardcoded in VAULT_MINTS below — no on-chain lookup needed.
+  // Vault mints are loaded dynamically from on-chain via SDK.
   if (req.method === "GET") {
     if (!RPC_URL) return res.status(500).json({ error: "SOLANA_RPC env var not set." });
     try {
       const connection = new Connection(RPC_URL, { commitment: "confirmed" });
-      const slot = await connection.getSlot();
-      return res.status(200).json({ ok: true, slot, vaults: Object.entries(VAULT_MINTS).map(([id, v]) => ({ vaultId: Number(id), ...v })) });
+      const [slot, vaultMints] = await Promise.all([
+        connection.getSlot(),
+        getVaultMints(connection),
+      ]);
+      return res.status(200).json({ ok: true, slot, vaults: Object.entries(vaultMints).map(([id, v]) => ({ vaultId: Number(id), ...v })) });
     } catch(e) {
       return res.status(500).json({ error: e.message });
     }
@@ -187,9 +197,10 @@ export default async function handler(req, res) {
 
       console.log(`[multiply/open] vault=${vaultId} posId=${positionId} col=${colBN} borrow=${borrowBN}`);
 
-      // Resolve vault mints from hardcoded map — avoids getVaultConfig() RPC call
-      const vaultMints = VAULT_MINTS[Number(vaultId)];
-      if (!vaultMints) return res.status(400).json({ error: `Unknown vaultId ${vaultId}. Valid IDs: ${Object.keys(VAULT_MINTS).join(", ")}` });
+      // Resolve vault mints dynamically from on-chain
+      const allVaultMints = await getVaultMints(connection);
+      const vaultMints = allVaultMints[Number(vaultId)];
+      if (!vaultMints) return res.status(400).json({ error: `Unknown vaultId ${vaultId}. Available: ${Object.keys(allVaultMints).join(", ")}` });
       const colMint  = new PublicKey(vaultMints.supplyToken);
       const debtMint = new PublicKey(vaultMints.borrowToken);
 
@@ -271,7 +282,8 @@ export default async function handler(req, res) {
 
     // ── UNWIND ────────────────────────────────────────────────────────────────
     if (action === "unwind") {
-      const vaultMints = VAULT_MINTS[Number(vaultId)];
+      const allVaultMints = await getVaultMints(connection);
+      const vaultMints = allVaultMints[Number(vaultId)];
       if (!vaultMints) return res.status(400).json({ error: `Unknown vaultId ${vaultId}` });
       const colMint  = new PublicKey(vaultMints.supplyToken);
       const debtMint = new PublicKey(vaultMints.borrowToken);
