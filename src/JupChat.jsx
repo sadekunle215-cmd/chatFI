@@ -568,13 +568,21 @@ const fmt = (text = "") => {
         const content  = imgMatch ? item.content.slice(imgMatch[0].length) : item.content;
 
         // Parse "**SYMBOL** — Name ✓ $price (+x%) · score N" or "SYMBOL — Name ✓ $price (+x%) · score N"
+        // Also handle: price with no change, or name with no price/change at all
         const tokenMatch = content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+-]+)\s+\(([^)]+)\)(?:\s+[·•]\s+score\s+(\d+))?/);
-        if (tokenMatch) {
-          const [, sym, name, price, change, score] = tokenMatch;
-          const isUp = change.startsWith("+");
+        // Price-only (no change %): **SYM** — Name $price [· extra]
+        const priceOnlyMatch = !tokenMatch && content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+-]+)(?:\s+[·•]\s+(.+))?$/);
+        // Name-only (no price, no change): **SYM** — Name ✓ [· extra]
+        const nameOnlyMatch  = !tokenMatch && !priceOnlyMatch && content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.+)/);
+
+        if (tokenMatch || priceOnlyMatch || nameOnlyMatch) {
+          const isFullCard = !!tokenMatch;
+          const isPriceOnly = !!priceOnlyMatch;
+          const [, sym, name, price, change, score] = tokenMatch || priceOnlyMatch || nameOnlyMatch;
+          const isUp = change ? change.startsWith("+") : null;
           const isVerified = content.includes("✓");
-          const changeColor = isUp ? "#68d391" : "#fc8181";
-          const changeBg = isUp ? "rgba(104,211,145,0.1)" : "rgba(252,129,129,0.1)";
+          const changeColor = isUp ? "#68d391" : isUp === false ? "#fc8181" : "#4d6a7a";
+          const changeBg = isUp ? "rgba(104,211,145,0.1)" : isUp === false ? "rgba(252,129,129,0.1)" : "transparent";
           const scoreNum = score ? parseInt(score) : null;
           const scoreColor = scoreNum >= 90 ? "#c7f284" : scoreNum >= 70 ? "#68d391" : "#8fa8b8";
           const rankNum = parseInt(item.num);
@@ -593,11 +601,11 @@ const fmt = (text = "") => {
                 <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
                   <span style="font-size:13px;font-weight:700;color:#e8f4f0;letter-spacing:-0.2px">${cleanSym}</span>
                   ${isVerified ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="#c7f284" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ""}
-                  <span style="font-size:11px;color:#4d6a7a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name.replace(/✓/g,"").trim()}</span>
+                  <span style="font-size:11px;color:#4d6a7a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(name||"").replace(/✓/g,"").trim()}</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:6px">
-                  <span style="font-size:12px;font-weight:600;color:#c8d8e0">${price}</span>
-                  <span style="font-size:10px;font-weight:700;color:${changeColor};background:${changeBg};padding:1px 6px;border-radius:5px">${change}</span>
+                  ${price ? `<span style="font-size:12px;font-weight:600;color:#c8d8e0">${price}</span>` : `<span style="font-size:11px;color:#2d4a5a">no price data</span>`}
+                  ${change ? `<span style="font-size:10px;font-weight:700;color:${changeColor};background:${changeBg};padding:1px 6px;border-radius:5px">${change}</span>` : ""}
                 </div>
               </div>
               ${scoreNum ? `<div style="text-align:center;flex-shrink:0;padding-left:4px"><div style="font-size:9px;color:#4d6a7a;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:1px">score</div><div style="font-size:14px;font-weight:800;color:${scoreColor};line-height:1">${scoreNum}</div></div>` : ""}
@@ -605,16 +613,19 @@ const fmt = (text = "") => {
             </div>
           </div>`;
         } else {
-          // Generic numbered item — clean pill
+          // Generic numbered item — clean pill with optional logo
           const rankNum = parseInt(item.num);
           const rankColor = rankNum === 1 ? "#f6d860" : rankNum === 2 ? "#c0c0c0" : rankNum === 3 ? "#cd7f32" : "#2d4a5a";
-          // Extract first bold word or plain first word as click target
           const genericSym = (content.match(/^\*\*([^*]+)\*\*/) || content.match(/^([A-Za-z][A-Za-z0-9]+)/))?.[1] || "";
           const clickAttr = genericSym ? `onclick="window.__chatfiSend && window.__chatfiSend('${genericSym} info')" style="cursor:pointer;"` : "";
-          html += `<div ${clickAttr} style="display:flex;align-items:flex-start;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;${genericSym ? "cursor:pointer;" : ""}" ${genericSym ? 'onmouseenter="this.style.borderColor=\'#c7f284\'" onmouseleave="this.style.borderColor=\'#1e2d3d\'"' : ""}>
+          const logoFallback = logoSrc
+            ? `<img src="${logoSrc}" alt="${genericSym}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid #1e2d3d;" onerror="this.style.display='none'">`
+            : "";
+          html += `<div ${clickAttr} style="display:flex;align-items:center;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;${genericSym ? "cursor:pointer;" : ""}" ${genericSym ? 'onmouseenter="this.style.borderColor=\'#c7f284\'" onmouseleave="this.style.borderColor=\'#1e2d3d\'"' : ""}>
             <div style="width:3px;align-self:stretch;background:${rankNum<=3 ? rankColor : "#1e2d3d"};flex-shrink:0"></div>
-            <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 12px;flex:1">
-              <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;padding-top:2px;flex-shrink:0">${item.num}</span>
+            <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;flex:1">
+              <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;flex-shrink:0">${item.num}</span>
+              ${logoFallback}
               <span style="font-size:13px;color:#e8f4f0;line-height:1.5">${inlineMd(content)}</span>
             </div>
           </div>`;
