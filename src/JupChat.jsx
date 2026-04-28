@@ -7308,7 +7308,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           if (mintsNeedingPrice.length > 0) {
             try {
               const pr = await fetch(`${JUP_PRICE_API}?ids=${mintsNeedingPrice.join(",")}`).then(r=>r.json()).catch(()=>({}));
-              mintsNeedingPrice.forEach(mint => { priceMap[mint] = pr?.data?.[mint]?.price || 1; });
+              // v3 format: { [mint]: { usdPrice } } — also fallback to v2 { data: { [mint]: { price } } }
+              mintsNeedingPrice.forEach(mint => { priceMap[mint] = pr?.[mint]?.usdPrice || pr?.data?.[mint]?.price || 1; });
             } catch { mintsNeedingPrice.forEach(mint => { priceMap[mint] = 1; }); }
           }
 
@@ -7447,29 +7448,112 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               await new Promise(r => setTimeout(r, 600));
               push("ai", `▶ Step ${i + 1} of ${steps.length}: preparing **${stepAction.replace(/_/g," ").toLowerCase()}**…`);
             }
-            // Dispatch each step by temporarily overriding action + actionData
-            // We re-use the same dispatch logic by re-calling handleSend with a synthetic msg
-            // Instead, we directly set state for each action type:
-            if (stepAction === "BASKET_SWAP" || stepAction === "SHOW_SWAP") {
-              // Re-dispatch as if AI returned this action
-              const fakeResponse = { action: stepAction, actionData: stepData, text: "" };
-              chainedStepRef.current = fakeResponse;
-            }
             // For each step type, directly trigger the same logic as the main dispatcher
             if (stepAction === "BASKET_SWAP") {
               const bTrades = stepData.trades || [];
               if (!bTrades.length) { push("ai", "No trades in basket step."); continue; }
               if (!walletFull) { push("ai", "Connect your wallet first to execute this step."); break; }
-              push("ai", `Preparing **${bTrades.length} swaps**…`);
+
+              // ── Resolve all unknown mints first ──────────────────────────────
+              const bAllSyms = [...new Set(bTrades.flatMap(t => [
+                (t.from || "USDC").toUpperCase(),
+                (t.to   || "SOL").toUpperCase(),
+              ]))];
+              const bUnknown = bAllSyms.filter(s => !tokenCacheRef.current[s] && !TOKEN_MINTS[s]);
+              if (bUnknown.length) await Promise.all(bUnknown.map(s => resolveToken(s).catch(() => null)));
+
+              // ── Build trade metadata with amounts ────────────────────────────
+              const bMeta = bTrades.map(t => {
+                const fromSym  = (t.from || "USDC").toUpperCase();
+                const toSym    = (t.to   || "SOL").toUpperCase();
+                const fromMint = tokenCacheRef.current[fromSym] || TOKEN_MINTS[fromSym];
+                const toMint   = tokenCacheRef.current[toSym]   || TOKEN_MINTS[toSym];
+                const fromDec  = tokenDecimalsRef.current[fromSym] ?? TOKEN_DECIMALS[fromSym] ?? 6;
+                const toDec    = tokenDecimalsRef.current[toSym]   ?? TOKEN_DECIMALS[toSym]   ?? 9;
+                // Parse k/M shorthand
+                let rawAmtStr = t.amount || "";
+                const kM = rawAmtStr.match(/^([\d.]+)[kK]$/);
+                const mM = rawAmtStr.match(/^([\d.]+)[mM]$/);
+                if (kM) rawAmtStr = String(parseFloat(kM[1]) * 1_000);
+                else if (mM) rawAmtStr = String(parseFloat(mM[1]) * 1_000_000);
+                // Resolve portion → native units
+                let inUnits = parseFloat(rawAmtStr) || 0;
+                if (t.portion && !rawAmtStr) {
+                  const bal = portfolio[fromSym] ?? 0;
+                  const p = (t.portion || "").toLowerCase().trim();
+                  if      (p === "all" || p === "max") inUnits = bal;
+                  else if (p === "half")               inUnits = bal / 2;
+                  else if (p === "quarter")            inUnits = bal / 4;
+                  else { const pm = p.match(/^(\d+(?:\.\d+)?)%$/); if (pm) inUnits = bal * parseFloat(pm[1]) / 100; }
+                } else if (t.amountUSD && !rawAmtStr) {
+                  const px = prices[fromSym] || 1;
+                  inUnits = parseFloat(t.amountUSD) / px;
+                }
+                const atomicAmt = Math.floor(inUnits * Math.pow(10, fromDec));
+                return { fromSym, toSym, fromMint, toMint, fromDec, toDec, inUnits, atomicAmt };
+              });
+
               const bProvider = getActiveProvider();
               if (!bProvider) { push("ai", "Wallet not connected."); break; }
-              // Resolve mints + execute (reuse basket logic inline)
-              const bResolved = bTrades.map(t => ({
-                from: (t.from||"USDC").toUpperCase(), to: (t.to||"USDC").toUpperCase(),
-                amount: t.amount||null, amountUSD: t.amountUSD||null, portion: t.portion||null,
+
+              push("ai", `Preparing **${bMeta.length} swaps** for this step…`);
+
+              // ── Fetch all orders in parallel ─────────────────────────────────
+              const bOrders = await Promise.all(bMeta.map(async m => {
+                try {
+                  if (!m.fromMint || !m.toMint) throw new Error("Unknown token — mint not resolved");
+                  if (m.atomicAmt <= 0) throw new Error("Amount is zero — check balance or input");
+                  const o = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${m.fromMint}&outputMint=${m.toMint}&amount=${m.atomicAmt}&taker=${walletFull}&slippageBps=50`);
+                  if (o?.error) throw new Error(typeof o.error === "object" ? JSON.stringify(o.error) : o.error);
+                  if (!o?.transaction) throw new Error("No transaction returned from Jupiter");
+                  return { ok: true, order: o, meta: m };
+                } catch(e) { return { ok: false, err: e?.message, meta: m }; }
               }));
-              setBasketTrades(bResolved);
-              setShowBasket(true);
+
+              bOrders.filter(o => !o.ok).forEach(o => push("ai", `⚠️ Failed: ${o.meta.fromSym}→${o.meta.toSym}: ${o.err}`));
+              const bValid = bOrders.filter(o => o.ok);
+              if (!bValid.length) { push("ai", "All swaps in this step failed — moving on."); continue; }
+
+              // ── Sign all at once ─────────────────────────────────────────────
+              push("ai", `Requesting wallet approval for **${bValid.length} swap${bValid.length > 1 ? "s" : ""}**…`);
+              let bSigned = [];
+              const bTxObjs = bValid.map(o =>
+                VersionedTransaction.deserialize(Uint8Array.from(atob(o.order.transaction), c => c.charCodeAt(0)))
+              );
+              try {
+                bSigned = bProvider.signAllTransactions
+                  ? await bProvider.signAllTransactions(bTxObjs)
+                  : await Promise.all(bTxObjs.map(tx => bProvider.signTransaction(tx)));
+              } catch(e) {
+                push("ai", `Signing cancelled: ${e?.message || "user rejected"}. Stopping chain.`);
+                break;
+              }
+
+              // ── Execute sequentially ─────────────────────────────────────────
+              let bDone = 0, bFailed = 0;
+              for (let bi = 0; bi < bValid.length; bi++) {
+                const bo = bValid[bi]; const bm = bo.meta;
+                if (bi > 0) await new Promise(r => setTimeout(r, 1200));
+                try {
+                  const execRes = await jupFetch(JUP_SWAP_EXEC, {
+                    method: "POST",
+                    body: { signedTransaction: bytesToB64(bSigned[bi].serialize()), requestId: bo.order.requestId }
+                  });
+                  if (execRes?.error) throw new Error(typeof execRes.error === "object" ? JSON.stringify(execRes.error) : execRes.error);
+                  const sig = execRes?.signature || execRes?.txid;
+                  if (!sig) throw new Error("No signature returned");
+                  bDone++;
+                  const rawOut = execRes?.outAmount ?? execRes?.outputAmount ?? bo.order?.outAmount ?? null;
+                  const outAmt = rawOut != null ? (Number(rawOut) / Math.pow(10, bm.toDec)).toFixed(4) : "?";
+                  push("ai", `[swap-card|${bm.fromSym}|${bm.toSym}|${bm.inUnits.toFixed(4)}|~${outAmt}||${sig}|ok]`);
+                  logTrade({ type:"swap", from:bm.fromSym, to:bm.toSym, amount:bm.inUnits.toFixed(4), out:outAmt, tx:sig });
+                } catch(e) {
+                  bFailed++;
+                  push("ai", `[swap-card|${bm.fromSym}|${bm.toSym}|${bm.inUnits?.toFixed(4)||"?"}|—|—|—|err]\nFailed: ${bm.fromSym}→${bm.toSym}: ${e?.message || "failed"}`);
+                }
+              }
+              push("ai", `**Basket step done** — ${bDone} succeeded, ${bFailed} failed`);
+
             } else if (stepAction === "SHOW_SWAP") {
               const fromSym = (stepData.from||"SOL").toUpperCase();
               const toSym   = (stepData.to||"USDC").toUpperCase();
@@ -7594,7 +7678,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       } else {
         push("ai", text);
       }
-    } catch {
+    } catch(e) {
+      console.error("[ChatFi] send() error:", e);
       push("ai","Connection error. Please check your setup and try again.");
     }
     setTyping(false);
