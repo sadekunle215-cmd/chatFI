@@ -5513,6 +5513,17 @@ function JupChatInner() {
           if (inj?.signTransaction) { const r=[]; for (const tx of txs) r.push(await inj.signTransaction(tx)); return r; }
           throw new Error("Wallet does not support signAllTransactions. Please reconnect.");
         },
+        signMessage: async (msg) => {
+          // Reown provider may expose signMessage directly
+          if (typeof reownProvider.signMessage === "function") return reownProvider.signMessage(msg);
+          // Fall back to injected wallet (Phantom / Solflare / Backpack)
+          const inj = window?.phantom?.solana || window?.backpack?.solana || window?.solflare || window?.solana || null;
+          if (inj?.signMessage) return inj.signMessage(msg);
+          throw new Error(
+            "Your wallet does not support message signing required for Trigger orders. " +
+            "Try Phantom or Solflare browser extension, or use a Limit order via a supported wallet."
+          );
+        },
         isReown: true,
       };
     }
