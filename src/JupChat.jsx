@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Connection, Transaction, VersionedTransaction, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
@@ -523,19 +523,26 @@ const T = {
 // ── Reown AppKit Init ────────────────────────────────────────────────────────
 // Get a free projectId at https://cloud.reown.com
 const REOWN_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f"; // replace with your own
-const _solanaAdapter = new SolanaAdapter();
-createAppKit({
-  adapters: [_solanaAdapter],
-  networks: [solanaMainnet],
-  projectId: REOWN_PROJECT_ID,
-  metadata: {
-    name: "ChatFi",
-    description: "ChatFi — Your personal AI tools on Solana",
-    url: typeof window !== "undefined" ? window.location.origin : "https://chatfi.app",
-    icons: ["https://jup.ag/favicon.ico"],
-  },
-  features: { analytics: false },
-});
+let _reownInitError = null;
+let _solanaAdapter = null;
+try {
+  _solanaAdapter = new SolanaAdapter();
+  createAppKit({
+    adapters: [_solanaAdapter],
+    networks: [solanaMainnet],
+    projectId: REOWN_PROJECT_ID,
+    metadata: {
+      name: "ChatFi",
+      description: "ChatFi — Your personal AI tools on Solana",
+      url: typeof window !== "undefined" ? window.location.origin : "https://chatfi.app",
+      icons: ["https://jup.ag/favicon.ico"],
+    },
+    features: { analytics: false },
+  });
+} catch (e) {
+  _reownInitError = e?.message || String(e);
+  console.error("[ChatFi] Reown AppKit init failed:", e);
+}
 
 const fmt = (text = "") => {
   // Inline markdown helpers
@@ -1824,11 +1831,12 @@ function JupChatInner() {
   const isPremium = (portfolio["CHATFI"] || 0) >= CHATFI_THRESHOLD;
 
   // ── Reown AppKit hooks ─────────────────────────────────────────────────────
-  const { open: reownOpen }                                     = useAppKit();
-  const { address: reownAddress, isConnected: reownConnected }  = useAppKitAccount();
-  const { walletProvider: reownProvider }                       = useAppKitProvider("solana");
-  const { disconnect: reownDisconnect }                         = useDisconnect();
-  const { walletInfo: reownWalletInfo }                         = useWalletInfo();
+  // Guarded: if createAppKit() failed at module level, these hooks throw — catch and degrade.
+  const { open: reownOpen }                                     = (() => { try { return useAppKit(); } catch { return { open: () => {} }; } })();
+  const { address: reownAddress, isConnected: reownConnected }  = (() => { try { return useAppKitAccount(); } catch { return { address: null, isConnected: false }; } })();
+  const { walletProvider: reownProvider }                       = (() => { try { return useAppKitProvider("solana"); } catch { return { walletProvider: null }; } })();
+  const { disconnect: reownDisconnect }                         = (() => { try { return useDisconnect(); } catch { return { disconnect: () => {} }; } })();
+  const { walletInfo: reownWalletInfo }                         = (() => { try { return useWalletInfo(); } catch { return { walletInfo: null }; } })();
   const [connectedWalletIcon, setConnectedWalletIcon]           = useState(null);
   const prevConnectedRef = useRef(false);
 
@@ -11758,6 +11766,26 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
   );
 }
 
+// ─── Error Boundary — catches render crashes and shows them on screen ─────────
+class AppErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e?.message || String(e) }; }
+  componentDidCatch(e, info) { console.error("[ChatFi] Render crash:", e, info); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{ position:"fixed", inset:0, background:"#0d1117", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24, fontFamily:"monospace" }}>
+        <div style={{ color:"#f28484", fontSize:14, fontWeight:700, marginBottom:12 }}>⚠ ChatFi crashed on startup</div>
+        <div style={{ color:"#8fa8b8", fontSize:12, background:"#161e27", border:"1px solid #1e2d3d", borderRadius:8, padding:16, maxWidth:360, wordBreak:"break-word", lineHeight:1.6 }}>
+          {this.state.error}
+        </div>
+        <div style={{ color:"#4d6a7a", fontSize:11, marginTop:16 }}>Check browser console for full stack trace.</div>
+        <button onClick={() => window.location.reload()} style={{ marginTop:20, padding:"8px 20px", background:"#c7f284", color:"#0d1117", border:"none", borderRadius:8, fontWeight:700, fontSize:13, cursor:"pointer" }}>Reload</button>
+      </div>
+    );
+  }
+}
+
 // ─── Root export ─────────────────────────────────────────────────────────────
 export default function JupChat() {
   const appId = import.meta.env.VITE_PRIVY_APP_ID || "";
@@ -11769,6 +11797,12 @@ export default function JupChat() {
     );
   }
   return (
+    <AppErrorBoundary>
+      {_reownInitError && (
+        <div style={{ position:"fixed", top:0, left:0, right:0, zIndex:9999, background:"#2e1a1a", borderBottom:"1px solid #4d2d2d", padding:"10px 16px", fontFamily:"monospace", fontSize:12, color:"#f28484" }}>
+          ⚠ Reown init failed: {_reownInitError} — wallet connect unavailable, social login still works.
+        </div>
+      )}
     <PrivyProvider
       appId={appId}
       config={{
@@ -11796,5 +11830,6 @@ export default function JupChat() {
     >
       <JupChatWithLanding />
     </PrivyProvider>
+    </AppErrorBoundary>
   );
 }
