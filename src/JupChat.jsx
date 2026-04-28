@@ -4304,13 +4304,15 @@ function JupChatInner() {
       const tok           = e.token || {};
       const underlyingTok = e.asset || e.underlyingToken || {};
 
-      // Underlying mint — MUST prefer e.assetMint over tok.address (tok.address is jlToken mint)
-      const mint = e.assetMint || e.mint || tok.address || tok.id || null;
+      // jlToken (receipt) address — do NOT use as the underlying asset mint
+      const jlMint = tok.address || tok.id || null;
+      // Underlying mint — prefer explicit fields; never fall back to jlToken address
+      const mint = e.assetMint || e.asset?.address || e.underlyingToken?.address || e.mint || null;
 
       // Underlying symbol — prefer e.asset.symbol; strip "jl" prefix from jlToken symbols ("jlUSDG"→"USDG")
       const rawSym = underlyingTok.symbol || tok.symbol || e.assetSymbol || e.symbol || "";
       const sym = rawSym.toLowerCase() === "earn"
-        ? (underlyingTok.symbol || "")               // "Earn" is the jlToken name — discard
+        ? (underlyingTok.symbol || e.assetSymbol || tok.name?.replace(/^jl/i, "") || "")
         : (rawSym.startsWith("jl") ? rawSym.slice(2) : rawSym);  // "jlUSDG" → "USDG"
 
       const dec = underlyingTok.decimals ?? tok.decimals ?? e.decimals ?? 6;
@@ -4320,10 +4322,11 @@ function JupChatInner() {
       const amount  = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
       const amountRaw = ua; // keep raw for the withdraw body
       return {
-        _type: "earn",
-        _sym:   sym,
-        _mint:  mint,
-        _dec:   dec,
+        _type:   "earn",
+        _sym:    sym,
+        _mint:   mint,
+        _jlMint: jlMint,
+        _dec:    dec,
         _amt:   amount,
         _amtRaw: amountRaw,
         _name:  underlyingTok.name || (sym ? `Jupiter Lend ${sym}` : null) || tok.name || e.name || "Jupiter Lend",
@@ -4353,6 +4356,32 @@ function JupChatInner() {
       earnPositions = earnArr
         .map(normaliseEarnPos)
         .filter(e => e._amt > 0 || parseFloat(e.shares || 0) > 0);
+
+      // ── Repair pass: positions still missing mint/sym → cross-ref /tokens endpoint ──
+      const needsRepair = earnPositions.some(p => !p._mint || !p._sym);
+      if (needsRepair) {
+        try {
+          const tokData = await jupFetch(`${JUP_EARN_API}/tokens`);
+          const tokArr  = Array.isArray(tokData) ? tokData : (tokData?.data || []);
+          earnPositions = earnPositions.map(pos => {
+            if (pos._mint && pos._sym) return pos;
+            const match = tokArr.find(t =>
+              (pos._jlMint && (
+                t.mint === pos._jlMint || t.address === pos._jlMint ||
+                t.jlToken?.address === pos._jlMint || t.receiptMint === pos._jlMint
+              )) ||
+              (pos._sym && (t.asset?.symbol || t.symbol || "").toUpperCase() === pos._sym.toUpperCase())
+            );
+            if (!match) return pos;
+            return {
+              ...pos,
+              _mint: pos._mint || match.asset?.address || match.address || null,
+              _sym:  pos._sym  || match.asset?.symbol  || match.symbol  || pos._sym,
+              _dec:  pos._dec  ?? match.asset?.decimals ?? match.decimals ?? 6,
+            };
+          });
+        } catch {}
+      }
     } catch {}
 
     // 1b. Portfolio API fallback — only used when /positions returns nothing
@@ -8802,10 +8831,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   style={{ padding:"14px 16px", border:`1px solid ${hasPosition ? T.green+"55" : T.border}`, borderRadius:10, marginBottom:10, background: hasPosition ? `${T.green}08` : T.bg, transition:"all 0.15s", cursor:"default" }}>
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
                     <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:7, flexWrap:"wrap" }}>
                         {v.logoUrl && <img src={v.logoUrl} alt={v.token} style={{ width:20, height:20, borderRadius:"50%", objectFit:"cover", flexShrink:0 }} onError={e=>e.target.style.display="none"} />}
                         <div style={{ fontWeight:600, fontSize:14, color:T.text1 }}>{v.token} Earn Vault</div>
-                        {hasPosition && <span style={{ fontSize:10, background:`${T.green}22`, color:T.green, border:`1px solid ${T.green}44`, borderRadius:6, padding:"1px 6px", fontWeight:600 }}>Deposited</span>}
+                        {hasPosition && (
+                          <span style={{ fontSize:11, background:`${T.green}22`, color:T.green, border:`1px solid ${T.green}44`, borderRadius:6, padding:"2px 8px", fontWeight:700 }}>
+                            {userPos.amount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})} {v.token}
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize:12, color:T.text3, marginTop:2 }}>
                         by Jupiter Lend
@@ -8826,15 +8859,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           </span>
                         )}
                       </div>
-                      {/* ── User position row ── */}
-                      {hasPosition && (
-                        <div style={{ marginTop:8, padding:"6px 10px", background:`${T.green}12`, border:`1px solid ${T.green}33`, borderRadius:7, display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-                          <span style={{ fontSize:11, color:T.text3 }}>Your position</span>
-                          <span style={{ fontSize:13, fontWeight:700, color:T.green }}>
-                            {userPos.amount.toLocaleString(undefined, { minimumFractionDigits:2, maximumFractionDigits:4 })} {v.token}
-                          </span>
-                        </div>
-                      )}
                     </div>
                     <div style={{ textAlign:"right", flexShrink:0, marginLeft:12 }}>
                       <div style={{ fontSize:22, fontWeight:800, color:T.green, lineHeight:1 }}>{v.apyDisplay}</div>
@@ -9905,7 +9929,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       ? pos._amt.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:6})
                       : parseFloat(pos.value||0).toFixed(2);
                     // raw e.assetMint is the top-level underlying asset mint from the API response
-                    const rawAssetMint = pos.assetMint || pos.mint || null;
+                    const rawAssetMint = pos._mint || pos.assetMint || pos.mint || null;
                     // For symbol matching: also try stripping "jl" prefix in case normalise didn't catch it
                     const symForMatch  = (sym && sym !== "Unknown" && sym !== "Earn") ? sym
                       : (pos._sym?.startsWith("jl") ? pos._sym.slice(2) : null);
