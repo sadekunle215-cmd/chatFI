@@ -958,6 +958,169 @@ function TokenMiniChart({ mint, T }) {
   );
 }
 
+// ─── Trending Ticker Bar ──────────────────────────────────────────────────────
+function TrendingTicker({ onTokenClick }) {
+  const [tokens, setTokens] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        // Fetch top trending 24h tokens from Jupiter trending category API
+        const trendRes = await fetch(
+          "https://tokens.jup.ag/tokens/trending?interval=24h&limit=20",
+          { signal: AbortSignal.timeout(8000) }
+        );
+        const trendList = await trendRes.json();
+        const tokenArr = Array.isArray(trendList) ? trendList : [];
+        if (!tokenArr.length) { if (!cancelled) setLoaded(true); return; }
+
+        // Fetch live prices for all mints in one call
+        const mints = tokenArr.map(t => t.address).join(",");
+        const priceRes = await fetch(
+          `https://api.jup.ag/price/v2?ids=${mints}`,
+          { signal: AbortSignal.timeout(8000) }
+        );
+        const priceData = await priceRes.json();
+
+        const enriched = tokenArr
+          .map(t => {
+            const p = priceData?.data?.[t.address];
+            const price = p?.price ? parseFloat(p.price) : null;
+            return { ...t, price };
+          })
+          .filter(t => t.price != null)
+          .slice(0, 15);
+
+        if (!cancelled) { setTokens(enriched); setLoaded(true); }
+      } catch {
+        if (!cancelled) setLoaded(true);
+      }
+    };
+
+    load();
+    const interval = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  if (!loaded || tokens.length === 0) return null;
+
+  const fmtPrice = p => {
+    if (p >= 1000) return `$${p.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+    if (p >= 1)    return `$${p.toFixed(2)}`;
+    if (p >= 0.01) return `$${p.toFixed(4)}`;
+    return `$${p.toExponential(2)}`;
+  };
+
+  // Duplicate list so the marquee loops seamlessly
+  const items = [...tokens, ...tokens];
+
+  return (
+    <div style={{
+      position: "absolute",
+      top: 58,
+      left: 0,
+      right: 0,
+      zIndex: 197,
+      height: 28,
+      overflow: "hidden",
+      background: "rgba(13,17,23,0.95)",
+      borderBottom: "1px solid #1e2d3d",
+      backdropFilter: "blur(6px)",
+      display: "flex",
+      alignItems: "center",
+    }}>
+      {/* Left label */}
+      <div style={{
+        flexShrink: 0,
+        padding: "0 10px",
+        fontSize: 9,
+        fontWeight: 700,
+        color: "#4d6a7a",
+        letterSpacing: "0.1em",
+        textTransform: "uppercase",
+        borderRight: "1px solid #1e2d3d",
+        height: "100%",
+        display: "flex",
+        alignItems: "center",
+        background: "rgba(13,17,23,0.98)",
+        zIndex: 2,
+      }}>
+        🔥 TRENDING
+      </div>
+
+      {/* Scrolling track */}
+      <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+        <style>{`
+          @keyframes tickerScroll {
+            0%   { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+          }
+          .ticker-track {
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+            animation: tickerScroll 45s linear infinite;
+            will-change: transform;
+          }
+          .ticker-track:hover { animation-play-state: paused; }
+          .ticker-item:hover { opacity: 0.75; }
+        `}</style>
+        <div className="ticker-track">
+          {items.map((t, i) => {
+            const chgRaw = t.priceChange24h ?? null;
+            const isUp   = chgRaw == null ? null : chgRaw >= 0;
+            const changeColor = isUp === null ? "#4d6a7a" : isUp ? "#68d391" : "#f28484";
+            const changeStr   = chgRaw == null ? "" : `${isUp ? "+" : ""}${chgRaw.toFixed(2)}%`;
+
+            return (
+              <button
+                key={`${t.address}-${i}`}
+                className="ticker-item"
+                onClick={() => onTokenClick && onTokenClick(t.symbol)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "0 12px 0 0",
+                  height: 28,
+                  flexShrink: 0,
+                  transition: "opacity 0.15s",
+                }}
+              >
+                {t.logoURI && (
+                  <img
+                    src={t.logoURI}
+                    alt={t.symbol}
+                    style={{ width: 13, height: 13, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+                    onError={e => { e.currentTarget.style.display = "none"; }}
+                  />
+                )}
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#c8d8e0", letterSpacing: "-0.1px" }}>
+                  {t.symbol}
+                </span>
+                <span style={{ fontSize: 11, color: "#8fa8b8" }}>
+                  {fmtPrice(t.price)}
+                </span>
+                {changeStr && (
+                  <span style={{ fontSize: 10, fontWeight: 700, color: changeColor }}>
+                    {changeStr}
+                  </span>
+                )}
+                <span style={{ fontSize: 10, color: "#1e2d3d", paddingLeft: 4, userSelect: "none" }}>·</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Blog posts data ──────────────────────────────────────────────────────────
 const BLOG_POSTS = [
   {
@@ -1873,6 +2036,11 @@ function JupChatInner() {
 
   // ── Jupiter official docs — fetched once, injected into AI system prompt ────
   const [jupDocs, setJupDocs] = useState("");
+
+  // ── Trending Ticker click handler ────────────────────────────────────────────
+  const handleTickerClick = useCallback((symbol) => {
+    if (symbol) send(`${symbol} info`);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // UI
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -7513,6 +7681,9 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 </div>
               </div>
 
+              {/* ── Trending Ticker Bar ─────────────────────────────────────── */}
+              <TrendingTicker onTokenClick={handleTickerClick} />
+
               {/* How It Works dropdown — full width panel below nav */}
               {showHowItWorks && (
                 <div style={{
@@ -7705,7 +7876,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         })()}
 
         {/* Messages */}
-        <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"74px 20px 24px", backgroundImage:"radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)", backgroundSize:"24px 24px" }}>
+        <div ref={chatContainerRef} style={{ flex:1, overflowY:"auto", padding:"102px 20px 24px", backgroundImage:"radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)", backgroundSize:"24px 24px" }}>
           {msgs.map(m => (
             <div key={m.id} className="msg-enter" style={{ marginBottom:20, display:"flex", gap:12, justifyContent:m.role==="user"?"flex-end":"flex-start", minWidth:0, overflow:"hidden" }}>
               {m.role==="ai" && (
