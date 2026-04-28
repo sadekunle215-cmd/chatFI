@@ -1907,7 +1907,7 @@ function JupChatInner() {
   const [recurringOrdersLoading, setRecurringOrdersLoading] = useState(false);
 
   // Trigger v2 state — JWT, vault, orders list, active order type
-  const trigJwtRef                                    = { current: null };  // in-memory only, never persisted
+  const trigJwtRef                                    = useRef(null);  // in-memory only, never persisted
   const [trigV2Orders, setTrigV2Orders]               = useState([]);
   const [showTrigOrders, setShowTrigOrders]           = useState(false);
   const [trigOrdersLoading, setTrigOrdersLoading]     = useState(false);
@@ -2198,7 +2198,7 @@ function JupChatInner() {
       send(query);
     };
     return () => { delete window.__chatfiSend; };
-  });
+  }, [send]);
 
   // Render WalletConnect QR code when URI is ready
   useEffect(() => {
@@ -4399,7 +4399,7 @@ function JupChatInner() {
         }
         const signedSetup = await provider.signTransaction(setupTx);
         const setupSerialized = signedSetup.serialize ? signedSetup.serialize() : signedSetup.serialize();
-        const setupRes = await jupFetch("SOLANA_RPC", {
+        const setupRes = await jupFetch(SOLANA_RPC, {
           method: "POST",
           body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(setupSerialized), { encoding:"base64", skipPreflight:false }] },
         });
@@ -4414,7 +4414,7 @@ function JupChatInner() {
       const signedTx = await provider.signTransaction(tx);
 
       // 3. Send via RPC — use skipPreflight:true for multiply (simulation misreads atomic flashloan)
-      const rpcRes = await jupFetch("SOLANA_RPC", {
+      const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
         body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:false }] },
       });
@@ -4423,7 +4423,7 @@ function JupChatInner() {
 
       // Verify tx landed on-chain before confirming success
       await new Promise(r => setTimeout(r, 3000));
-      const confirmRes = await jupFetch("SOLANA_RPC", {
+      const confirmRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
         body: { jsonrpc:"2.0", id:1, method:"getSignatureStatuses", params:[[signature],{searchTransactionHistory:true}] },
       });
@@ -4756,7 +4756,7 @@ function JupChatInner() {
       const bytes    = b64ToBytes(data.transaction);
       const tx       = VersionedTransaction.deserialize(bytes);
       const signedTx = await provider.signTransaction(tx);
-      const rpcRes   = await jupFetch("SOLANA_RPC", {
+      const rpcRes   = await jupFetch(SOLANA_RPC, {
         method:"POST",
         body:{ jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
