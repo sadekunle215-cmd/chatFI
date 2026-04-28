@@ -211,16 +211,27 @@ export default async function handler(req, res) {
       ].includes(debtMint.toBase58());
       const slippageBps = isStable ? 50 : 300; // 3% for volatile pairs to avoid 6025
 
-      const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN };
-      const [flashBorrowIx, flashPayIx, quoteRes] = await Promise.all([
-        getFlashBorrowIx(flashParams),
-        getFlashPaybackIx(flashParams),
-        fetch(`${SWAP_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${borrowBN.toString()}&slippageBps=${slippageBps}`, { headers: jupHeaders })
-          .then(r => r.json()),
-      ]);
+      // Fetch swap quote first — flash loan ixs need a settled RPC state to avoid
+      // internal SDK assertion failures when called concurrently with other RPC reads
+      const quoteRes = await fetch(
+        `${SWAP_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${borrowBN.toString()}&slippageBps=${slippageBps}`,
+        { headers: jupHeaders }
+      ).then(r => r.json());
 
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
+
+      // Now fetch flash loan ixs after quote is settled
+      const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN };
+      let flashBorrowIx, flashPayIx;
+      try {
+        [flashBorrowIx, flashPayIx] = await Promise.all([
+          getFlashBorrowIx(flashParams),
+          getFlashPaybackIx(flashParams),
+        ]);
+      } catch (e) {
+        return res.status(502).json({ error: `Flash loan setup failed: ${e.message}` });
+      }
 
       // Step 1: create position NFT — getInitPositionIx returns the real nftId
       // This MUST be confirmed on-chain before the main flashloan tx (error 6011 = position doesn't exist yet)
@@ -293,16 +304,26 @@ export default async function handler(req, res) {
         flashColBN = new BN(withdrawAmount.toString());
       }
 
-      const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN };
-      const [flashBorrowIx, flashPayIx, quoteRes] = await Promise.all([
-        getFlashBorrowIx(flashParams),
-        getFlashPaybackIx(flashParams),
-        fetch(`${SWAP_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=150`, { headers: jupHeaders })
-          .then(r => r.json()),
-      ]);
+      // Fetch swap quote first — flash loan ixs need a settled RPC state to avoid
+      // internal SDK assertion failures when called concurrently with other RPC reads
+      const quoteRes = await fetch(
+        `${SWAP_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=150`,
+        { headers: jupHeaders }
+      ).then(r => r.json());
 
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Unwind quote failed: ${quoteRes.error ?? "No route"}` });
+
+      const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN };
+      let flashBorrowIx, flashPayIx;
+      try {
+        [flashBorrowIx, flashPayIx] = await Promise.all([
+          getFlashBorrowIx(flashParams),
+          getFlashPaybackIx(flashParams),
+        ]);
+      } catch (e) {
+        return res.status(502).json({ error: `Flash loan setup failed: ${e.message}` });
+      }
 
       const opColAmount  = isFullUnwind ? MAX_WITHDRAW : new BN(withdrawAmount.toString()).neg();
       const opDebtAmount = isFullUnwind ? MAX_REPAY    : new BN(quoteRes.otherAmountThreshold.toString()).neg();
