@@ -2848,17 +2848,20 @@ function JupChatInner() {
             unknownMints.slice(0, 15).map(({ mint, uiAmt }) =>
               fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint)
                 .then(r => r.json())
-                .then(meta => ({ mint, uiAmt, sym: meta?.symbol || mint.slice(0,6), logo: meta?.logoURI }))
-                .catch(() => ({ mint, uiAmt, sym: mint.slice(0,6), logo: null }))
+                .then(meta => ({ mint, uiAmt, sym: meta?.symbol || mint.slice(0,6), name: meta?.name || null, logo: meta?.logoURI || null }))
+                .catch(() => ({ mint, uiAmt, sym: mint.slice(0,6), name: null, logo: null }))
             )
           );
           for (const r of resolved) {
             if (r.status === "fulfilled") {
-              const { mint, uiAmt, sym, logo } = r.value;
+              const { mint, uiAmt, sym, name, logo } = r.value;
               const finalSym = balances[sym] !== undefined ? mint.slice(0,8) : sym;
               balances[finalSym] = uiAmt;
               mintMap[finalSym]  = mint;
-              if (logo) logoMap[finalSym] = logo;
+              // Always store a logo — use CDN fallback if API returned nothing
+              logoMap[finalSym] = logo || `https://img.jup.ag/tokens/${mint}`;
+              if (name && !results.nameMap) results.nameMap = {};
+              if (name) results.nameMap[finalSym] = name;
               if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
             }
           }
@@ -2867,6 +2870,7 @@ function JupChatInner() {
         results.walletBalances = balances;
         results.mintMap        = mintMap;
         results.logoMap        = logoMap;
+        if (!results.nameMap) results.nameMap = {};
         setPortfolio(balances);
       }
     } catch {}
@@ -9942,7 +9946,10 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           })
                           .map(([sym, bal]) => {
                           const usdVal  = portfolioData.prices?.[sym] ? (bal * portfolioData.prices[sym]) : null;
-                          const logoUrl = portfolioData.logoMap?.[sym] || null;
+                          const mintAddr = portfolioData.mintMap?.[sym];
+                          const logoUrl = portfolioData.logoMap?.[sym]
+                            || (mintAddr ? `https://img.jup.ag/tokens/${mintAddr}` : null);
+                          const tokenName = portfolioData.nameMap?.[sym] || null;
                           return (
                             <div key={sym} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:"1px solid " + T.border, borderRadius:10 }}>
                               <div style={{ display:"flex", alignItems:"center", gap:8 }}>
@@ -9958,7 +9965,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                                 </div>
                                 <div>
                                   <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{sym}</div>
-                                  {portfolioData.prices?.[sym] && <div style={{ fontSize:10, color:T.text3 }}>${portfolioData.prices[sym] < 1 ? portfolioData.prices[sym].toFixed(4) : portfolioData.prices[sym].toFixed(2)}</div>}
+                                  {tokenName && <div style={{ fontSize:10, color:T.text3, marginTop:1 }}>{tokenName}</div>}
+                                  {!tokenName && portfolioData.prices?.[sym] && <div style={{ fontSize:10, color:T.text3 }}>${portfolioData.prices[sym] < 1 ? portfolioData.prices[sym].toFixed(4) : portfolioData.prices[sym].toFixed(2)}</div>}
                                 </div>
                               </div>
                               <div style={{ textAlign:"right" }}>
