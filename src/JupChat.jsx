@@ -4488,8 +4488,22 @@ function JupChatInner() {
         });
         const setupSig = setupRes?.result;
         if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction failed.");
-        // Wait for position NFT to confirm on-chain before sending main flashloan tx (6011 = NFT not found)
-        await new Promise(r => setTimeout(r, 8000));
+        // Poll until setup tx confirms on-chain before sending main flashloan tx
+        // (hard sleep is unreliable — slow chain can leave position NFT not yet created → error 6011)
+        {
+          const deadline = Date.now() + 60_000;
+          while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 2000));
+            const statusRes = await jupFetch(SOLANA_RPC, {
+              method: "POST",
+              body: { jsonrpc:"2.0", id:1, method:"getSignatureStatuses",
+                      params:[[setupSig], { searchTransactionHistory: true }] },
+            });
+            const st = statusRes?.result?.value?.[0];
+            if (st?.err) throw new Error("Setup tx failed on-chain: " + JSON.stringify(st.err));
+            if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) break;
+          }
+        }
       }
 
       // 2b. Deserialize + sign main multiply tx
