@@ -1049,7 +1049,7 @@ function TrendingTicker({ onTokenClick }) {
         background: "rgba(13,17,23,0.98)",
         zIndex: 2,
       }}>
-        🔥 TRENDING
+        TRENDING
       </div>
 
       {/* Scrolling track */}
@@ -1075,10 +1075,13 @@ function TrendingTicker({ onTokenClick }) {
             const isUp   = chgRaw == null ? null : chgRaw >= 0;
             const changeColor = isUp === null ? "#4d6a7a" : isUp ? "#68d391" : "#f28484";
             const changeStr   = chgRaw == null ? "" : `${isUp ? "+" : ""}${chgRaw.toFixed(2)}%`;
+            // Jupiter API returns icon or logoURI; fallback to img.jup.ag CDN
+            const addr = t.address || t.id || t.mint;
+            const logoSrc = t.icon || t.logoURI || t.logo || (addr ? `https://img.jup.ag/tokens/${addr}` : null);
 
             return (
               <button
-                key={`${t.address}-${i}`}
+                key={`${addr}-${i}`}
                 className="ticker-item"
                 onClick={() => onTokenClick && onTokenClick(t.symbol)}
                 style={{
@@ -1088,17 +1091,17 @@ function TrendingTicker({ onTokenClick }) {
                   display: "inline-flex",
                   alignItems: "center",
                   gap: 5,
-                  padding: "0 12px 0 0",
+                  padding: "0 14px 0 6px",
                   height: 28,
                   flexShrink: 0,
                   transition: "opacity 0.15s",
                 }}
               >
-                {t.logoURI && (
+                {logoSrc && (
                   <img
-                    src={t.logoURI}
+                    src={logoSrc}
                     alt={t.symbol}
-                    style={{ width: 13, height: 13, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+                    style={{ width: 14, height: 14, borderRadius: "50%", objectFit: "cover", flexShrink: 0, border: "1px solid #1e2d3d" }}
                     onError={e => { e.currentTarget.style.display = "none"; }}
                   />
                 )}
