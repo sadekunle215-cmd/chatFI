@@ -183,6 +183,9 @@ const TOKEN_MINTS = {
   ORCA:    "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",
   POPCAT:  "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
   TRUMP:   "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN",
+  USDG:    "2u1tszSeqhFYNNWeFaqhSZz4M9Jy7LCKV5MStNRDRJ3",  // Global Dollar (Paxos)
+  USDS:    "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA",  // USDS stablecoin
+  EURC:    "HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr", // EURC (Circle Euro)
   // Bridged major assets — prevents meme-token collision on common tickers
   BTC:     "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",  // Wormhole WBTC
   WBTC:    "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",
@@ -3588,7 +3591,7 @@ function JupChatInner() {
             return r.toFixed(2) + "%";
           };
 
-          const decimals = v.asset?.decimals ?? v.decimals ?? 6;
+          const decimals = v.asset?.decimals ?? v.token?.decimals ?? v.decimals ?? 6;
           // token_exchange_price (scaled 1e12): shares → underlying. liquidity_exchange_price excludes rewards.
           const tokenExchangePrice   = parseFloat(v.tokenExchangePrice  || v.token_exchange_price  || 0);
           const liquidityExchangePrice = parseFloat(v.liquidityExchangePrice || v.liquidity_exchange_price || 0);
@@ -3598,9 +3601,9 @@ function JupChatInner() {
           const utilization  = totalAssets > 0 ? Math.min(100, Math.round((totalBorrows / totalAssets) * 100)) : null;
           return {
             id:           v.id || v.address || Math.random().toString(36).slice(2),
-            name:         v.name || `Jupiter Lend ${v.asset?.symbol || v.symbol || ""}`,
-            token:        v.asset?.symbol || v.symbol || "SOL",
-            assetMint:    v.asset?.address || v.assetMint || v.mint || v.address || null,
+            name:         v.name || `Jupiter Lend ${v.asset?.symbol || v.token?.symbol || v.symbol || ""}`,
+            token:        v.asset?.symbol || v.token?.symbol || v.symbol || "SOL",
+            assetMint:    v.asset?.address || v.token?.address || v.token?.id || v.assetMint || v.mint || v.address || null,
             assetDecimals: decimals,
             apy:          apyVal,
             apyDisplay:   fmtApy(apyVal),
@@ -3640,11 +3643,12 @@ function JupChatInner() {
       }
       const map = {};
       earnArr.forEach(e => {
-        const sym = (e.asset?.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
+        const sym = (e.token?.symbol || e.asset?.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
         if (!sym) return;
-        const dec = e.asset?.decimals ?? e.decimals ?? 6;
+        const dec = e.token?.decimals ?? e.asset?.decimals ?? e.decimals ?? 6;
+        const ub  = parseFloat(e.underlyingBalance || 0);
         const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
-        const amount = ua > 1e6 ? ua / Math.pow(10, dec) : ua;
+        const amount = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
         const shares = parseFloat(e.shares || 0);
         if (amount > 0 || shares > 0) {
           map[sym] = { amount, amountRaw: ua, shares, decimals: dec };
@@ -3707,82 +3711,6 @@ function JupChatInner() {
   };
 
   // ── Earn withdraw — POST /lend/v1/earn/withdraw ────────────────────────────
-  // ── Helper: resolve assetMint for an earn vault when it's missing ──────────
-  // The portfolio API fallback gives positions with symbol="Earn" and no mint.
-  // Strategy: (1) use vault.assetMint if already set, (2) match earnVaults by symbol,
-  // (3) if symbol is generic ("Earn"/"Token"), use the single loaded vault or fetch /tokens,
-  // (4) walk wallet token accounts looking for a known jlToken receipt mint.
-  const resolveEarnAssetMint = async (vault) => {
-    if (vault.assetMint) return { mint: vault.assetMint, decimals: vault.assetDecimals || 6 };
-
-    const sym = (vault.token || "").toUpperCase();
-    const isGeneric = !sym || sym === "EARN" || sym === "TOKEN" || sym === "JLTOKEN";
-
-    // 1. Search loaded earnVaults by symbol
-    if (!isGeneric) {
-      const cached = earnVaults.find(v => v.token?.toUpperCase() === sym);
-      if (cached?.assetMint) return { mint: cached.assetMint, decimals: cached.assetDecimals || 6 };
-    }
-
-    // 2. Fetch /tokens live to get full vault list
-    let tokArr = [];
-    try {
-      const tokData = await jupFetch(`${JUP_EARN_API}/tokens`);
-      tokArr = Array.isArray(tokData) ? tokData : (tokData?.data || []);
-      // Cache into earnVaults
-      if (tokArr.length > 0 && earnVaults.length === 0) {
-        const normalized = tokArr.map(v => ({
-          token: v.asset?.symbol || v.symbol || "",
-          assetMint: v.asset?.address || v.assetMint || v.mint || v.address || null,
-          assetDecimals: v.asset?.decimals ?? v.decimals ?? 6,
-          name: v.name || `Jupiter Lend ${v.asset?.symbol || ""}`,
-        }));
-        setEarnVaults(prev => prev.length ? prev : normalized);
-      }
-    } catch {}
-
-    // 3a. If we have a real symbol, match it
-    if (!isGeneric && tokArr.length) {
-      const match = tokArr.find(t => (t.asset?.symbol || t.symbol || "").toUpperCase() === sym);
-      if (match) {
-        const mint = match.asset?.address || match.assetMint || match.mint || match.address || null;
-        if (mint) return { mint, decimals: match.asset?.decimals ?? match.decimals ?? 6 };
-      }
-    }
-
-    // 3b. Generic symbol + only one vault available → must be that one
-    if (isGeneric && tokArr.length === 1) {
-      const match = tokArr[0];
-      const mint = match.asset?.address || match.assetMint || match.mint || match.address || null;
-      if (mint) return { mint, decimals: match.asset?.decimals ?? match.decimals ?? 6 };
-    }
-
-    // 4. Try re-fetching the user's earn positions directly — they contain the real asset field
-    try {
-      const posRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-      const posRaw = await posRes.json();
-      const posArr = Array.isArray(posRaw) ? posRaw
-        : posRaw?.data || posRaw?.positions || posRaw?.result || posRaw?.items || [];
-      const pos = Array.isArray(posArr) ? posArr[0] : null;
-      if (pos) {
-        const mint = pos.asset?.address || pos.assetMint || pos.mint || null;
-        const dec  = pos.asset?.decimals ?? pos.decimals ?? 6;
-        if (mint) return { mint, decimals: dec };
-        // Also try matching by symbol from this fresh data
-        const freshSym = (pos.asset?.symbol || pos.assetSymbol || "").toUpperCase();
-        if (freshSym && !isGeneric || tokArr.length === 0) {
-          const v = tokArr.find(t => (t.asset?.symbol || t.symbol || "").toUpperCase() === freshSym);
-          if (v) {
-            const m = v.asset?.address || v.assetMint || v.mint || v.address || null;
-            if (m) return { mint: m, decimals: v.asset?.decimals ?? v.decimals ?? 6 };
-          }
-        }
-      }
-    } catch {}
-
-    return null; // all strategies exhausted
-  };
-
   const doEarnWithdraw = async () => {
     const { vault, amount } = earnWithdraw;
     if (!amount || parseFloat(amount) <= 0) return;
@@ -3790,15 +3718,57 @@ function JupChatInner() {
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
 
-    // Resolve assetMint using all available strategies
-    const resolved = await resolveEarnAssetMint(vault);
-    if (!resolved) {
-      push("ai", `Could not resolve the asset mint for **${vault.name}**. Please withdraw directly at [jup.ag/lend](https://jup.ag/lend).`);
-      return;
-    }
-    const { mint: assetMint, decimals } = resolved;
-    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
+    let assetMint = vault.assetMint;
+    let decimals  = vault.assetDecimals || 6;
 
+    // If assetMint is still missing, resolve it by:
+    // 1. Re-fetching the user's earn positions (token.address is the real mint per API docs)
+    // 2. Fetching /tokens and matching by symbol
+    if (!assetMint) {
+      const sym = (vault.token || "").toUpperCase();
+      // Try cached earnVaults first
+      const cached = earnVaults.find(v => v.token?.toUpperCase() === sym);
+      if (cached?.assetMint) {
+        assetMint = cached.assetMint;
+        decimals  = cached.assetDecimals || decimals;
+      } else {
+        try {
+          // Re-fetch positions — token.address is the mint
+          const posRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+          const posRaw = await posRes.json();
+          const posArr = Array.isArray(posRaw) ? posRaw : (posRaw?.data || posRaw?.positions || []);
+          for (const p of posArr) {
+            const pSym = (p.token?.symbol || p.asset?.symbol || "").toUpperCase();
+            const pMint = p.token?.address || p.token?.id || p.asset?.address || null;
+            if (pMint && (!sym || sym === "EARN" || sym === "TOKEN" || pSym === sym)) {
+              assetMint = pMint;
+              decimals  = p.token?.decimals ?? p.asset?.decimals ?? decimals;
+              break;
+            }
+          }
+        } catch {}
+      }
+      // Last resort: fetch /tokens
+      if (!assetMint) {
+        try {
+          const tokData = await jupFetch(`${JUP_EARN_API}/tokens`);
+          const tokArr  = Array.isArray(tokData) ? tokData : (tokData?.data || []);
+          const match   = tokArr.find(t =>
+            (t.asset?.symbol || t.token?.symbol || t.symbol || "").toUpperCase() === sym
+          ) || (tokArr.length === 1 ? tokArr[0] : null);
+          if (match) {
+            assetMint = match.asset?.address || match.token?.address || match.token?.id || match.assetMint || match.mint || match.address || null;
+            decimals  = match.asset?.decimals ?? match.token?.decimals ?? match.decimals ?? decimals;
+          }
+        } catch {}
+      }
+      if (!assetMint) {
+        push("ai", `Could not resolve the asset mint for **${vault.name}**. Please withdraw directly at [jup.ag/lend](https://jup.ag/lend).`);
+        return;
+      }
+    }
+
+    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
     setShowEarnWithdraw(false);
     push("ai", `Preparing withdrawal of **${amount} ${vault.token}** from **${vault.name}**…`);
     try {
@@ -4325,10 +4295,6 @@ function JupChatInner() {
     if (!walletFull) { push("ai", "Connect your wallet first to view your Lend positions."); return; }
     setLendPosLoading(true);
     setShowLendPos(true);
-
-    // 0. Pre-load earnVaults so assetMint is available for every position's Withdraw button.
-    //    Run in parallel with position fetch — don't await here, just kick it off.
-    let vaultsPromise = earnVaults.length > 0 ? Promise.resolve(earnVaults) : fetchEarnVaults().catch(() => []);
 
     // 1. Earn positions — direct fetch (same pattern as fetchPortfolioData, NOT through proxy)
     let earnPositions = [];
@@ -9198,8 +9164,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     const perpUsd = (portfolioData.perpPositions || []).reduce((sum, p) => sum + parseFloat(p.sizeUsd || 0), 0);
                     const earnUsd = (portfolioData.earnPositions || []).reduce((sum, e) => {
                       const ua = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
-                      const sym = e.asset?.symbol || e.assetSymbol || "?";
-                      return sum + (ua > 1e6 ? ua / Math.pow(10, e.asset?.decimals ?? 6) : ua) * (portfolioData.prices?.[sym] || 0);
+                      const sym = e.token?.symbol || e.asset?.symbol || e.assetSymbol || "?";
+                      return sum + (ua > 1e6 ? ua / Math.pow(10, e.token?.decimals ?? e.asset?.decimals ?? 6) : ua) * (portfolioData.prices?.[sym] || 0);
                     }, 0);
                     const lpUsd = (portfolioData.lpPositions || []).reduce((sum, p) => sum + parseFloat(p.value || 0), 0);
                     const stakedUsd = (() => {
@@ -9411,9 +9377,9 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         </div>
                         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                           {earnPos.slice(0,5).map((e, i) => {
-                            const sym = e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
+                            const sym = e.token?.symbol || e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
                             const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
-                            const dec = e.asset?.decimals ?? e.decimals ?? 6;
+                            const dec = e.token?.decimals ?? e.asset?.decimals ?? e.decimals ?? 6;
                             const amt = ua > 1e6 ? (ua/Math.pow(10,dec)).toFixed(4)
                                       : ua > 0   ? ua.toFixed(4)
                                       : parseFloat(e.value||0).toFixed(2);
@@ -9876,51 +9842,48 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                   {/* ── Earn deposits ── */}
                   {lendPositions.filter(p => p._type === "earn").map((pos, i) => {
-                    const rawSym = pos.asset?.symbol || pos.assetSymbol || pos.symbol || "";
-                    // "Earn" / "Token" / "" are generic jlToken names from the portfolio fallback —
-                    // not real asset symbols. Don't use them for vault matching.
-                    const isGenericSym = !rawSym || ["EARN","TOKEN","JLTOKEN",""].includes(rawSym.toUpperCase());
-                    const sym = isGenericSym ? "Earn" : rawSym;
-                    const dec = pos.asset?.decimals ?? pos.decimals ?? 6;
+                    const sym = pos.token?.symbol || pos.asset?.symbol || pos.assetSymbol || pos.symbol || "Token";
+                    const dec = pos.token?.decimals ?? pos.asset?.decimals ?? pos.decimals ?? 6;
+                    // underlyingBalance is the pre-scaled human-readable amount from the API
+                    // underlyingAssets is the raw integer (needs dividing by 10^dec if > 1e6)
+                    const underlyingBalance = parseFloat(pos.underlyingBalance || 0);
                     const ua  = parseFloat(pos.underlyingAssets || pos.underlying_assets || pos.amount || pos.balance || pos.depositedAmount || 0);
-                    const amt = ua > 1e6 ? (ua / Math.pow(10, dec)).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})
-                              : ua > 0   ? ua.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})
+                    const amt = underlyingBalance > 0
+                              ? underlyingBalance.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:6})
+                              : ua > 1e6 ? (ua / Math.pow(10, dec)).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:6})
+                              : ua > 0   ? ua.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:6})
                               : parseFloat(pos.value||0).toFixed(2);
-                    // Extract assetMint from the position data itself — most reliable source
-                    const posAssetMint = pos.asset?.address || pos.assetMint || pos.mint || pos.assetAddress || null;
-                    // Vault matching: (1) mint equality, (2) symbol match if non-generic,
-                    // (3) if generic symbol + only one vault loaded → that vault is it
+                    // token.address is the real underlying asset mint (per Jupiter Earn API docs)
+                    // pos.token is the real underlying asset (per Jupiter Earn /positions API docs)
+                    // pos.token.address / pos.token.id = the asset mint to use for withdraw
+                    const posAssetMint = pos.token?.address || pos.token?.id || pos.asset?.address || pos.assetMint || pos.mint || pos.assetAddress || null;
+                    // Match vault: mint equality first (most reliable), then symbol
                     const matchVault = earnVaults.find(v =>
                       (posAssetMint && v.assetMint && v.assetMint === posAssetMint) ||
-                      (!isGenericSym && v.token?.toUpperCase() === rawSym.toUpperCase())
-                    ) || (isGenericSym && earnVaults.length === 1 ? earnVaults[0] : null);
-                    // Display symbol: prefer vault name, fall back to rawSym, last resort "Earn"
-                    const displaySym = matchVault?.token || (isGenericSym ? "?" : rawSym);
+                      (sym && sym !== "Token" && v.token?.toUpperCase() === sym.toUpperCase())
+                    );
+                    // If we have the mint from the position, build a stub vault even without a matchVault
+                    const effectiveVault = matchVault || (posAssetMint
+                      ? { name:`Jupiter Lend ${sym}`, token: sym, apyDisplay:"—", tvl:0,
+                          assetMint: posAssetMint, assetDecimals: dec }
+                      : null);
                     return (
                       <div key={`earn-${i}`} style={{ padding:"12px 14px", border:`1px solid ${T.green}44`, borderRadius:10, background:`${T.green}08` }}>
                         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
                           <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>
-                            {displaySym} Earn Deposit
+                            {sym} Earn Deposit
                           </div>
-                          {matchVault && <span style={{ fontSize:12, fontWeight:700, color:T.green }}>{matchVault.apyDisplay} APY</span>}
+                          {effectiveVault?.apyDisplay && effectiveVault.apyDisplay !== "—" && <span style={{ fontSize:12, fontWeight:700, color:T.green }}>{effectiveVault.apyDisplay} APY</span>}
                         </div>
                         <div style={{ padding:"8px 12px", background:`${T.green}12`, border:`1px solid ${T.green}33`, borderRadius:8, marginBottom:10, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                           <span style={{ fontSize:11, color:T.text3 }}>Deposited balance</span>
-                          <span style={{ fontSize:14, fontWeight:700, color:T.green }}>{amt} {displaySym}</span>
+                          <span style={{ fontSize:14, fontWeight:700, color:T.green }}>{amt} {sym}</span>
                         </div>
                         <button
                           onClick={() => {
-                            const posAmt = ua > 1e6 ? ua / Math.pow(10, dec) : ua;
-                            // Resolve the best mint: position data > matchVault > earnVaults by sym
-                            const resolvedMint = posAssetMint
-                              || matchVault?.assetMint
-                              || (!isGenericSym && earnVaults.find(v => v.token?.toUpperCase() === rawSym.toUpperCase())?.assetMint)
-                              || null;
-                            const vault = matchVault
-                              ? { ...matchVault, assetMint: matchVault.assetMint || resolvedMint }
-                              : { name: `Jupiter Lend ${displaySym}`, token: displaySym,
-                                  apyDisplay: "—", tvl: 0, assetMint: resolvedMint, assetDecimals: dec };
-                            setEarnWithdraw({ vault, amount:"", positionAmount: posAmt });
+                            const posAmt = underlyingBalance > 0 ? underlyingBalance
+                              : ua > 1e6 ? ua / Math.pow(10, dec) : ua;
+                            setEarnWithdraw({ vault: effectiveVault || { name:`Jupiter Lend ${sym}`, token:sym, apyDisplay:"—", tvl:0, assetMint: null, assetDecimals: dec }, amount:"", positionAmount: posAmt });
                             setShowEarnWithdraw(true);
                             setShowLendPos(false);
                           }}
