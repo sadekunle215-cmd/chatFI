@@ -103,7 +103,7 @@ function dedupeAlts(alts) {
 async function buildTx(connection, signerPubkey, ixs, alts = []) {
   if (!ixs?.length) throw new Error("No instructions provided.");
   const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
-  const { blockhash } = await connection.getLatestBlockhash("confirmed");
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
   const validAlts = (alts || []).filter(a => a && a.key && a.state);
   console.log(`[buildTx] ixs=${ixs.length} alts=${validAlts.length}`);
   const msg = new TransactionMessage({
@@ -114,7 +114,7 @@ async function buildTx(connection, signerPubkey, ixs, alts = []) {
   const txBytes = new VersionedTransaction(msg).serialize();
   console.log(`[buildTx] size=${txBytes.length} bytes`);
   if (txBytes.length > 1232) throw new Error(`Transaction too large: ${txBytes.length} bytes (max 1232).`);
-  return Buffer.from(txBytes).toString("base64");
+  return { transaction: Buffer.from(txBytes).toString("base64"), blockhash, lastValidBlockHeight };
 }
 
 async function getAtaIxIfNeeded(connection, mint, owner) {
@@ -257,13 +257,18 @@ export default async function handler(req, res) {
       });
 
       // getOperateIx with positionId:0 returns the newly assigned nftId as positionId
-      const { ixs, positionId: newPositionId, addressLookupTableAccounts } = result;
+      // SKILL.md Example 1 uses `nftId`; the Deposit section docs show `positionId`.
+      // Handle both to be safe across SDK versions.
+      const { ixs, positionId: sdkPositionId, nftId: sdkNftId, addressLookupTableAccounts } = result;
+      const newPositionId = sdkNftId ?? sdkPositionId;
 
       console.log(`[initPosition] positionId=${newPositionId} ixs=${ixs.length}`);
 
-      const transaction = await buildTx(connection, signerPubkey, ixs, addressLookupTableAccounts ?? []);
+      const { transaction, blockhash, lastValidBlockHeight } = await buildTx(connection, signerPubkey, ixs, addressLookupTableAccounts ?? []);
       return res.status(200).json({
         transaction,
+        blockhash,
+        lastValidBlockHeight,
         positionId: newPositionId, // Pass back to client for use in Step 2
       });
     }
@@ -361,8 +366,8 @@ export default async function handler(req, res) {
       const allIxs = [...ataIxs, flashBorrowIx, swapIx, ...operateResult.ixs, flashPaybackIx];
       console.log(`[open] ixs=${allIxs.length} (atas=${ataIxs.length} operate=${operateResult.ixs.length})`);
 
-      const transaction = await buildTx(connection, signerPubkey, allIxs, allAlts);
-      return res.status(200).json({ transaction });
+      const { transaction, blockhash, lastValidBlockHeight } = await buildTx(connection, signerPubkey, allIxs, allAlts);
+      return res.status(200).json({ transaction, blockhash, lastValidBlockHeight });
     }
 
     // ── UNWIND ────────────────────────────────────────────────────────────────
@@ -435,8 +440,8 @@ export default async function handler(req, res) {
       const allIxs = [flashBorrowIx, swapIx, ...operateResult.ixs, flashPaybackIx];
       console.log(`[unwind] ixs=${allIxs.length}`);
 
-      const transaction = await buildTx(connection, signerPubkey, allIxs, allAlts);
-      return res.status(200).json({ transaction });
+      const { transaction, blockhash, lastValidBlockHeight } = await buildTx(connection, signerPubkey, allIxs, allAlts);
+      return res.status(200).json({ transaction, blockhash, lastValidBlockHeight });
     }
 
     // ── SIMPLE OPS: deposit | borrow | repay | withdraw ───────────────────────
@@ -467,8 +472,8 @@ export default async function handler(req, res) {
         connection,
       });
 
-      const transaction = await buildTx(connection, signerPubkey, ixs, addressLookupTableAccounts);
-      return res.status(200).json({ transaction });
+      const { transaction, blockhash, lastValidBlockHeight } = await buildTx(connection, signerPubkey, ixs, addressLookupTableAccounts);
+      return res.status(200).json({ transaction, blockhash, lastValidBlockHeight });
     }
 
     return res.status(400).json({ error: `Unknown action: ${action}` });
