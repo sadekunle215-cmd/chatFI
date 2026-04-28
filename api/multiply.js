@@ -140,14 +140,31 @@ export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  // ── GET: lightweight health check — just verify RPC is reachable ────────────
-  // No vault fetching here — getAllVaults() was too heavy and caused cold-start timeouts.
+  // ── GET: health check + vault mint map for the UI ───────────────────────────
+  // Fetches only the known vault IDs (1-7) in parallel — fast, no timeout risk.
+  // Returns { ok, slot, vaults } so the frontend can build realVaultMap correctly.
   if (req.method === "GET") {
     if (!RPC_URL) return res.status(500).json({ error: "SOLANA_RPC env var not set." });
     try {
       const connection = new Connection(RPC_URL, { commitment: "confirmed" });
-      const slot = await connection.getSlot();
-      return res.status(200).json({ ok: true, slot });
+      const [slot] = await Promise.all([connection.getSlot()]);
+      const KNOWN_VAULT_IDS = [1, 2, 3, 4, 5, 6, 7];
+      const client = new Client(connection);
+      const vaultResults = await Promise.allSettled(
+        KNOWN_VAULT_IDS.map(id => client.vault.getVaultByVaultId({ vaultId: id }))
+      );
+      const vaults = vaultResults
+        .map((r, i) => {
+          if (r.status !== "fulfilled" || !r.value) return null;
+          const v = r.value;
+          return {
+            vaultId:    KNOWN_VAULT_IDS[i],
+            supplyToken: v.supplyToken.toBase58(),
+            borrowToken: v.borrowToken.toBase58(),
+          };
+        })
+        .filter(Boolean);
+      return res.status(200).json({ ok: true, slot, vaults });
     } catch(e) {
       return res.status(500).json({ error: e.message });
     }
@@ -222,7 +239,7 @@ export default async function handler(req, res) {
         return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
 
       // Now fetch flash loan ixs after quote is settled
-      const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN };
+      const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN, vaultId: Number(vaultId) };
       let flashBorrowIx, flashPayIx;
       try {
         // Sequential — both fns read vault liquidity state; concurrent calls race each other → assertion failure
@@ -315,7 +332,7 @@ export default async function handler(req, res) {
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Unwind quote failed: ${quoteRes.error ?? "No route"}` });
 
-      const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN };
+      const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN, vaultId: Number(vaultId) };
       let flashBorrowIx, flashPayIx;
       try {
         // Sequential — both fns read vault liquidity state; concurrent calls race each other → assertion failure
