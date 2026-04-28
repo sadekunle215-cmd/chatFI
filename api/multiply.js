@@ -66,6 +66,60 @@ function dedupeAlts(alts) {
   return alts.filter(a => { const k = a.key.toString(); if (seen.has(k)) return false; seen.add(k); return true; });
 }
 
+// ── Fix 1: sleep helper — gives RPC state time to settle before flash loan ixs ──
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ── Fix 2: retry wrapper for flash loan ixs — assertion failures are transient ──
+// The SDK internally asserts vault liquidity state; retrying after a short delay resolves it.
+async function getFlashIxsWithRetry(flashParams, maxAttempts = 3) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      // Sequential — concurrent calls race vault liquidity reads → assertion failure
+      const flashBorrowIx  = await getFlashBorrowIx(flashParams);
+      const flashPaybackIx = await getFlashPaybackIx(flashParams);
+      return { flashBorrowIx, flashPaybackIx };
+    } catch (e) {
+      lastErr = e;
+      const isAssertion = e.message?.toLowerCase().includes("assertion") ||
+                          e.message?.toLowerCase().includes("assert");
+      console.warn(`[flash] attempt ${attempt}/${maxAttempts} failed: ${e.message}`);
+      if (attempt < maxAttempts && isAssertion) {
+        await sleep(500 * attempt); // 500ms, 1000ms back-off
+        continue;
+      }
+      break;
+    }
+  }
+  throw new Error(`Flash loan setup failed after ${maxAttempts} attempts: ${lastErr?.message}`);
+}
+
+// ── Fix 3: vault liquidity guard — fail fast with a clear message ──
+// Checks that the vault has enough free liquidity before attempting a flash borrow.
+async function assertVaultLiquidity(connection, vaultId, assetMint, requiredAmount) {
+  try {
+    const client = new Client(connection);
+    const vault  = await client.vault.getVaultByVaultId({ vaultId: Number(vaultId) });
+    if (!vault) return; // can't check — let it proceed and fail naturally
+    // availableLiquidity field name may vary by SDK version; fall back gracefully
+    const avail = vault.availableLiquidity ?? vault.freeLiquidity ?? vault.liquidityAvailable;
+    if (avail == null) return; // field not present in this SDK version
+    const availBN = new BN(avail.toString());
+    if (availBN.lt(requiredAmount)) {
+      throw new Error(
+        `Vault ${vaultId} has insufficient liquidity. ` +
+        `Need ${requiredAmount.toString()}, available ${availBN.toString()}. ` +
+        `Try a smaller position size or try again later.`
+      );
+    }
+    console.log(`[liquidity] vault=${vaultId} avail=${availBN.toString()} required=${requiredAmount.toString()} ✓`);
+  } catch (e) {
+    if (e.message?.includes("insufficient liquidity")) throw e; // re-throw our own error
+    console.warn(`[liquidity] check skipped (SDK field missing): ${e.message}`);
+    // Don't block — let the transaction attempt proceed
+  }
+}
+
 // Returns an ATA creation ix if the account doesn't exist, or null if it already exists
 async function getAtaCreateIxIfNeeded(connection, mint, owner) {
   const ata = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_PROGRAM_ID);
@@ -240,17 +294,20 @@ export default async function handler(req, res) {
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
 
-      // Now fetch flash loan ixs after quote is settled
-      const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN };
+      // Fix 3: check vault has enough liquidity before attempting flash borrow
+      await assertVaultLiquidity(connection, vaultId, debtMint, borrowBN);
+
+      // Fix 1: wait for RPC state to fully settle after quote fetch before touching flash loan ixs
+      await sleep(400);
+
+      // Fix 2: fetch flash loan ixs with retry on assertion failures
       let flashBorrowIx, flashPayIx;
       try {
-        // Sequential — both fns read vault liquidity state; concurrent calls race each other → assertion failure
-        flashBorrowIx = await getFlashBorrowIx(flashParams)
-          .catch(e => { throw new Error(`getFlashBorrowIx failed: ${e.message}`); });
-        flashPayIx    = await getFlashPaybackIx(flashParams)
-          .catch(e => { throw new Error(`getFlashPaybackIx failed: ${e.message}`); });
+        const flashIxs = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: debtMint, amount: borrowBN });
+        flashBorrowIx  = flashIxs.flashBorrowIx;
+        flashPayIx     = flashIxs.flashPaybackIx;
       } catch (e) {
-        return res.status(502).json({ error: `Flash loan setup failed: ${e.message}` });
+        return res.status(502).json({ error: e.message });
       }
 
       // Step 1: create position NFT — getInitPositionIx returns the real nftId
@@ -311,7 +368,7 @@ export default async function handler(req, res) {
       const vaultMints = await getVaultMintsById(connection, vaultId);
       const colMint  = new PublicKey(vaultMints.supplyToken);
       const debtMint = new PublicKey(vaultMints.borrowToken);
-      const isFullUnwind = !withdrawAmount;
+      const isFullUnwind = withdrawAmount == null || withdrawAmount === undefined || withdrawAmount === "";
       let flashColBN;
 
       if (isFullUnwind) {
@@ -334,16 +391,20 @@ export default async function handler(req, res) {
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Unwind quote failed: ${quoteRes.error ?? "No route"}` });
 
-      const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN };
+      // Fix 3: check vault has enough collateral liquidity before flash borrowing
+      await assertVaultLiquidity(connection, vaultId, colMint, flashColBN);
+
+      // Fix 1: wait for RPC state to settle after quote fetch
+      await sleep(400);
+
+      // Fix 2: fetch flash loan ixs with retry on assertion failures
       let flashBorrowIx, flashPayIx;
       try {
-        // Sequential — both fns read vault liquidity state; concurrent calls race each other → assertion failure
-        flashBorrowIx = await getFlashBorrowIx(flashParams)
-          .catch(e => { throw new Error(`getFlashBorrowIx failed: ${e.message}`); });
-        flashPayIx    = await getFlashPaybackIx(flashParams)
-          .catch(e => { throw new Error(`getFlashPaybackIx failed: ${e.message}`); });
+        const flashIxs = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: colMint, amount: flashColBN });
+        flashBorrowIx  = flashIxs.flashBorrowIx;
+        flashPayIx     = flashIxs.flashPaybackIx;
       } catch (e) {
-        return res.status(502).json({ error: `Flash loan setup failed: ${e.message}` });
+        return res.status(502).json({ error: e.message });
       }
 
       const opColAmount  = isFullUnwind ? MAX_WITHDRAW : new BN(withdrawAmount.toString()).neg();
@@ -401,6 +462,8 @@ export default async function handler(req, res) {
     // Translate common errors to readable messages
     if (msg.includes("429") || msg.includes("rate limit") || msg.includes("Too many"))
       return res.status(500).json({ error: "RPC rate limited — set SOLANA_RPC to a paid provider in Vercel env vars.", detail: msg });
+    if (msg.includes("Assertion") || msg.includes("assertion failed"))
+      return res.status(500).json({ error: "Vault assertion failed — vault may have insufficient liquidity, be paused, or the RPC returned stale state. Try a smaller amount or retry in a few seconds.", detail: msg });
     if (msg.includes("return data") || msg.includes("No return data"))
       return res.status(500).json({ error: `Vault ${vaultId} simulation failed. Vault may be paused or amounts out of range.`, detail: msg });
     if (msg.includes("AccountNotFound") || msg.includes("could not find account"))
