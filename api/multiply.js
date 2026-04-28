@@ -31,7 +31,9 @@ const MAX_WITHDRAW = MAX_WITHDRAW_AMOUNT ?? new BN("9007199254740991");
 
 const RPC_URL  = process.env.SOLANA_RPC;
 const JUP_API_KEY = process.env.JUP_API_KEY || "";
-const SWAP_API = "https://api.jup.ag/swap/v1";
+// Per official docs: use lite-api for swap quotes+instructions inside flashloan txs
+// https://developers.jup.ag/docs/lend/advanced/multiply
+const SWAP_API = "https://lite-api.jup.ag/swap/v1";
 
 const jupHeaders = {
   "Content-Type": "application/json",
@@ -239,7 +241,7 @@ export default async function handler(req, res) {
         return res.status(502).json({ error: `Swap quote failed: ${quoteRes.error ?? "No route"}` });
 
       // Now fetch flash loan ixs after quote is settled
-      const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN, vaultId: Number(vaultId) };
+      const flashParams = { connection, signer: signerPubkey, asset: debtMint, amount: borrowBN };
       let flashBorrowIx, flashPayIx;
       try {
         // Sequential — both fns read vault liquidity state; concurrent calls race each other → assertion failure
@@ -332,7 +334,7 @@ export default async function handler(req, res) {
       if (quoteRes.error || !quoteRes.routePlan)
         return res.status(502).json({ error: `Unwind quote failed: ${quoteRes.error ?? "No route"}` });
 
-      const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN, vaultId: Number(vaultId) };
+      const flashParams = { connection, signer: signerPubkey, asset: colMint, amount: flashColBN };
       let flashBorrowIx, flashPayIx;
       try {
         // Sequential — both fns read vault liquidity state; concurrent calls race each other → assertion failure
