@@ -178,6 +178,7 @@ const TOKEN_MINTS = {
   PYTH:    "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
   MSOL:    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
   JITOSOL: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",
+  JUPSOL:  "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZbosLmK1yeR",
   BSOL:    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",
   SAMO:    "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
   ORCA:    "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",
@@ -192,7 +193,7 @@ const TOKEN_MINTS = {
 
 const TOKEN_DECIMALS = {
   SOL:9, JUP:6, BONK:5, WIF:6, USDC:6, USDT:6, RAY:6, PYTH:6,
-  MSOL:9, JITOSOL:9, BSOL:9, SAMO:9, ORCA:6, POPCAT:9, TRUMP:6,
+  MSOL:9, JITOSOL:9, JUPSOL:9, BSOL:9, SAMO:9, ORCA:6, POPCAT:9, TRUMP:6,
   BTC:8, WBTC:8, ETH:8, WETH:8,
 };
 
@@ -207,6 +208,7 @@ const TOKEN_LOGO_URLS = {
   RAY:     "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R/logo.png",
   MSOL:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So/logo.png",
   JITOSOL: "https://storage.googleapis.com/token-metadata/JitoSOL-256.png",
+  JUPSOL:  "https://static.jup.ag/jupsol/icon.png",
   BSOL:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1/logo.png",
   ORCA:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE/logo.png",
   SAMO:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU/logo.png",
@@ -225,12 +227,13 @@ const PRED_CATEGORIES = ["sports","crypto","politics","esports","culture","econo
 // Jupiter Multiply vaults — leveraged looping strategies via Jupiter Lend
 const MULTIPLY_VAULTS = [
   // vaultId: on-chain vault ID used by getOperateIx. colDecimals/debtDecimals for amount conversion.
-  { id:"jupsol-sol",  vaultId:3,  collateral:"JupSOL", debt:"SOL",  colDecimals:9, debtDecimals:9, maxLev:"10x", ltv:"90%", desc:"Loop JupSOL vs SOL. Earn staking yield amplified. Best for SOL bulls.", risk:"Medium", url:"https://jup.ag/lend/multiply/jupsol-sol"  },
+  // IDs verified against Jupiter URL pattern: jup.ag/lend/multiply/{vaultId}
+  { id:"jupsol-sol",  vaultId:4,  collateral:"JupSOL", debt:"SOL",  colDecimals:9, debtDecimals:9, maxLev:"10x", ltv:"90%", desc:"Loop JupSOL vs SOL. Earn staking yield amplified. Best for SOL bulls.", risk:"Medium", url:"https://jup.ag/lend/multiply/jupsol-sol"  },
   { id:"jitosol-sol", vaultId:2,  collateral:"JitoSOL",debt:"SOL",  colDecimals:9, debtDecimals:9, maxLev:"10x", ltv:"90%", desc:"Loop JitoSOL vs SOL. Earn Jito staking + MEV rewards amplified.",      risk:"Medium", url:"https://jup.ag/lend/multiply/jitosol-sol" },
   { id:"sol-usdc",    vaultId:1,  collateral:"SOL",    debt:"USDC", colDecimals:9, debtDecimals:6, maxLev:"5x",  ltv:"80%", desc:"Leverage SOL exposure against USDC. Higher upside and downside.",       risk:"High",   url:"https://jup.ag/lend/multiply/sol-usdc"    },
   { id:"jlp-usdc",    vaultId:5,  collateral:"JLP",    debt:"USDC", colDecimals:6, debtDecimals:6, maxLev:"5x",  ltv:"90%", desc:"Loop JLP (Jupiter LP token) vs USDC. Earn JLP fees amplified.",         risk:"Medium", url:"https://jup.ag/lend/multiply/jlp-usdc"    },
   { id:"usdc-usdt",   vaultId:7,  collateral:"USDC",   debt:"USDT", colDecimals:6, debtDecimals:6, maxLev:"20x", ltv:"95%", desc:"Stable-stable loop. Very low risk, amplify stablecoin yield.",           risk:"Low",    url:"https://jup.ag/lend/multiply"             },
-  { id:"wbtc-usdc",   vaultId:4,  collateral:"WBTC",   debt:"USDC", colDecimals:8, debtDecimals:6, maxLev:"5x",  ltv:"80%", desc:"Leverage BTC exposure against USDC.",                                   risk:"High",   url:"https://jup.ag/lend/multiply/wbtc-usdc"   },
+  { id:"wbtc-usdc",   vaultId:3,  collateral:"WBTC",   debt:"USDC", colDecimals:8, debtDecimals:6, maxLev:"5x",  ltv:"80%", desc:"Leverage BTC exposure against USDC.",                                   risk:"High",   url:"https://jup.ag/lend/multiply/wbtc-usdc"   },
   { id:"jup-usdc",    vaultId:6,  collateral:"JUP",    debt:"USDC", colDecimals:6, debtDecimals:6, maxLev:"4x",  ltv:"75%", desc:"Use JUP as collateral, loop to amplify JUP exposure.",                   risk:"High",   url:"https://jup.ag/lend/multiply"             },
 ];
 
@@ -323,7 +326,7 @@ Available actions:
 - "BASKET_PREDICTION" → actionData: { "bets": [ { "searchQuery": "Arsenal Atletico", "outcome": "Arsenal FC", "side": "yes", "amount": "10" }, { "searchQuery": "Man City Chelsea", "outcome": "Draw", "side": "no", "amount": "15" } ] } — place up to 10 prediction bets in sequence. Use when user specifies multiple matches and outcomes in one message. Each bet has same fields as PLACE_PREDICTION.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — portion: "all"|"half"|"quarter"|"N%"
 - "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — leveraged looping via Jupiter Lend flashloans. Explain mechanics + show vaults.
-- "SHOW_BORROW"        → actionData: { "collateral": "SOL", "debt": "USDC", "colAmount": "10", "borrowAmount": "200", "reason": "brief why" } — deposit collateral into a Jupiter Lend vault and borrow against it. colAmount = collateral to deposit; borrowAmount = debt token to receive. Available vaults: SOL→USDC (vault 1, 80% LTV), JitoSOL→SOL (vault 2, 90%), JupSOL→SOL (vault 3, 90%), WBTC→USDC (vault 4, 80%), JLP→USDC (vault 5, 90%), JUP→USDC (vault 6, 75%), USDC→USDT (vault 7, 95%).
+- "SHOW_BORROW"        → actionData: { "collateral": "SOL", "debt": "USDC", "colAmount": "10", "borrowAmount": "200", "reason": "brief why" } — deposit collateral into a Jupiter Lend vault and borrow against it. colAmount = collateral to deposit; borrowAmount = debt token to receive. Available vaults: SOL→USDC (vault 1, 80% LTV), JitoSOL→SOL (vault 2, 90%), WBTC→USDC (vault 3, 80%), JupSOL→SOL (vault 4, 90%), JLP→USDC (vault 5, 90%), JUP→USDC (vault 6, 75%), USDC→USDT (vault 7, 95%).
 - "SHOW_LEND_POSITIONS" → actionData: {} — show user's open Lend positions (borrow/multiply) with unwind buttons AND earn positions with withdraw buttons
 - "CLAIM_PAYOUTS"    → actionData: {} — triggers fetch of claimable prediction positions
 - "SHOW_SEND"        → actionData: { "token": "SOL", "amount": "1", "reason": "brief why" } — send tokens via Jupiter invite link. Recipient claims without needing a wallet upfront.
@@ -4453,9 +4456,6 @@ function JupChatInner() {
     push("ai", `Opening **${leverage}x ${vault.collateral}/${vault.debt}** Multiply position with **${colAmount} ${vault.collateral}**…`);
 
     try {
-      // DEBUG — remove after confirming vaultId
-      push("ai", `DEBUG: vaultId=${getRealVaultId(vault)} colRaw=${colRaw} leverageBps=${targetLeverageBps} vault=${vault.id}`);
-
       // 1. Get unsigned transaction from backend
       const { ok: mOk, data } = await safeApiFetch("/api/multiply", {
         method: "POST",
