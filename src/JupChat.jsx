@@ -2147,9 +2147,10 @@ function JupChatInner() {
       @keyframes spin   { to{transform:rotate(360deg)} }
       @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
       .msg-enter { animation:fadeUp 0.22s ease forwards; }
-      ::-webkit-scrollbar { width:5px; height:5px; }
+      ::-webkit-scrollbar { width:0px; height:0px; display:none; }
       ::-webkit-scrollbar-track { background:transparent; }
-      ::-webkit-scrollbar-thumb { background:#1e2d3d; border-radius:6px; }
+      ::-webkit-scrollbar-thumb { background:transparent; }
+      * { scrollbar-width:none; -ms-overflow-style:none; }
       textarea { resize:none; }
       textarea::placeholder, input::placeholder { color:#4d6a7a; }
       input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; }
