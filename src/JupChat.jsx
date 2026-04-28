@@ -4488,8 +4488,8 @@ function JupChatInner() {
         });
         const setupSig = setupRes?.result;
         if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction failed.");
-        // Wait for setup tx to confirm on-chain before sending main multiply tx
-        await new Promise(r => setTimeout(r, 4000));
+        // Wait for position NFT to confirm on-chain before sending main flashloan tx (6011 = NFT not found)
+        await new Promise(r => setTimeout(r, 8000));
       }
 
       // 2b. Deserialize + sign main multiply tx
