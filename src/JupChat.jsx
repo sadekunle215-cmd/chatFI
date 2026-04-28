@@ -1,15 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Connection, Transaction, VersionedTransaction, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 // ── Reown AppKit (external wallet connect — Phantom, Backpack, etc.) ─────────
-// Loaded dynamically to avoid Vite TDZ bundling crash on mobile ("Cannot access 'js' before initialization")
-// Static imports of @reown/appkit trigger circular deps that crash before React mounts.
-let useAppKit        = () => ({ open: () => {} });
-let useAppKitAccount = () => ({ address: null, isConnected: false });
-let useAppKitProvider= () => ({ walletProvider: null });
-let useDisconnect    = () => ({ disconnect: () => {} });
-let useWalletInfo    = () => ({ walletInfo: null });
+import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect, useWalletInfo } from "@reown/appkit/react";
+import { SolanaAdapter } from "@reown/appkit-adapter-solana";
+import { solana as solanaMainnet } from "@reown/appkit/networks";
 
 // ── Privy (social / email login with embedded Solana wallet) ─────────────────
 import { PrivyProvider, usePrivy, useWallets, useSolanaWallets } from "@privy-io/react-auth";
@@ -524,55 +520,22 @@ const T = {
   mono:     "'JetBrains Mono',monospace",
 };
 
-// ── Reown AppKit — lazy init ─────────────────────────────────────────────────
-// Avoids the Vite TDZ crash: @reown/appkit has circular deps that trigger
-// "Cannot access 'js' before initialization" when bundled statically on mobile.
-const REOWN_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f";
-let _reownInitError  = null;
-let _reownInitDone   = false;
-let _reownInitPromise = null;
-
-const initReown = () => {
-  if (_reownInitDone) return Promise.resolve();
-  if (_reownInitPromise) return _reownInitPromise;
-  _reownInitPromise = (async () => {
-    try {
-      const [{ createAppKit, useAppKit: _uAK, useAppKitAccount: _uAKA, useAppKitProvider: _uAKP, useDisconnect: _uD, useWalletInfo: _uWI },
-             { SolanaAdapter },
-             { solana: solanaMainnet }] = await Promise.all([
-        import("@reown/appkit/react"),
-        import("@reown/appkit-adapter-solana"),
-        import("@reown/appkit/networks"),
-      ]);
-      // Replace stub hooks with real ones
-      useAppKit         = _uAK;
-      useAppKitAccount  = _uAKA;
-      useAppKitProvider = _uAKP;
-      useDisconnect     = _uD;
-      useWalletInfo     = _uWI;
-
-      const adapter = new SolanaAdapter();
-      createAppKit({
-        adapters: [adapter],
-        networks: [solanaMainnet],
-        projectId: REOWN_PROJECT_ID,
-        metadata: {
-          name: "ChatFi",
-          description: "ChatFi — Your personal AI tools on Solana",
-          url: typeof window !== "undefined" ? window.location.origin : "https://chatfi.app",
-          icons: ["https://jup.ag/favicon.ico"],
-        },
-        features: { analytics: false },
-      });
-      _reownInitDone = true;
-      console.log("[ChatFi] Reown AppKit loaded ✓");
-    } catch (e) {
-      _reownInitError = e?.message || String(e);
-      console.error("[ChatFi] Reown AppKit lazy init failed:", e);
-    }
-  })();
-  return _reownInitPromise;
-};
+// ── Reown AppKit Init ────────────────────────────────────────────────────────
+// Get a free projectId at https://cloud.reown.com
+const REOWN_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f"; // replace with your own
+const _solanaAdapter = new SolanaAdapter();
+createAppKit({
+  adapters: [_solanaAdapter],
+  networks: [solanaMainnet],
+  projectId: REOWN_PROJECT_ID,
+  metadata: {
+    name: "ChatFi",
+    description: "ChatFi — Your personal AI tools on Solana",
+    url: typeof window !== "undefined" ? window.location.origin : "https://chatfi.app",
+    icons: ["https://jup.ag/favicon.ico"],
+  },
+  features: { analytics: false },
+});
 
 const fmt = (text = "") => {
   // Inline markdown helpers
@@ -1860,20 +1823,12 @@ function JupChatInner() {
   const CHATFI_THRESHOLD = 10000;
   const isPremium = (portfolio["CHATFI"] || 0) >= CHATFI_THRESHOLD;
 
-  // ── Reown AppKit — lazy load + re-render when ready ───────────────────────
-  const [reownReady, setReownReady] = useState(false);
-  useEffect(() => {
-    initReown().then(() => setReownReady(true));
-  }, []);
-
   // ── Reown AppKit hooks ─────────────────────────────────────────────────────
-  // Stubs are replaced by real hooks once initReown() resolves.
-  // Wrapped in try/catch: stubs are plain fns, real hooks throw if context missing.
-  const { open: reownOpen }                                     = (() => { try { return useAppKit(); } catch { return { open: () => {} }; } })();
-  const { address: reownAddress, isConnected: reownConnected }  = (() => { try { return useAppKitAccount(); } catch { return { address: null, isConnected: false }; } })();
-  const { walletProvider: reownProvider }                       = (() => { try { return useAppKitProvider("solana"); } catch { return { walletProvider: null }; } })();
-  const { disconnect: reownDisconnect }                         = (() => { try { return useDisconnect(); } catch { return { disconnect: () => {} }; } })();
-  const { walletInfo: reownWalletInfo }                         = (() => { try { return useWalletInfo(); } catch { return { walletInfo: null }; } })();
+  const { open: reownOpen }                                     = useAppKit();
+  const { address: reownAddress, isConnected: reownConnected }  = useAppKitAccount();
+  const { walletProvider: reownProvider }                       = useAppKitProvider("solana");
+  const { disconnect: reownDisconnect }                         = useDisconnect();
+  const { walletInfo: reownWalletInfo }                         = useWalletInfo();
   const [connectedWalletIcon, setConnectedWalletIcon]           = useState(null);
   const prevConnectedRef = useRef(false);
 
@@ -1952,7 +1907,7 @@ function JupChatInner() {
   const [recurringOrdersLoading, setRecurringOrdersLoading] = useState(false);
 
   // Trigger v2 state — JWT, vault, orders list, active order type
-  const trigJwtRef                                    = useRef(null);  // in-memory only, never persisted
+  const trigJwtRef                                    = { current: null };  // in-memory only, never persisted
   const [trigV2Orders, setTrigV2Orders]               = useState([]);
   const [showTrigOrders, setShowTrigOrders]           = useState(false);
   const [trigOrdersLoading, setTrigOrdersLoading]     = useState(false);
@@ -2243,7 +2198,7 @@ function JupChatInner() {
       send(query);
     };
     return () => { delete window.__chatfiSend; };
-  }, [send]);
+  });
 
   // Render WalletConnect QR code when URI is ready
   useEffect(() => {
@@ -4444,7 +4399,7 @@ function JupChatInner() {
         }
         const signedSetup = await provider.signTransaction(setupTx);
         const setupSerialized = signedSetup.serialize ? signedSetup.serialize() : signedSetup.serialize();
-        const setupRes = await jupFetch(SOLANA_RPC, {
+        const setupRes = await jupFetch("SOLANA_RPC", {
           method: "POST",
           body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(setupSerialized), { encoding:"base64", skipPreflight:false }] },
         });
@@ -4459,7 +4414,7 @@ function JupChatInner() {
       const signedTx = await provider.signTransaction(tx);
 
       // 3. Send via RPC — use skipPreflight:true for multiply (simulation misreads atomic flashloan)
-      const rpcRes = await jupFetch(SOLANA_RPC, {
+      const rpcRes = await jupFetch("SOLANA_RPC", {
         method: "POST",
         body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:false }] },
       });
@@ -4468,7 +4423,7 @@ function JupChatInner() {
 
       // Verify tx landed on-chain before confirming success
       await new Promise(r => setTimeout(r, 3000));
-      const confirmRes = await jupFetch(SOLANA_RPC, {
+      const confirmRes = await jupFetch("SOLANA_RPC", {
         method: "POST",
         body: { jsonrpc:"2.0", id:1, method:"getSignatureStatuses", params:[[signature],{searchTransactionHistory:true}] },
       });
@@ -4801,7 +4756,7 @@ function JupChatInner() {
       const bytes    = b64ToBytes(data.transaction);
       const tx       = VersionedTransaction.deserialize(bytes);
       const signedTx = await provider.signTransaction(tx);
-      const rpcRes   = await jupFetch(SOLANA_RPC, {
+      const rpcRes   = await jupFetch("SOLANA_RPC", {
         method:"POST",
         body:{ jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
       });
@@ -11803,26 +11758,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
   );
 }
 
-// ─── Error Boundary — catches render crashes and shows them on screen ─────────
-class AppErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(e) { return { error: e?.message || String(e) }; }
-  componentDidCatch(e, info) { console.error("[ChatFi] Render crash:", e, info); }
-  render() {
-    if (!this.state.error) return this.props.children;
-    return (
-      <div style={{ position:"fixed", inset:0, background:"#0d1117", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:24, fontFamily:"monospace" }}>
-        <div style={{ color:"#f28484", fontSize:14, fontWeight:700, marginBottom:12 }}>⚠ ChatFi crashed on startup</div>
-        <div style={{ color:"#8fa8b8", fontSize:12, background:"#161e27", border:"1px solid #1e2d3d", borderRadius:8, padding:16, maxWidth:360, wordBreak:"break-word", lineHeight:1.6 }}>
-          {this.state.error}
-        </div>
-        <div style={{ color:"#4d6a7a", fontSize:11, marginTop:16 }}>Check browser console for full stack trace.</div>
-        <button onClick={() => window.location.reload()} style={{ marginTop:20, padding:"8px 20px", background:"#c7f284", color:"#0d1117", border:"none", borderRadius:8, fontWeight:700, fontSize:13, cursor:"pointer" }}>Reload</button>
-      </div>
-    );
-  }
-}
-
 // ─── Root export ─────────────────────────────────────────────────────────────
 export default function JupChat() {
   const appId = import.meta.env.VITE_PRIVY_APP_ID || "";
@@ -11834,12 +11769,6 @@ export default function JupChat() {
     );
   }
   return (
-    <AppErrorBoundary>
-      {_reownInitError && (
-        <div style={{ position:"fixed", top:0, left:0, right:0, zIndex:9999, background:"#2e1a1a", borderBottom:"1px solid #4d2d2d", padding:"10px 16px", fontFamily:"monospace", fontSize:12, color:"#f28484" }}>
-          ⚠ Reown init failed: {_reownInitError} — wallet connect unavailable, social login still works.
-        </div>
-      )}
     <PrivyProvider
       appId={appId}
       config={{
@@ -11867,6 +11796,5 @@ export default function JupChat() {
     >
       <JupChatWithLanding />
     </PrivyProvider>
-    </AppErrorBoundary>
   );
 }
