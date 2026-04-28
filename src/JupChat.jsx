@@ -6546,9 +6546,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
     // "refresh" / "reload" — save chat then reload page
     if (lower === "refresh" || lower === "reload" || lower === "refresh page" || lower === "reload page") {
       setInput("");
-      push("user", raw);
-      push("ai", "Refreshing the page now… Your chat will be restored. <svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' style='display:inline;vertical-align:middle;margin-left:3px'><path d='M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8'/><path d='M21 3v5h-5'/><path d='M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16'/><path d='M8 16H3v5'/></svg>");
-      setTimeout(() => window.location.reload(), 800);
+      // Save current msgs to sessionStorage BEFORE pushing the refresh messages
+      // so they don't reappear after the page restores
+      setMsgs(m => {
+        try { sessionStorage.setItem("chatfi-msgs", JSON.stringify(m.slice(-80))); } catch {}
+        return m;
+      });
+      setTimeout(() => window.location.reload(), 300);
       return;
     }
 
@@ -7381,7 +7385,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         else {
           push("ai", (text || "") + `\n\nPreparing **${basketTrades.length} swaps** — you'll approve all at once…`);
           const provider = getActiveProvider();
-          if (!provider) { push("ai", "Wallet not connected. Please connect your wallet first."); return; }
+          if (!provider) { push("ai", "Wallet not connected. Please connect your wallet first."); setTyping(false); return; }
           let done = 0, failed = 0;
           const summary = [];
 
@@ -7483,6 +7487,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           if (validOrders.length === 0) {
             push("ai", `**Basket done** — ${done} succeeded, ${failed} failed`);
+            setTyping(false);
             return;
           }
 
