@@ -98,6 +98,31 @@ async function getFlashIxsWithRetry(flashParams, maxAttempts = 3, isStable = fal
   throw new Error(`Flash loan setup failed after ${attempts} attempts: ${lastErr?.message}`);
 }
 
+// ── Retry wrapper for getOperateIx — same assertion failures can fire here too ──
+// SOL/USDC and other volatile pairs can hit the vault assertion inside getOperateIx
+// just as flash loan ixs can. Wrapping with retry fixes the "still same issue" failure.
+async function getOperateIxWithRetry(params, maxAttempts = 3, isStable = false) {
+  const attempts  = isStable ? 5 : maxAttempts;
+  const baseDelay = isStable ? 800 : 500;
+  let lastErr;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await getOperateIx(params);
+    } catch (e) {
+      lastErr = e;
+      const isAssertion = e.message?.toLowerCase().includes("assertion") ||
+                          e.message?.toLowerCase().includes("assert");
+      console.warn(`[operate] attempt ${attempt}/${attempts} failed: ${e.message}`);
+      if (attempt < attempts && isAssertion) {
+        await sleep(baseDelay * attempt);
+        continue;
+      }
+      break;
+    }
+  }
+  throw new Error(`getOperateIx failed after ${attempts} attempts: ${lastErr?.message}`);
+}
+
 // ── Fix 3: vault liquidity guard — fail fast with a clear message ──
 // Checks that the vault has enough free liquidity before attempting a flash borrow.
 async function assertVaultLiquidity(connection, vaultId, assetMint, requiredAmount) {
@@ -324,7 +349,8 @@ export default async function handler(req, res) {
       console.log(`[multiply/open] nftId=${nftId}`);
 
       // Step 2: build operate ix with the real nftId so account derivation is correct
-      const operateResult = await getOperateIx({
+      // Use retry wrapper — vault assertion can fire here for volatile pairs (SOL/USDC) too
+      const operateResult = await getOperateIxWithRetry({
         vaultId:    Number(vaultId),
         positionId: nftId,
         // Fix 2: stable pairs use otherAmountThreshold (slippage-adjusted min) to avoid vault assertion
@@ -332,7 +358,7 @@ export default async function handler(req, res) {
         debtAmount: borrowBN,
         signer:     signerPubkey,
         connection,
-      });
+      }, 3, isStable);
 
       const swapApiRes = await fetch(`${SWAP_API}/swap-instructions`, {
         method: "POST",
@@ -420,18 +446,19 @@ export default async function handler(req, res) {
       const opColAmount  = isFullUnwind ? MAX_WITHDRAW : new BN(withdrawAmount.toString()).neg();
       const opDebtAmount = isFullUnwind ? MAX_REPAY    : new BN(quoteRes.otherAmountThreshold.toString()).neg();
 
-      const [swapApiRes, operateResult] = await Promise.all([
-        fetch(`${SWAP_API}/swap-instructions`, {
-          method: "POST",
-          headers: jupHeaders,
-          body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
-        }).then(r => r.json()),
-        getOperateIx({
-          vaultId: Number(vaultId), positionId: Number(positionId),
-          colAmount: opColAmount, debtAmount: opDebtAmount,
-          signer: signerPubkey, connection,
-        }),
-      ]);
+      // Fetch swap instructions first — getOperateIx needs to be separate so
+      // the retry wrapper can catch vault assertion failures (can't retry inside Promise.all)
+      const swapApiRes = await fetch(`${SWAP_API}/swap-instructions`, {
+        method: "POST",
+        headers: jupHeaders,
+        body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
+      }).then(r => r.json());
+
+      const operateResult = await getOperateIxWithRetry({
+        vaultId: Number(vaultId), positionId: Number(positionId),
+        colAmount: opColAmount, debtAmount: opDebtAmount,
+        signer: signerPubkey, connection,
+      }, 3, isStable);
 
       if (swapApiRes.error) return res.status(502).json({ error: `Unwind swap failed: ${swapApiRes.error}` });
 
