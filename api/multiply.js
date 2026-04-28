@@ -30,7 +30,7 @@ import {
 } from "@solana/spl-token";
 import BN from "bn.js";
 import { getFlashloanIx } from "@jup-ag/lend/flashloan";
-import { getInitPositionIx, getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
+import { getOperateIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
 import { Client } from "@jup-ag/lend-read";
 
 const MAX_REPAY    = MAX_REPAY_AMOUNT   ?? new BN("9007199254740991");
@@ -240,22 +240,23 @@ export default async function handler(req, res) {
   try {
 
     // ── INIT POSITION (Step 1 of 2) ──────────────────────────────────────────
-    // Creates the position NFT on-chain. This must be sent and confirmed BEFORE
-    // the multiply (Step 2). Mirrors Jupiter's own "Step 1: Create Position" button.
-    //
-    // Returns: { transaction: base64, positionId: number }
-    // The positionId is needed for the "open" action (Step 2).
+    // Per SKILL.md: getOperateIx with positionId:0 auto-creates the NFT and
+    // returns the new positionId. getInitPositionIx is NOT a valid SDK export.
+    // We deposit 1 base unit of collateral to satisfy the non-zero requirement;
+    // this is negligible and the real collateral is deposited in Step 2.
     if (action === "initPosition") {
       console.log(`[initPosition] vault=${vaultId} signer=${signer.slice(0,8)}`);
 
-      const result = await getInitPositionIx({
+      const result = await getOperateIx({
         vaultId:    Number(vaultId),
+        positionId: 0,           // 0 = SDK auto-creates position NFT
+        colAmount:  new BN(1),   // minimal deposit to satisfy SDK validation
+        debtAmount: new BN(0),
         signer:     signerPubkey,
         connection,
       });
 
-      // getInitPositionIx returns: { ixs, positionId, addressLookupTableAccounts }
-      // positionId is the newly assigned on-chain position index (e.g. 4881)
+      // getOperateIx with positionId:0 returns the newly assigned nftId as positionId
       const { ixs, positionId: newPositionId, addressLookupTableAccounts } = result;
 
       console.log(`[initPosition] positionId=${newPositionId} ixs=${ixs.length}`);
