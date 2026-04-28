@@ -4992,7 +4992,7 @@ function JupChatInner() {
       setPortfolio(balances);
       const live = await fetchPrices();
       const solUSD = balances.SOL && live.SOL ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})` : "";
-      push("ai", `Wallet connected via WalletConnect ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}${Object.entries(balances).filter(([k])=>k!=="SOL").map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("")}\n\nWhat would you like to do?`);
+      push("ai", `Wallet connected via WalletConnect ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}${Object.entries(balances).filter(([k])=>k!=="SOL").map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("")}\n\nAlways remember these 2 commands:\n\n**Refresh** — to refresh\n**Delete messages** — to delete messages`);
     } catch (err) {
       setWcStatus("idle");
       setWcUri("");
@@ -5877,7 +5877,7 @@ Order: \`${orderKey.slice(0,20)}…\`
               `Wallet connected ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}` +
               Object.entries(balances).filter(([k])=>k!=="SOL")
                 .map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("") +
-              "\n\nWhat would you like to do?"
+              "\n\nAlways remember these 2 commands:\n\n**Refresh** — to refresh\n**Delete messages** — to delete messages"
             );
           }).catch(()=>{});
         }
@@ -7288,8 +7288,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 {/* Left: hamburger + logo */}
                 <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                   <button onClick={() => setSidebarOpen(o=>!o)}
-                    style={{ background:"none", border:"none", cursor:"pointer", color:T.text2, fontSize:20, padding:"4px 6px", lineHeight:1, borderRadius:8 }}
-                    className="hov-btn" style={{ fontSize:18, fontFamily:"monospace" }}>&#9776;</button>
+                    className="hov-btn"
+                    style={{ background:"none", border:"none", cursor:"pointer", padding:"6px 4px", lineHeight:1, display:"flex", flexDirection:"column", gap:5, alignItems:"flex-start" }}>
+                    <span style={{ display:"block", width:22, height:2, background:T.text1, borderRadius:2 }} />
+                    <span style={{ display:"block", width:15, height:2, background:T.text1, borderRadius:2 }} />
+                    <span style={{ display:"block", width:22, height:2, background:T.text1, borderRadius:2 }} />
+                  </button>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                     <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1, letterSpacing:"-0.2px" }}>ChatFi</span>
                   </div>
