@@ -9707,7 +9707,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Borrow from Jupiter Lend</div>
                 <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>COLLATERAL</span>
-                <span style={{ fontSize:10, padding:"2px 7px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:10, color:T.accent, fontWeight:600 }}>COMING SOON</span>
               </div>
               <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>Deposit collateral → borrow against it. Up to 95% LTV. Position is an NFT on-chain.</div>
 
@@ -10891,12 +10890,10 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     <div style={{ fontSize:11, color:T.text3, marginBottom:8, lineHeight:1.5 }}>{v.desc}</div>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8 }}>
                       <span style={{ fontSize:11, color:T.text3 }}>Max LTV: {v.ltv}</span>
-                      <div style={{ display:"flex", gap:6 }}>
-                        <a href={v.url} target="_blank" rel="noreferrer"
-                          style={{ padding:"6px 14px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:700, textDecoration:"none", display:"flex", alignItems:"center", gap:4 }}>
-                          Open on Jupiter ↗
-                        </a>
-                      </div>
+                      <button onClick={() => { setMultiplyPos({ vault:v, colAmount:"", leverage:"2" }); setShowMultiplyForm(true); setShowMultiply(false); }}
+                        style={{ padding:"6px 14px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                        Select →
+                      </button>
                     </div>
                   </div>
                 ))}
