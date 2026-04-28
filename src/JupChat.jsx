@@ -4472,44 +4472,7 @@ function JupChatInner() {
       if (data.error) throw new Error(data.error);
       if (!data.transaction) throw new Error("No transaction returned from multiply API.");
 
-      // 2a. Send setup tx first (ATA creation + position init — legacy format)
-      if (data.setupTransaction) {
-        push("ai", "Setting up position accounts…");
-        const setupBytes = b64ToBytes(data.setupTransaction);
-        // Setup tx is a legacy Transaction (not versioned) — deserialize accordingly
-        let setupTx;
-        try {
-          setupTx = Transaction.from(setupBytes);
-        } catch {
-          setupTx = VersionedTransaction.deserialize(setupBytes);
-        }
-        const signedSetup = await provider.signTransaction(setupTx);
-        const setupSerialized = signedSetup.serialize ? signedSetup.serialize() : signedSetup.serialize();
-        const setupRes = await jupFetch(SOLANA_RPC, {
-          method: "POST",
-          body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(setupSerialized), { encoding:"base64", skipPreflight:false }] },
-        });
-        const setupSig = setupRes?.result;
-        if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction failed.");
-        // Poll until setup tx confirms on-chain before sending main flashloan tx
-        // (hard sleep is unreliable — slow chain can leave position NFT not yet created → error 6011)
-        {
-          const deadline = Date.now() + 60_000;
-          while (Date.now() < deadline) {
-            await new Promise(r => setTimeout(r, 2000));
-            const statusRes = await jupFetch(SOLANA_RPC, {
-              method: "POST",
-              body: { jsonrpc:"2.0", id:1, method:"getSignatureStatuses",
-                      params:[[setupSig], { searchTransactionHistory: true }] },
-            });
-            const st = statusRes?.result?.value?.[0];
-            if (st?.err) throw new Error("Setup tx failed on-chain: " + JSON.stringify(st.err));
-            if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) break;
-          }
-        }
-      }
-
-      // 2b. Deserialize + sign main multiply tx
+      // Single versioned tx — flashloan + ATA setup + operate all in one
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
       const signedTx = await provider.signTransaction(tx);
 
@@ -4766,22 +4729,7 @@ function JupChatInner() {
       if (!ok || data.error) throw new Error(data.error || "Borrow API error");
       if (!data.transaction) throw new Error("No transaction returned from borrow API.");
 
-      // 2. If setupTransaction exists — sign + send it first (creates position NFT)
-      if (data.setupTransaction) {
-        const setupBytes  = b64ToBytes(data.setupTransaction);
-        const setupTx     = Transaction.from(setupBytes);
-        const signedSetup = await provider.signTransaction(setupTx);
-        const setupRes    = await jupFetch(SOLANA_RPC, {
-          method: "POST",
-          body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedSetup.serialize()), { encoding:"base64", skipPreflight:false }] },
-        });
-        const setupSig = setupRes?.result;
-        if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction (create position) failed to send.");
-        // Wait for position to be confirmed before operating
-        await new Promise(r => setTimeout(r, 4000));
-      }
-
-      // 3. Sign + send operate transaction (deposit + borrow)
+      // 2. Sign + send operate transaction (deposit + borrow)
       const bytes     = b64ToBytes(data.transaction);
       const tx        = VersionedTransaction.deserialize(bytes);
       const signedTx  = await provider.signTransaction(tx);
