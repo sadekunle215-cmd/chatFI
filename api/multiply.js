@@ -71,9 +71,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ── Fix 2: retry wrapper for flash loan ixs — assertion failures are transient ──
 // The SDK internally asserts vault liquidity state; retrying after a short delay resolves it.
-async function getFlashIxsWithRetry(flashParams, maxAttempts = 3) {
+// Fix 3: stable pairs need more attempts + longer back-off because the slight
+// USDC/USDT depeg makes the SDK assertion fire more frequently.
+async function getFlashIxsWithRetry(flashParams, maxAttempts = 3, isStable = false) {
+  const attempts  = isStable ? 5 : maxAttempts; // 5 retries for stable, 3 for volatile
+  const baseDelay = isStable ? 800 : 500;        // 800ms base for stable, 500ms for volatile
   let lastErr;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       // Sequential — concurrent calls race vault liquidity reads → assertion failure
       const flashBorrowIx  = await getFlashBorrowIx(flashParams);
@@ -83,15 +87,15 @@ async function getFlashIxsWithRetry(flashParams, maxAttempts = 3) {
       lastErr = e;
       const isAssertion = e.message?.toLowerCase().includes("assertion") ||
                           e.message?.toLowerCase().includes("assert");
-      console.warn(`[flash] attempt ${attempt}/${maxAttempts} failed: ${e.message}`);
-      if (attempt < maxAttempts && isAssertion) {
-        await sleep(500 * attempt); // 500ms, 1000ms back-off
+      console.warn(`[flash] attempt ${attempt}/${attempts} failed: ${e.message}`);
+      if (attempt < attempts && isAssertion) {
+        await sleep(baseDelay * attempt); // linear back-off per attempt
         continue;
       }
       break;
     }
   }
-  throw new Error(`Flash loan setup failed after ${maxAttempts} attempts: ${lastErr?.message}`);
+  throw new Error(`Flash loan setup failed after ${attempts} attempts: ${lastErr?.message}`);
 }
 
 // ── Fix 3: vault liquidity guard — fail fast with a clear message ──
@@ -282,7 +286,7 @@ export default async function handler(req, res) {
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
       ].includes(debtMint.toBase58());
-      const slippageBps = isStable ? 50 : 300; // 3% for volatile pairs to avoid 6025
+      const slippageBps = isStable ? 100 : 300; // 1% for stable pairs, 3% for volatile pairs to avoid 6025
 
       // Fetch swap quote first — flash loan ixs need a settled RPC state to avoid
       // internal SDK assertion failures when called concurrently with other RPC reads
@@ -303,7 +307,7 @@ export default async function handler(req, res) {
       // Fix 2: fetch flash loan ixs with retry on assertion failures
       let flashBorrowIx, flashPayIx;
       try {
-        const flashIxs = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: debtMint, amount: borrowBN });
+        const flashIxs = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: debtMint, amount: borrowBN }, 3, isStable);
         flashBorrowIx  = flashIxs.flashBorrowIx;
         flashPayIx     = flashIxs.flashPaybackIx;
       } catch (e) {
@@ -323,7 +327,8 @@ export default async function handler(req, res) {
       const operateResult = await getOperateIx({
         vaultId:    Number(vaultId),
         positionId: nftId,
-        colAmount:  colBN.add(new BN(quoteRes.outAmount.toString())),
+        // Fix 2: stable pairs use otherAmountThreshold (slippage-adjusted min) to avoid vault assertion
+        colAmount:  colBN.add(new BN((isStable ? quoteRes.otherAmountThreshold : quoteRes.outAmount).toString())),
         debtAmount: borrowBN,
         signer:     signerPubkey,
         connection,
@@ -381,10 +386,15 @@ export default async function handler(req, res) {
         flashColBN = new BN(withdrawAmount.toString());
       }
 
+      // Detect stable/stable pair for unwind (same logic as open)
+      const STABLE_MINTS = ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"];
+      const isStable = STABLE_MINTS.includes(colMint.toBase58()) || STABLE_MINTS.includes(debtMint.toBase58());
+      const unwindSlippageBps = isStable ? 100 : 150;
+
       // Fetch swap quote first — flash loan ixs need a settled RPC state to avoid
       // internal SDK assertion failures when called concurrently with other RPC reads
       const quoteRes = await fetch(
-        `${SWAP_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=150`,
+        `${SWAP_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=${unwindSlippageBps}`,
         { headers: jupHeaders }
       ).then(r => r.json());
 
@@ -394,13 +404,13 @@ export default async function handler(req, res) {
       // Fix 3: check vault has enough collateral liquidity before flash borrowing
       await assertVaultLiquidity(connection, vaultId, colMint, flashColBN);
 
-      // Fix 1: wait for RPC state to settle after quote fetch
-      await sleep(400);
+      // Fix 1: wait for RPC state to settle after quote fetch (longer for stable pairs)
+      await sleep(isStable ? 600 : 400);
 
       // Fix 2: fetch flash loan ixs with retry on assertion failures
       let flashBorrowIx, flashPayIx;
       try {
-        const flashIxs = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: colMint, amount: flashColBN });
+        const flashIxs = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: colMint, amount: flashColBN }, 3, isStable);
         flashBorrowIx  = flashIxs.flashBorrowIx;
         flashPayIx     = flashIxs.flashPaybackIx;
       } catch (e) {
