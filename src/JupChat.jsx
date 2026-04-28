@@ -319,6 +319,8 @@ Available actions:
 - "FETCH_RECURRING_ORDERS" → actionData: { "status": "active" } — status: "active"|"history". Show user open or past recurring orders with cancel buttons.
 - "SHOW_PREDICTION"  → actionData: { "teamA": "Arsenal", "teamB": "Man City", "sport": "football", "league": "Premier League", "analysis": "deep tactical breakdown with form, H2H, key players", "searchQuery": "Arsenal Man City" } — ALWAYS set searchQuery. ALSO trigger FETCH_PREDICTIONS with the same query.
 - "FETCH_PREDICTIONS"→ actionData: { "sport": "<category>", "query": null, "limit": 20 } — Infer the category from user intent: user says "sport/sports/football/soccer/basketball/cricket/tennis" → sport:"sports"; "crypto" → sport:"crypto"; "politics/election" → sport:"politics"; "esports/gaming" → sport:"esports"; "culture/entertainment" → sport:"culture"; "economics/finance/market" → sport:"economics"; "tech/technology" → sport:"tech". If user names a specific league or competition (e.g. "EPL", "Champions League", "NBA finals") set query to that instead of sport. ALWAYS set limit to the number the user requests (e.g. "top 30" → limit:30, "show 50" → limit:50). Default limit:20.
+- "PLACE_PREDICTION" → actionData: { "searchQuery": "Arsenal Atletico Madrid", "outcome": "Arsenal FC", "side": "yes", "amount": "20" } — directly place a bet without showing the market browser. Use when user clearly states the match, which team/outcome, yes/no side, and an amount. outcome must match one of the market outcome titles (team name, "Draw", etc). side: "yes" = betting that outcome happens, "no" = betting it doesn't. amount in USD (min $5).
+- "BASKET_PREDICTION" → actionData: { "bets": [ { "searchQuery": "Arsenal Atletico", "outcome": "Arsenal FC", "side": "yes", "amount": "10" }, { "searchQuery": "Man City Chelsea", "outcome": "Draw", "side": "no", "amount": "15" } ] } — place up to 10 prediction bets in sequence. Use when user specifies multiple matches and outcomes in one message. Each bet has same fields as PLACE_PREDICTION.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — portion: "all"|"half"|"quarter"|"N%"
 - "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — leveraged looping via Jupiter Lend flashloans. Explain mechanics + show vaults.
 - "SHOW_BORROW"        → actionData: { "collateral": "SOL", "debt": "USDC", "colAmount": "10", "borrowAmount": "200", "reason": "brief why" } — deposit collateral into a Jupiter Lend vault and borrow against it. colAmount = collateral to deposit; borrowAmount = debt token to receive. Available vaults: SOL→USDC (vault 1, 80% LTV), JitoSOL→SOL (vault 2, 90%), JupSOL→SOL (vault 3, 90%), WBTC→USDC (vault 4, 80%), JLP→USDC (vault 5, 90%), JUP→USDC (vault 6, 75%), USDC→USDT (vault 7, 95%).
@@ -353,6 +355,8 @@ Rules:
 - "my portfolio" / "my wallet" / "my positions" / "my orders" / "my bets" → FETCH_PORTFOLIO
 - "claim" / "claim winnings" / "claim payout" / "claim ASR" / "claim governance rewards" / "claim JUP rewards" → CLAIM_PAYOUTS
 - sports + predict/bet / "EPL" / "Champions League" / specific match → ALWAYS do BOTH: SHOW_PREDICTION then FETCH_PREDICTIONS
+- "predict yes/no on X" / "bet $N on X to win" / "put $N on Arsenal YES" / user names match + outcome + amount → PLACE_PREDICTION directly (no market browser needed)
+- "bet on multiple matches" / "predict on all these games" / user names 2+ matches with amounts → BASKET_PREDICTION (up to 10 bets)
 - "predictions" / "show markets" / "what can I bet on" / "sport prediction" / "new predictions" / "show predictions" / "prediction markets" / any mention of predict/bet + sport/crypto/politics → FETCH_PREDICTIONS — infer category from context. If user says "sport" or "sports" set sport:"sports". If user says "show me top N" extract limit:N.
 - "show new sport prediction" / "sport prediction to predict on" / "new sport markets" → FETCH_PREDICTIONS with sport:"sports"
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
@@ -4314,7 +4318,85 @@ function JupChatInner() {
     setBetStatus(null);
   };
 
-  // ── Safe API fetch — always returns JSON, never throws on HTML error pages ──
+  // ── Direct prediction bet — used by PLACE_PREDICTION and BASKET_PREDICTION ──
+  // Fetches market, finds matching outcome, executes bet without UI panel.
+  // Returns { success: bool, msg: string }
+  const doDirectPredictionBet = async ({ searchQuery, outcome, side, amount }) => {
+    const provider = getActiveProvider();
+    if (!provider) return { success: false, msg: "Wallet provider not found. Please reconnect." };
+    if (!walletFull) return { success: false, msg: "Connect your wallet first to place a prediction bet." };
+
+    const amtNum = parseFloat(amount);
+    if (!amtNum || amtNum < 5) return { success: false, msg: `Minimum bet is $5 USDC (got $${amount}).` };
+
+    // 1. Fetch markets for the match
+    const result = await fetchPredictionMarkets(null, searchQuery, 10);
+    if (!result.markets?.length) return { success: false, msg: `No prediction market found for: "${searchQuery}". Try showing markets first.` };
+
+    // 2. Find the event and matching outcome market
+    let foundMarketId = null, foundEventTitle = null, foundYesPrice = null;
+    const outcomeLower = (outcome || "").toLowerCase();
+    for (const evt of result.markets) {
+      const allMks = Array.isArray(evt.markets) ? evt.markets : [];
+      const openMks = allMks.filter(mk => !mk.status || mk.status === "open");
+      const match = openMks.find(mk => {
+        const t = (mk.metadata?.title || mk.title || "").toLowerCase();
+        return t.includes(outcomeLower) || outcomeLower.includes(t);
+      }) || openMks[0]; // fallback: first open market if no outcome match
+      if (match) {
+        foundMarketId   = match.marketId || match.id;
+        foundEventTitle = evt.metadata?.title || evt.title || searchQuery;
+        const rawYes    = match.pricing?.buyYesPriceUsd;
+        const rawNo     = match.pricing?.buyNoPriceUsd;
+        foundYesPrice   = side === "yes"
+          ? (rawYes != null ? (rawYes / 1_000_000).toFixed(2) : null)
+          : (rawNo  != null ? (rawNo  / 1_000_000).toFixed(2) : null);
+        break;
+      }
+    }
+    if (!foundMarketId) return { success: false, msg: `Could not find an open market for outcome "${outcome}" in: "${searchQuery}".` };
+
+    // 3. Place the order
+    const depositAmount = Math.floor(amtNum * 1_000_000);
+    const isYes = side === "yes";
+    const tryMints = [USDC_MINT, JUPUSD_MINT];
+    const placeOrder = (mint) => predFetch(`${JUP_PRED_API}/orders`, {
+      method: "POST",
+      body: { ownerPubkey: walletFull, marketId: foundMarketId, isYes, isBuy: true, depositAmount, depositMint: mint },
+    });
+
+    try {
+      let orderRes = null, usedMint = USDC_MINT;
+      for (const mint of tryMints) {
+        const res = await placeOrder(mint);
+        if (res?.transaction) { orderRes = res; usedMint = mint; break; }
+        orderRes = res;
+      }
+      if (!orderRes?.transaction) throw new Error(`Jupiter API: ${JSON.stringify(orderRes).slice(0, 200)}`);
+
+      const binaryStr = atob(orderRes.transaction);
+      const txBytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      const signedTx = await provider.signTransaction(tx);
+      const signedBytes = signedTx.serialize();
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedBytes), { encoding: "base64", skipPreflight: true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+      const contracts = orderRes?.order?.contracts;
+      const estWin = foundYesPrice ? ` · Est. win: $${(amtNum / parseFloat(foundYesPrice)).toFixed(2)}` : "";
+      return {
+        success: true,
+        msg: `✓ **${side.toUpperCase()}** $${amtNum} on _${outcome}_ (${foundEventTitle})${estWin}\n[Solscan →](https://solscan.io/tx/${signature})`,
+      };
+    } catch (err) {
+      return { success: false, msg: `Failed: ${err?.message || "Unknown error"}` };
+    }
+  };
   const safeApiFetch = async (url, opts = {}) => {
     const res = await fetch(url, opts);
     const text = await res.text();
@@ -5514,6 +5596,12 @@ function JupChatInner() {
           if (inj?.signTransaction) { const r=[]; for (const tx of txs) r.push(await inj.signTransaction(tx)); return r; }
           throw new Error("Wallet does not support signAllTransactions. Please reconnect.");
         },
+        signMessage: async (msg) => {
+          if (typeof reownProvider.signMessage === "function") return reownProvider.signMessage(msg);
+          const inj = window?.phantom?.solana || window?.backpack?.solana || window?.solflare || window?.solana || null;
+          if (inj?.signMessage) return inj.signMessage(msg);
+          throw new Error("Your wallet does not support message signing for Trigger orders. Try Phantom or Solflare extension.");
+        },
         isReown: true,
       };
     }
@@ -6520,6 +6608,26 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         else if (type === "triggerV2")   { setShowTrigV2(false);      await doTriggerV2(); }
         else if (type === "recurring")   { setShowRecurring(false);   await doRecurring(); }
         else if (type === "borrow")      { setShowBorrow(false);      await doBorrow(); }
+        else if (type === "prediction")  {
+          push("ai", `Placing bet…`);
+          const res = await doDirectPredictionBet(pendingDirectAction.betData);
+          push("ai", res.msg);
+        }
+        else if (type === "basketPrediction") {
+          const bets = pendingDirectAction.bets || [];
+          push("ai", `Placing **${bets.length} prediction bet${bets.length > 1 ? "s" : ""}** in sequence…`);
+          const results = [];
+          for (let i = 0; i < bets.length; i++) {
+            const bet = bets[i];
+            push("ai", `_(${i + 1}/${bets.length})_ Betting **${(bet.side||"yes").toUpperCase()}** $${bet.amount} on **${bet.outcome}**…`);
+            const res = await doDirectPredictionBet({ ...bet, side: bet.side || "yes", amount: bet.amount || "5" });
+            results.push(res);
+            push("ai", res.msg);
+          }
+          const won = results.filter(r => r.success).length;
+          const lost = results.length - won;
+          push("ai", `**Basket prediction complete** — ${won} placed${lost > 0 ? `, ${lost} failed` : ""}.`);
+        }
         return;
       } else if (answer === "no" || answer === "n" || answer === "cancel") {
         setInput("");
@@ -6801,7 +6909,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         }
 
       } else if (action === "FETCH_PREDICTIONS") {
-        push("ai", text + "\n\nFetching prediction markets…");
+        push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + "Fetching prediction markets…");
         const cat = actionData?.sport || actionData?.category || null;
         const query = actionData?.query || null; // for specific league/competition search
         const limit = parseInt(actionData?.limit) || 20;
@@ -6814,6 +6922,48 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         setShowPredList(true);
         if (result.markets?.length === 0) {
           push("ai", "Note: No prediction markets returned. This may be a server-region issue (the ChatFi proxy may be in a restricted region). The markets API itself is working — try again or check [jup.ag/prediction](https://jup.ag/prediction) directly.");
+        }
+
+      // ── PLACE_PREDICTION — single direct bet ────────────────────────────────
+      } else if (action === "PLACE_PREDICTION") {
+        if (!walletFull) { push("ai", "Connect your wallet first to place a prediction bet."); }
+        else {
+          const { searchQuery, outcome, side, amount } = actionData || {};
+          const sideLabel = (side || "yes").toUpperCase();
+          if (directMode) {
+            push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `⚡ **Direct Mode** — Bet **${sideLabel}** $${amount} on **${outcome}**\n\nReply **yes** to execute or **no** to cancel.`);
+            setPendingDirectAction({ type: "prediction", label: `${sideLabel} $${amount} on ${outcome}`, betData: { searchQuery, outcome, side: side || "yes", amount: amount || "5" } });
+          } else {
+            push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `Placing **${sideLabel}** $${amount} bet on **${outcome}**…`);
+            const res = await doDirectPredictionBet({ searchQuery, outcome, side: side || "yes", amount: amount || "5" });
+            push("ai", res.msg);
+          }
+        }
+
+      // ── BASKET_PREDICTION — up to 10 bets in sequence ──────────────────────
+      } else if (action === "BASKET_PREDICTION") {
+        const bets = actionData?.bets || [];
+        if (!bets.length) { push("ai", "No bets found. Try: *bet $10 YES on Arsenal vs Atletico and $15 NO Draw on Man City vs Chelsea*."); }
+        else if (!walletFull) { push("ai", "Connect your wallet first to place prediction bets."); }
+        else {
+          const summary = bets.slice(0, 10).map(b => `${(b.side||"yes").toUpperCase()} $${b.amount} on **${b.outcome}**`).join(", ");
+          if (directMode) {
+            push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `⚡ **Direct Mode** — ${bets.length} prediction bet${bets.length > 1 ? "s" : ""}: ${summary}\n\nReply **yes** to execute all or **no** to cancel.`);
+            setPendingDirectAction({ type: "basketPrediction", label: `${bets.length} prediction bets`, bets: bets.slice(0, 10) });
+          } else {
+            push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `Placing **${bets.length} prediction bet${bets.length > 1 ? "s" : ""}** in sequence…`);
+            const results = [];
+            for (let i = 0; i < Math.min(bets.length, 10); i++) {
+              const bet = bets[i];
+              push("ai", `_(${i + 1}/${bets.length})_ Betting **${(bet.side||"yes").toUpperCase()}** $${bet.amount} on **${bet.outcome}**…`);
+              const res = await doDirectPredictionBet({ ...bet, side: bet.side || "yes", amount: bet.amount || "5" });
+              results.push(res);
+              push("ai", res.msg);
+            }
+            const won = results.filter(r => r.success).length;
+            const lost = results.length - won;
+            push("ai", `**Basket prediction complete** — ${won} placed${lost > 0 ? `, ${lost} failed` : ""}.`);
+          }
         }
 
       } else if (action === "FETCH_EARN") {
