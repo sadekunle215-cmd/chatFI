@@ -6975,6 +6975,11 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
     try { sessionStorage.setItem("chatfi-hist", JSON.stringify(histRef.current.slice(-40))); } catch {}
 
     try {
+      // Build dynamic wallet context so the AI always knows connection state
+      const walletContext = walletFull
+        ? `\n\nCURRENT SESSION:\n- Wallet connected: YES\n- Wallet address: ${walletFull}\n- For any portfolio/balance/position requests, use action:"FETCH_PORTFOLIO" with wallet:"address_or_connected". NEVER ask the user to provide their wallet address.`
+        : `\n\nCURRENT SESSION:\n- Wallet connected: NO\n- If the user requests portfolio, balances, swaps, or any wallet action, prompt them to connect their wallet first.`;
+
       const res = await fetch("/api/claude", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
@@ -6982,8 +6987,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           model: "claude-sonnet-4-20250514",
           max_tokens: 2048,
           system: jupDocs
-            ? `## Jupiter Official API Documentation (llms-full.txt)\n\n${jupDocs}\n\n---\n\n${SYSTEM_PROMPT}`
-            : SYSTEM_PROMPT,
+            ? `## Jupiter Official API Documentation (llms-full.txt)\n\n${jupDocs}\n\n---\n\n${SYSTEM_PROMPT}${walletContext}`
+            : `${SYSTEM_PROMPT}${walletContext}`,
           messages: histRef.current,
         }),
       });
