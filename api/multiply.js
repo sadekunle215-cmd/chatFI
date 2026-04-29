@@ -20,7 +20,6 @@ import {
 import BN from "bn.js";
 import { getFlashBorrowIx, getFlashPaybackIx } from "@jup-ag/lend/flashloan";
 import { getOperateIx, getInitPositionIx, MAX_REPAY_AMOUNT, MAX_WITHDRAW_AMOUNT } from "@jup-ag/lend/borrow";
-// Fix: @jup-ag/lend/api is the correct import — NOT @jup-ag/lend-read
 import { Client } from "@jup-ag/lend/api";
 
 const MAX_REPAY    = MAX_REPAY_AMOUNT   ?? new BN("9007199254740991");
@@ -34,6 +33,31 @@ const jupHeaders = {
   "Content-Type": "application/json",
   ...(JUP_API_KEY ? { "x-api-key": JUP_API_KEY } : {}),
 };
+
+// ── Hardcoded vault mints (verified from jup.ag on-chain) ─────────────────────
+// supplyToken = collateral mint, borrowToken = debt mint
+const KNOWN_VAULT_MINTS = {
+  1: { supplyToken: "So11111111111111111111111111111111111111112",    borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" }, // SOL/USDC
+  2: { supplyToken: "So11111111111111111111111111111111111111112",    borrowToken: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"  }, // SOL/USDT
+  3: { supplyToken: "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v",  borrowToken: "So11111111111111111111111111111111111111112"    }, // JupSOL/SOL
+  4: { supplyToken: "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4", borrowToken: "So11111111111111111111111111111111111111112"    }, // JLP/SOL
+  5: { supplyToken: "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs", borrowToken: "So11111111111111111111111111111111111111112"    }, // WETH/SOL
+  6: { supplyToken: "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh", borrowToken: "So11111111111111111111111111111111111111112"    }, // WBTC/SOL
+  7: { supplyToken: "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",  borrowToken: "So11111111111111111111111111111111111111112"    }, // mSOL/SOL
+};
+
+const vaultMintCache = {};
+
+async function getVaultMintsById(vaultId) {
+  const id = Number(vaultId);
+  if (vaultMintCache[id]) return vaultMintCache[id];
+  if (KNOWN_VAULT_MINTS[id]) {
+    vaultMintCache[id] = KNOWN_VAULT_MINTS[id];
+    console.log(`[multiply] vault ${id} from map col=${KNOWN_VAULT_MINTS[id].supplyToken.slice(0,8)} debt=${KNOWN_VAULT_MINTS[id].borrowToken.slice(0,8)}`);
+    return KNOWN_VAULT_MINTS[id];
+  }
+  throw new Error(`Unknown vaultId ${id}. Not in vault map.`);
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function toIx(ix) {
@@ -126,48 +150,15 @@ async function buildTx(connection, signerPubkey, ixs, alts) {
   const { blockhash } = await connection.getLatestBlockhash("confirmed");
   const validAlts = (alts || []).filter(a => a && a.key && a.state);
   console.log(`[buildTx] ixs=${ixs.length} alts=${validAlts.length}`);
-  let msg;
-  try {
-    msg = new TransactionMessage({
-      payerKey: signerPubkey,
-      recentBlockhash: blockhash,
-      instructions: [cuIx, ...ixs],
-    }).compileToV0Message(validAlts);
-  } catch(e) {
-    throw new Error(`Transaction compile failed: ${e.message}`);
-  }
+  const msg = new TransactionMessage({
+    payerKey: signerPubkey,
+    recentBlockhash: blockhash,
+    instructions: [cuIx, ...ixs],
+  }).compileToV0Message(validAlts);
   const txBytes = new VersionedTransaction(msg).serialize();
   console.log(`[buildTx] tx size=${txBytes.length} bytes`);
   if (txBytes.length > 1232) throw new Error(`Transaction too large: ${txBytes.length} bytes (max 1232).`);
   return Buffer.from(txBytes).toString("base64");
-}
-
-// ── Vault mint lookup via HTTP API ─────────────────────────────────────────────
-const vaultMintCache = {};
-
-async function getVaultMintsById(vaultId) {
-  const id = Number(vaultId);
-  if (vaultMintCache[id]) return vaultMintCache[id];
-
-  const client = new Client(JUP_API_KEY ? { apiKey: JUP_API_KEY } : undefined);
-  const tokens = await client.earn.getTokens();
-  console.log(`[vaults] getTokens returned ${tokens?.length} entries`);
-
-  // Try vaultId field first, then fallback to index
-  let v = tokens?.find?.(t => Number(t.vaultId) === id);
-  if (!v) v = tokens?.[id - 1];
-  if (!v) throw new Error(`vaultId ${id} not found. Available: ${tokens?.map(t => t.vaultId).join(",")}`);
-
-  const mints = {
-    supplyToken: v.supplyToken ?? v.collateralMint ?? v.mint,
-    borrowToken:  v.borrowToken  ?? v.debtMint      ?? v.borrowMint,
-  };
-  if (!mints.supplyToken || !mints.borrowToken)
-    throw new Error(`Vault ${id} missing mint data: ${JSON.stringify(v)}`);
-
-  vaultMintCache[id] = mints;
-  console.log(`[multiply] vault ${id} col=${mints.supplyToken.slice(0,8)} debt=${mints.borrowToken.slice(0,8)}`);
-  return mints;
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -181,14 +172,9 @@ export default async function handler(req, res) {
     try {
       const connection = new Connection(RPC_URL, { commitment: "confirmed" });
       const slot = await connection.getSlot();
-      const client = new Client(JUP_API_KEY ? { apiKey: JUP_API_KEY } : undefined);
-      const tokens = await client.earn.getTokens();
-      console.log(`[GET] raw tokens[0]:`, JSON.stringify(tokens?.[0] ?? {}).slice(0, 400));
-      const vaults = (tokens || []).map((t, i) => ({
-        vaultId:     t.vaultId ?? (i + 1),
-        supplyToken: t.supplyToken ?? t.collateralMint ?? t.mint,
-        borrowToken:  t.borrowToken  ?? t.debtMint      ?? t.borrowMint,
-      })).filter(v => v.supplyToken && v.borrowToken);
+      const vaults = Object.entries(KNOWN_VAULT_MINTS).map(([id, m]) => ({
+        vaultId: Number(id), supplyToken: m.supplyToken, borrowToken: m.borrowToken,
+      }));
       return res.status(200).json({ ok: true, slot, vaults });
     } catch(e) {
       return res.status(500).json({ error: e.message });
@@ -242,7 +228,6 @@ export default async function handler(req, res) {
       const STABLE = ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"];
       const isStable = STABLE.includes(colMint.toBase58()) || STABLE.includes(debtMint.toBase58());
 
-      // Fetch swap quote
       const quoteRes = await fetch(
         `${SWAP_API}/quote?inputMint=${debtMint.toBase58()}&outputMint=${colMint.toBase58()}&amount=${borrowBN.toString()}&slippageBps=${isStable ? 100 : 300}`,
         { headers: jupHeaders }
@@ -252,7 +237,6 @@ export default async function handler(req, res) {
 
       await sleep(isStable ? 800 : 500);
 
-      // Flash loan ixs
       let flashBorrowIx, flashPayIx;
       try {
         const r = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: debtMint, amount: borrowBN }, 5, isStable);
@@ -262,11 +246,9 @@ export default async function handler(req, res) {
         return res.status(502).json({ error: e.message });
       }
 
-      // Init position NFT
       const { ix: initIx, nftId } = await getInitPositionIx({ vaultId: Number(vaultId), connection, signer: signerPubkey });
       console.log(`[multiply/open] nftId=${nftId}`);
 
-      // Operate ix
       const operateResult = await getOperateIxWithRetry({
         vaultId:    Number(vaultId),
         positionId: nftId,
@@ -276,14 +258,13 @@ export default async function handler(req, res) {
         connection,
       }, 5, isStable);
 
-      // Swap instructions
       const swapApiRes = await fetch(`${SWAP_API}/swap-instructions`, {
         method: "POST", headers: jupHeaders,
         body: JSON.stringify({ quoteResponse: quoteRes, userPublicKey: signerPubkey.toBase58() }),
       }).then(r => r.json());
       if (swapApiRes.error) return res.status(502).json({ error: `Swap instructions failed: ${swapApiRes.error}` });
 
-      const swapIx  = toIx(swapApiRes.swapInstruction);
+      const swapIx   = toIx(swapApiRes.swapInstruction);
       const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
       const allAlts  = dedupeAlts([...(operateResult.addressLookupTableAccounts ?? []), ...swapAlts]);
 
@@ -293,7 +274,6 @@ export default async function handler(req, res) {
       ]);
       const ataIxs = [colAtaIx, debtAtaIx].filter(Boolean);
 
-      // Setup tx (legacy — position NFT + ATAs)
       const { blockhash: setupBh } = await connection.getLatestBlockhash("confirmed");
       const setupTx = new Transaction({ feePayer: signerPubkey, recentBlockhash: setupBh });
       setupTx.add(initIx);
@@ -315,16 +295,16 @@ export default async function handler(req, res) {
 
       if (isFullUnwind) {
         const client = new Client(JUP_API_KEY ? { apiKey: JUP_API_KEY } : undefined);
-        const pos    = await client.vault.getUserPosition({ vaultId: Number(vaultId), positionId: Number(positionId) });
+        const pos    = await client.vault?.getUserPosition?.({ vaultId: Number(vaultId), positionId: Number(positionId) });
         if (!pos) return res.status(400).json({ error: `Position ${positionId} not found in vault ${vaultId}` });
-        const state  = await client.vault.getCurrentPositionState({ vaultId: Number(vaultId), position: pos });
+        const state  = await client.vault?.getCurrentPositionState?.({ vaultId: Number(vaultId), position: pos });
         flashColBN   = state.colRaw.muln(101).divn(100);
       } else {
         flashColBN = new BN(withdrawAmount.toString());
       }
 
-      const STABLE    = ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"];
-      const isStable  = STABLE.includes(colMint.toBase58()) || STABLE.includes(debtMint.toBase58());
+      const STABLE   = ["EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"];
+      const isStable = STABLE.includes(colMint.toBase58()) || STABLE.includes(debtMint.toBase58());
 
       const quoteRes = await fetch(
         `${SWAP_API}/quote?inputMint=${colMint.toBase58()}&outputMint=${debtMint.toBase58()}&amount=${flashColBN.toString()}&slippageBps=${isStable ? 100 : 150}`,
@@ -363,8 +343,7 @@ export default async function handler(req, res) {
       const swapIx   = toIx(swapApiRes.swapInstruction);
       const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
       const allAlts  = dedupeAlts([...(operateResult.addressLookupTableAccounts ?? []), ...swapAlts]);
-      const allIxs   = [flashBorrowIx, swapIx, ...operateResult.ixs, flashPayIx];
-      const transaction = await buildTx(connection, signerPubkey, allIxs, allAlts);
+      const transaction = await buildTx(connection, signerPubkey, [flashBorrowIx, swapIx, ...operateResult.ixs, flashPayIx], allAlts);
       return res.status(200).json({ transaction });
     }
 
