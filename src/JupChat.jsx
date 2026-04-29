@@ -337,6 +337,8 @@ Available actions:
 - "SHOW_ROUTE"      → actionData: { "from": "SOL", "to": "USDC", "amount": "1" } — show full DEX route breakdown for this swap: AMMs used, split percentages, price impact per hop.
 - "FETCH_XSTOCKS"   → actionData: { "limit": 15, "sort": "volume" } — tokenized real-world stocks (xStocks / RWA stocks) on Solana. sort: "volume"|"price_change"|"market_cap". Default limit 15.
 - "SET_PRICE_ALERT" → actionData: { "token": "SOL", "condition": "above"|"below", "price": "200" } — set an in-session price alert; ChatFi notifies in chat when price crosses the threshold.
+- "DETECT_VOLATILITY" → actionData: { "token": "SOL", "thresholdPct": "2", "autoOrder": true, "from": "USDC", "amount": "50" } — monitor a token's rolling price volatility (% std-dev over 10 samples, polled every 30s). When volatility exceeds thresholdPct, fires a chat alert. If autoOrder:true, automatically opens a pre-filled OCO limit order panel with TP=+2σ and SL=-1.5σ from current price. thresholdPct default 2. from/amount configure the auto-order size. Use for: volatility-based entries, auto-bracket orders on volatile tokens.
+- "FETCH_VOL_MONITORS" → actionData: {} — show all active volatility monitors with cancel buttons.
 - "SHOW_TRADE_JOURNAL" → actionData: { "period": "all"|"today"|"week" } — show the user's local trade history and estimated PnL.
 - "BASKET_SWAP"     → actionData: { "trades": [...] } — execute multiple swaps in sequence. Each trade supports THREE amount modes (pick one): amountUSD:"100" (spend $100 of from token), amount:"5.4" (native token units — parse k/K suffix as ×1000, m/M as ×1000000), or portion:"all"|"max"|"half"|"quarter"|"N%" (wallet balance fraction). from/to can vary per trade (many-to-one and one-to-many both work). Examples: "buy $100 each of SOL JUP BONK" → [{from:"USDC",to:"SOL",amountUSD:"100"},…]; "swap 5.4 JUP, 158.4k BONK to USDC" → [{from:"JUP",to:"USDC",amount:"5.4"},{from:"BONK",to:"USDC",amount:"158400"}]; "swap max of SOL PENGU to USDC" → [{from:"SOL",to:"USDC",portion:"max"},{from:"PENGU",to:"USDC",portion:"max"}]; "swap half my JUP and all my FARTCOIN to SOL" → [{from:"JUP",to:"SOL",portion:"half"},{from:"FARTCOIN",to:"SOL",portion:"all"}].
 - "SWAP_ALL_WALLET" → actionData: { "to": "USDC", "exclude": ["SOL","USDC"] } — use ONLY when user says "swap everything/all tokens in my wallet" or "swap all tokens except X" and does NOT name specific tokens. The client will read the live wallet balances and build the trades list. "exclude" must always contain the target "to" token plus any tokens the user explicitly wants to keep. Examples: "swap all tokens to USDC except SOL" → to:"USDC", exclude:["SOL","USDC"]; "convert my whole wallet to SOL except USDC" → to:"SOL", exclude:["SOL","USDC"]; "dump everything to USDC" → to:"USDC", exclude:["USDC"]. CRITICAL: use BASKET_SWAP (not this) when user names the specific tokens to swap.
@@ -385,6 +387,9 @@ Rules:
 - "my locks" / "vested tokens" / "claim vested" / "locked tokens" / "view locks" / "my vesting" → FETCH_LOCKS
 - "show route" / "how is swap routed" / "which DEX" / "route breakdown" / "swap path" / "which AMM" → SHOW_ROUTE
 - "alert me when" / "notify me when" / "price alert" / "tell me when X hits $Y" / "alert when X above/below" → SET_PRICE_ALERT — extract token, condition (above/below), price
+- "volatility monitor" / "watch volatility" / "detect volatility" / "auto-order when volatile" / "set limit if volatile" / "trade volatility" / "monitor X for volatility" / "auto-bracket X" / "auto OCO on volatility" → DETECT_VOLATILITY — extract token, thresholdPct (default 2), autoOrder (true if user says auto/automatic/set order), from (default USDC), amount
+- "VOLATILITY CHAINING: "monitor SOL volatility and auto-set OCO" → DETECT_VOLATILITY with autoOrder:true. "watch BONK volatility then show my monitors" → CHAINED_ACTIONS [DETECT_VOLATILITY, FETCH_VOL_MONITORS]
+- "my volatility monitors" / "show vol monitors" / "active volatility watches" / "cancel vol monitor" → FETCH_VOL_MONITORS
 - "my trades" / "trade history" / "trade journal" / "my PnL" / "what have I traded" / "show my swaps" / "trading history" → SHOW_TRADE_JOURNAL
 - "swap all tokens in my wallet to X" / "convert everything to X" / "swap all my tokens except Y to X" / "dump my whole wallet into X" / "liquidate everything to X" / "sell all tokens except X" → SWAP_ALL_WALLET — use when user does NOT name specific tokens; client will read live wallet
 - "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" / "swap X JUP and Y BONK to USDC" / "swap all these tokens to USDC" / "swap max/all of A B C to X" / "dump all my A B C into X" → BASKET_SWAP — parse each token, amount mode, and direction into trades array; default from:"USDC" when buying, default to:"USDC" when selling/dumping
@@ -403,7 +408,7 @@ Rules:
 - XSTOCKS CHAINING: "show me xStocks then swap USDC to SPY" → CHAINED_ACTIONS steps: [FETCH_XSTOCKS, SHOW_SWAP]
 - LOCK CHAINING: "lock X for Y minutes/hours/days then claim and swap/send" / "lock USDC for 10 minutes, after unlock claim and swap to SOL" / "lock tokens then after vesting swap proceeds" → CHAINED_ACTIONS with steps: [SHOW_LOCK (lock the tokens), then SHOW_SWAP or BASKET_SWAP (swap after unlock), then optionally SHOW_SEND (invite link)]. The lock step vesting/cliff times must be converted to days: minutes÷1440, hours÷24. After the lock step, include subsequent swap/send steps so the UI opens them in sequence after lock confirms. Example: "lock 10 USDC for 10 min then swap to SOL and send 5 USDC invite link" → steps: [SHOW_LOCK(USDC,10,cliffDays:0,vestingDays:0.00694), SHOW_SWAP(USDC→SOL,10), SHOW_SEND(USDC,5)]
 - TIME CONVERSION for lock vestingDays: 10 minutes = 0.00694 days (10/1440), 1 hour = 0.04167 days (1/24), 30 minutes = 0.02083 days. Always convert to days for the vestingDays field.
-- CHAINED_ACTIONS supported step actions — ALL actions work as chain steps: BASKET_SWAP, SWAP_ALL_WALLET, SHOW_SWAP, SHOW_TRIGGER_V2, SHOW_RECURRING, SHOW_LOCK, FETCH_EARN, SHOW_SEND, SHOW_PERPS, SHOW_BORROW, SHOW_MULTIPLY, SHOW_STUDIO, SHOW_PREDICTION, PLACE_PREDICTION, BASKET_PREDICTION, SHOW_ROUTE, SET_PRICE_ALERT, SHOW_TRADE_JOURNAL, FETCH_PORTFOLIO, FETCH_TOKEN_INFO, FETCH_XSTOCKS, FETCH_LOCKS, FETCH_STUDIO_FEES, FETCH_SEND_HISTORY, FETCH_PERPS_POSITIONS, FETCH_RECURRING_ORDERS, FETCH_TRIGGER_ORDERS, FETCH_PREDICTIONS, SHOW_LEND_POSITIONS, CLAIM_PAYOUTS, COPY_TRADE. Each step: { "action": "STEP_ACTION", "actionData": {...} }
+- CHAINED_ACTIONS supported step actions — ALL actions work as chain steps: BASKET_SWAP, SWAP_ALL_WALLET, SHOW_SWAP, SHOW_TRIGGER_V2, SHOW_RECURRING, SHOW_LOCK, FETCH_EARN, SHOW_SEND, SHOW_PERPS, SHOW_BORROW, SHOW_MULTIPLY, SHOW_STUDIO, SHOW_PREDICTION, PLACE_PREDICTION, BASKET_PREDICTION, SHOW_ROUTE, SET_PRICE_ALERT, DETECT_VOLATILITY, FETCH_VOL_MONITORS, SHOW_TRADE_JOURNAL, FETCH_PORTFOLIO, FETCH_TOKEN_INFO, FETCH_XSTOCKS, FETCH_LOCKS, FETCH_STUDIO_FEES, FETCH_SEND_HISTORY, FETCH_PERPS_POSITIONS, FETCH_RECURRING_ORDERS, FETCH_TRIGGER_ORDERS, FETCH_PREDICTIONS, SHOW_LEND_POSITIONS, CLAIM_PAYOUTS, COPY_TRADE. Each step: { "action": "STEP_ACTION", "actionData": {...} }
 - "buy $X each of A B C and use $N for a limit/trigger order on Y" / "buy multiple tokens and set a trigger" / "buy A B C and also set a limit order" / any intent that combines BUYING multiple tokens WITH a separate trigger/limit/DCA order → CHAINED_ACTIONS with step 1 as BASKET_SWAP (trades array = all the buy trades, from:"USDC" for each) and step 2 as SHOW_TRIGGER_V2 or SHOW_RECURRING. CRITICAL: fully populate trades array in step 1 — e.g. "buy 1 USDC of bonk, pengu, jup, fartcoin" → trades:[{from:"USDC",to:"BONK",amountUSD:"1"},{from:"USDC",to:"PENGU",amountUSD:"1"},{from:"USDC",to:"JUP",amountUSD:"1"},{from:"USDC",to:"FARTCOIN",amountUSD:"1"}].
 - REVERSE TRADING / TIMED SELL-BACK: When user says "buy A B C then sell them back to USDC after X minutes/seconds/hours" OR "buy X Y Z and sell back to USDC after [time]" OR "buy these, wait [time], then sell all back" → use CHAINED_ACTIONS: step 1 = BASKET_SWAP (buy trades, from USDC), step 2 = SHOW_RECURRING or null (if time-based sell is wanted, note it in text). HOWEVER if the user says "buy X Y Z and sell back to USDC after [time]" — the SELL step is a DELAYED action, so: include the sell-back trades as a second BASKET_SWAP step in CHAINED_ACTIONS and set a note in text that the sells will be shown after the delay. The client processes steps sequentially so the sell BASKET_SWAP panel shows up right after buys complete. If the user says "sell them back" / "now sell" as a follow-up message after buying, treat it as a new BASKET_SWAP selling all the previously mentioned tokens back to USDC.
 - DELAYED/TIMED SELL: "after 4 seconds sell X to USDC" / "sell back in 2 minutes" → include a second BASKET_SWAP step in CHAINED_ACTIONS with the sell trades. The UI executes steps in sequence — the user will see the sell panel open immediately after buys complete. Mention the timing in your text but do not skip the action.
@@ -502,7 +507,7 @@ const SUGGESTION_GROUPS = [
   {
     label: "Trade",
     color: "#63b3ed",
-    items: ["Swap SOL to BONK", "Limit order: buy SOL below $140", "OCO: TP $200 SL $120 on SOL", "Long SOL 10x perps", "Buy $50 each of SOL, JUP, BONK"],
+    items: ["Swap SOL to BONK", "Limit order: buy SOL below $140", "OCO: TP $200 SL $120 on SOL", "Long SOL 10x perps", "Buy $50 each of SOL, JUP, BONK", "Auto-order on SOL volatility spike"],
   },
   {
     label: "Earn",
@@ -2169,6 +2174,15 @@ function JupChatInner() {
   });
   const alertIntervalRef = useRef(null);
 
+  // ── Volatility Monitor ────────────────────────────────────────────────────────
+  // { id, token, thresholdPct, autoOrder, autoOrderCfg: {from, amount}, triggered }
+  const [volMonitors, setVolMonitors] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("chatfi-volmon") || "[]"); } catch { return []; }
+  });
+  const [showVolMonitors, setShowVolMonitors] = useState(false);
+  const priceHistoryRef = useRef({}); // { [SYM]: [{ price, ts }] }
+  const volIntervalRef  = useRef(null);
+
   // ── Trade Journal ─────────────────────────────────────────────────────────────
   const [tradeJournal, setTradeJournal] = useState(() => {
     try { return JSON.parse(localStorage.getItem("chatfi-journal") || "[]"); } catch { return []; }
@@ -2321,7 +2335,7 @@ function JupChatInner() {
     if (!container) return;
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (isNearBottom) endRef.current?.scrollIntoView({ behavior:"smooth" });
-  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showTrigV2, showTrigOrders, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders, showStudio, showStudioFees, showLock, showLocks, showRoute]);
+  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showTrigV2, showTrigOrders, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders, showStudio, showStudioFees, showLock, showLocks, showRoute, showVolMonitors]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -2672,7 +2686,111 @@ function JupChatInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [priceAlerts]);
 
-  // ── Copy Trade — serverside Helius fetch ─────────────────────────────────────
+  // ── Volatility Monitor polling ────────────────────────────────────────────────
+  // Every 30 s: fetch prices from Jupiter Price API v3, maintain a 10-sample rolling
+  // window per monitored token, compute % std-dev. When it exceeds the threshold:
+  //   • Push a chat notification with vol stats + σ-spread
+  //   • If autoOrder=true, pre-fill and open the OCO TriggerV2 panel (TP=+2σ, SL=-1.5σ)
+  useEffect(() => {
+    if (volIntervalRef.current) clearInterval(volIntervalRef.current);
+    const active = volMonitors.filter(m => !m.triggered);
+    if (!active.length) return;
+
+    const WINDOW = 10;
+
+    const tick = async () => {
+      const syms = [...new Set(active.map(m => m.token))];
+      try {
+        const mints = syms
+          .map(s => tokenCacheRef.current[s] || TOKEN_MINTS[s])
+          .filter(Boolean);
+        if (!mints.length) return;
+
+        const json = await fetch(`${JUP_PRICE_API}?ids=${mints.join(",")}`).then(r => r.json());
+        const now  = Date.now();
+
+        // ── Update rolling price history ──────────────────────────────────────
+        for (const [mint, info] of Object.entries(json || {})) {
+          const p = parseFloat(info?.usdPrice);
+          if (!p) continue;
+          const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
+                   || syms.find(s => (tokenCacheRef.current[s] || TOKEN_MINTS[s]) === mint);
+          if (!sym) continue;
+          const hist = priceHistoryRef.current[sym] || [];
+          hist.push({ price: p, ts: now });
+          priceHistoryRef.current[sym] = hist.slice(-WINDOW);
+        }
+
+        // ── Evaluate each active monitor ──────────────────────────────────────
+        let changed = false;
+        const nextMonitors = volMonitors.map(mon => {
+          if (mon.triggered) return mon;
+          const hist = priceHistoryRef.current[mon.token];
+          if (!hist || hist.length < 3) return mon;
+
+          const prices  = hist.map(h => h.price);
+          const mean    = prices.reduce((a, b) => a + b, 0) / prices.length;
+          const variance= prices.reduce((a, b) => a + (b - mean) ** 2, 0) / prices.length;
+          const stdDev  = Math.sqrt(variance);
+          const volPct  = (stdDev / mean) * 100;
+
+          if (volPct < mon.thresholdPct) return mon;
+
+          // ── Threshold crossed ─────────────────────────────────────────────
+          const currentPrice = prices[prices.length - 1];
+          const tpPrice = (currentPrice + stdDev * 2).toFixed(6);
+          const slPrice = Math.max(0, currentPrice - stdDev * 1.5).toFixed(6);
+
+          push("ai",
+            `**⚡ Volatility Alert — ${mon.token}**\n\n` +
+            `Rolling volatility: **${volPct.toFixed(2)}%** (threshold: ${mon.thresholdPct}%, window: ${hist.length} samples)\n` +
+            `Current price: **$${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}**\n` +
+            `1σ spread: **±$${stdDev.toFixed(6)}**\n\n` +
+            (mon.autoOrder
+              ? `Auto-opening OCO order — TP: **$${tpPrice}** · SL: **$${slPrice}**`
+              : `Tip: *"Set OCO on ${mon.token} TP $${tpPrice} SL $${slPrice}"* to trade this move.`)
+          );
+
+          if (mon.autoOrder) {
+            const cfg      = mon.autoOrderCfg || {};
+            const from     = (cfg.from || "USDC").toUpperCase();
+            const amount   = cfg.amount || "50";
+            const toMint   = tokenCacheRef.current[mon.token] || TOKEN_MINTS[mon.token] || "";
+            const fromMint = tokenCacheRef.current[from] || TOKEN_MINTS[from] || TOKEN_MINTS.USDC;
+            setTrigV2Cfg({
+              orderType: "oco",
+              from, fromMint, fromDecimals: from === "SOL" ? 9 : 6,
+              to: mon.token, toMint, toDecimals: 9,
+              amount,
+              triggerCondition: "below",
+              triggerPriceUsd: "",
+              tpPriceUsd: tpPrice,
+              slPriceUsd: slPrice,
+              slippageBps: "100",
+              expiryDays: "7",
+            });
+            setTrigV2Status(null);
+            setShowTrigV2(true);
+          }
+
+          changed = true;
+          return { ...mon, triggered: true };
+        });
+
+        if (changed) {
+          setVolMonitors(nextMonitors);
+          try { localStorage.setItem("chatfi-volmon", JSON.stringify(nextMonitors)); } catch {}
+        }
+      } catch (e) {
+        console.warn("[ChatFi] Volatility monitor tick error:", e);
+      }
+    };
+
+    volIntervalRef.current = setInterval(tick, 30000);
+    tick(); // immediate first check
+    return () => clearInterval(volIntervalRef.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [volMonitors]);
   const fetchWalletTrades = async (walletAddress, limit = 5) => {
     const res = await fetch(`/api/wallet-trades?wallet=${encodeURIComponent(walletAddress)}&limit=${limit}`);
     if (!res.ok) throw new Error(await res.text());
@@ -7773,6 +7891,45 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           push("ai", text + `\n\nAlert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**\nI'll notify you in chat when it triggers. You can set multiple alerts.`);
         }
 
+      // ── DETECT_VOLATILITY ──────────────────────────────────────────────────
+      } else if (action === "DETECT_VOLATILITY") {
+        const monToken    = (actionData?.token || "SOL").toUpperCase();
+        const threshold   = parseFloat(actionData?.thresholdPct ?? actionData?.threshold ?? "2");
+        const autoOrder   = actionData?.autoOrder === true || actionData?.autoOrder === "true";
+        const autoFrom    = (actionData?.from   || "USDC").toUpperCase();
+        const autoAmount  = actionData?.amount  || "50";
+
+        if (!threshold || isNaN(threshold)) {
+          push("ai", "Please specify a volatility threshold, e.g. *monitor SOL volatility above 2%*.");
+        } else {
+          // Clear stale price history so rolling window starts fresh for this token
+          priceHistoryRef.current[monToken] = [];
+          const newMon = {
+            id: Date.now(),
+            token: monToken,
+            thresholdPct: threshold,
+            autoOrder,
+            autoOrderCfg: autoOrder ? { from: autoFrom, amount: autoAmount } : null,
+            triggered: false,
+          };
+          const updated = [...volMonitors, newMon];
+          setVolMonitors(updated);
+          try { localStorage.setItem("chatfi-volmon", JSON.stringify(updated)); } catch {}
+          push("ai",
+            text + `\n\n` +
+            `**Volatility monitor active — ${monToken}**\n` +
+            `Threshold: **${threshold}%** rolling std-dev · 10-sample window · polled every 30s\n` +
+            (autoOrder
+              ? `Auto-order: when threshold hits, an **OCO** panel opens pre-filled with σ-based TP/SL. Amount: **${autoAmount} ${autoFrom}**`
+              : `I'll notify you in chat when ${monToken} volatility spikes above ${threshold}%.`)
+          );
+        }
+
+      // ── FETCH_VOL_MONITORS ─────────────────────────────────────────────────
+      } else if (action === "FETCH_VOL_MONITORS") {
+        push("ai", text);
+        setShowVolMonitors(true);
+
       // ── SHOW_TRADE_JOURNAL ─────────────────────────────────────────────────
       } else if (action === "SHOW_TRADE_JOURNAL") {
         const period = actionData?.period || "all";
@@ -11229,6 +11386,176 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               </div>
             </div>
           )}
+
+          {/* ── Volatility Monitors panel (FETCH_VOL_MONITORS) ──────────────── */}
+          {showVolMonitors && (() => {
+            const active  = volMonitors.filter(m => !m.triggered);
+            const done    = volMonitors.filter(m => m.triggered);
+            const cancelMon = (id) => {
+              const updated = volMonitors.filter(m => m.id !== id);
+              setVolMonitors(updated);
+              try { localStorage.setItem("chatfi-volmon", JSON.stringify(updated)); } catch {}
+            };
+            const resetMon = (id) => {
+              priceHistoryRef.current = { ...priceHistoryRef.current };
+              const updated = volMonitors.map(m => m.id === id ? { ...m, triggered: false } : m);
+              setVolMonitors(updated);
+              try { localStorage.setItem("chatfi-volmon", JSON.stringify(updated)); } catch {}
+            };
+            const VolCard = ({ mon }) => {
+              const hist   = priceHistoryRef.current[mon.token] || [];
+              const prices = hist.map(h => h.price);
+              let volPct = null;
+              if (prices.length >= 2) {
+                const mean     = prices.reduce((a, b) => a + b, 0) / prices.length;
+                const variance = prices.reduce((a, b) => a + (b - mean) ** 2, 0) / prices.length;
+                volPct = (Math.sqrt(variance) / mean) * 100;
+              }
+              const isHot = volPct !== null && volPct >= mon.thresholdPct * 0.75;
+              return (
+                <div style={{
+                  background: T.bg,
+                  border: `1px solid ${mon.triggered ? T.border : isHot ? T.greenBd : "#1a2d4d"}`,
+                  borderRadius: 12, padding: "14px 16px", marginBottom: 10,
+                  boxShadow: isHot && !mon.triggered ? `0 0 12px ${T.greenBg}` : "none",
+                  transition: "box-shadow 0.3s",
+                  opacity: mon.triggered ? 0.55 : 1,
+                }}>
+                  {/* Header */}
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ fontSize:16 }}>⚡</span>
+                      <span style={{ fontWeight:700, fontSize:14, color: mon.triggered ? T.text3 : T.text1 }}>{mon.token}</span>
+                      {mon.triggered && (
+                        <span style={{ fontSize:10, padding:"2px 8px", background:T.border, borderRadius:10, color:T.text3, fontWeight:700 }}>FIRED</span>
+                      )}
+                      {!mon.triggered && isHot && (
+                        <span style={{ fontSize:10, padding:"2px 8px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:10, color:T.green, fontWeight:700 }}>HEATING UP</span>
+                      )}
+                    </div>
+                    <span style={{ fontSize:11, color:T.text3 }}>ID #{String(mon.id).slice(-5)}</span>
+                  </div>
+
+                  {/* Stats grid */}
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:12 }}>
+                    {[
+                      ["Threshold", `${mon.thresholdPct}%`],
+                      ["Live Vol", volPct !== null ? `${volPct.toFixed(2)}%` : `${hist.length} pts`],
+                      ["Samples", `${hist.length} / 10`],
+                    ].map(([label, val]) => (
+                      <div key={label} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, padding:"8px 10px" }}>
+                        <div style={{ fontSize:9, color:T.text3, marginBottom:3, textTransform:"uppercase", letterSpacing:"0.06em" }}>{label}</div>
+                        <div style={{ fontSize:13, fontWeight:700, color: label==="Live Vol" && volPct !== null && volPct >= mon.thresholdPct ? T.green : T.text1 }}>{val}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Vol progress bar */}
+                  {volPct !== null && (
+                    <div style={{ marginBottom:12 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                        <span style={{ fontSize:11, color:T.text3 }}>Volatility vs threshold</span>
+                        <span style={{ fontSize:11, color: volPct >= mon.thresholdPct ? T.green : T.text2 }}>
+                          {Math.min(100, (volPct / mon.thresholdPct) * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                      <div style={{ height:4, background:T.border, borderRadius:4, overflow:"hidden" }}>
+                        <div style={{
+                          width:`${Math.min(100, (volPct / mon.thresholdPct) * 100)}%`,
+                          height:"100%",
+                          background: volPct >= mon.thresholdPct
+                            ? `linear-gradient(90deg, ${T.green}, #7fff00)`
+                            : `linear-gradient(90deg, ${T.teal}, ${T.accent})`,
+                          borderRadius:4, transition:"width 0.5s ease",
+                        }} />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Config badge row */}
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 }}>
+                    <span style={{ fontSize:11, padding:"3px 9px", background:T.purpleBg, border:`1px solid #2d1f4d`, borderRadius:10, color:T.purple }}>
+                      {mon.autoOrder ? `🤖 Auto-OCO · ${mon.autoOrderCfg?.amount || "50"} ${mon.autoOrderCfg?.from || "USDC"}` : "👁 Alert only"}
+                    </span>
+                    <span style={{ fontSize:11, padding:"3px 9px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, color:T.text3 }}>
+                      30s poll · 10-sample window
+                    </span>
+                  </div>
+
+                  {/* Action buttons */}
+                  <div style={{ display:"flex", gap:8 }}>
+                    {mon.triggered ? (
+                      <button onClick={() => resetMon(mon.id)} className="hov-btn"
+                        style={{ flex:1, padding:"7px", background:T.purpleBg, border:`1px solid #2d1f4d`, borderRadius:8, color:T.purple, fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                        Reset & Re-watch
+                      </button>
+                    ) : null}
+                    <button onClick={() => cancelMon(mon.id)} className="hov-btn"
+                      style={{ flex:1, padding:"7px", background:"transparent", border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                      {mon.triggered ? "Remove" : "Cancel Monitor"}
+                    </button>
+                  </div>
+                </div>
+              );
+            };
+
+            return (
+              <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid #1a2d4d`, borderRadius:12 }}>
+                {/* Panel header */}
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:4 }}>
+                  <div>
+                    <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Volatility Monitors</div>
+                    <div style={{ fontSize:11, color:T.text3, marginTop:3 }}>
+                      Live σ-detection · auto OCO on spike · polled every 30s
+                    </div>
+                  </div>
+                  {volMonitors.length > 0 && (
+                    <button onClick={() => {
+                      if (window.confirm("Clear all volatility monitors?")) {
+                        setVolMonitors([]);
+                        priceHistoryRef.current = {};
+                        try { localStorage.removeItem("chatfi-volmon"); } catch {}
+                      }
+                    }} className="hov-btn"
+                      style={{ fontSize:11, padding:"4px 10px", background:"transparent", border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, cursor:"pointer" }}>
+                      Clear all
+                    </button>
+                  )}
+                </div>
+
+                {volMonitors.length === 0 ? (
+                  <div style={{ textAlign:"center", padding:"28px 0", color:T.text3, fontSize:13 }}>
+                    No volatility monitors set.<br/>
+                    <span style={{ fontSize:12 }}>Try: <em>"monitor SOL volatility above 2%"</em></span>
+                  </div>
+                ) : (
+                  <div style={{ marginTop:16 }}>
+                    {active.length > 0 && (
+                      <>
+                        <div style={{ fontSize:11, fontWeight:700, color:T.accent, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:10 }}>
+                          Active ({active.length})
+                        </div>
+                        {active.map(m => <VolCard key={m.id} mon={m} />)}
+                      </>
+                    )}
+                    {done.length > 0 && (
+                      <>
+                        <div style={{ fontSize:11, fontWeight:700, color:T.text3, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:10, marginTop: active.length ? 16 : 0 }}>
+                          Fired ({done.length})
+                        </div>
+                        {done.map(m => <VolCard key={m.id} mon={m} />)}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <button onClick={() => setShowVolMonitors(false)}
+                  style={{ width:"100%", marginTop:14, padding:"9px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                  Close
+                </button>
+              </div>
+            );
+          })()}
 
           {/* ── Perps Trade panel (SHOW_PERPS) ──────────────────────────── */}
           {showPerps && (() => {
