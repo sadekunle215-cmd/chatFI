@@ -5157,9 +5157,18 @@ function JupChatInner() {
       "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
     };
     try {
-      const solJson = await jupFetch(SOLANA_RPC, { method:"POST", body:{ jsonrpc:"2.0", id:1, method:"getBalance", params:[pubkey,{ commitment:"confirmed" }] } });
+      // Direct RPC calls — bypass proxy which can fail silently for non-Jupiter endpoints
+      const solJson = await fetch(SOLANA_RPC, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"getBalance", params:[pubkey,{ commitment:"confirmed" }] }),
+      }).then(r => r.json());
       const sol = (solJson.result?.value || 0) / 1e9;
-      const splJson = await jupFetch(SOLANA_RPC, { method:"POST", body:{ jsonrpc:"2.0", id:2, method:"getTokenAccountsByOwner", params:[pubkey,{ programId:SPL_PROGRAM },{ encoding:"jsonParsed", commitment:"confirmed" }] } });
+      const splJson = await fetch(SOLANA_RPC, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc:"2.0", id:2, method:"getTokenAccountsByOwner", params:[pubkey,{ programId:SPL_PROGRAM },{ encoding:"jsonParsed", commitment:"confirmed" }] }),
+      }).then(r => r.json());
       const balances = { SOL: sol };
       const unknownMints = []; // { mint, uiAmount }
 
@@ -6351,7 +6360,9 @@ Order: \`${orderKey.slice(0,20)}…\`
   useEffect(() => {
     if (privyMode) return; // Privy is active — Reown changes should not override
     if (reownConnected && reownAddress) {
-      const justConnected = !prevConnectedRef.current;
+      // justConnected = true only if this address hasn't shown the banner yet this session
+      const sessionKey = "chatfi-reown-shown-" + reownAddress;
+      const justConnected = !prevConnectedRef.current && !sessionStorage.getItem(sessionKey);
       prevConnectedRef.current = true;
       const display = reownAddress.slice(0,4) + "…" + reownAddress.slice(-4);
       setWallet(display);
@@ -6364,6 +6375,7 @@ Order: \`${orderKey.slice(0,20)}…\`
         setPortfolio(balances);
         if (justConnected) {
           walletWasConnectedThisSessionRef.current = true;
+          try { sessionStorage.setItem(sessionKey, "1"); } catch {}
           fetchPrices().then(live => {
             const solUSD = balances.SOL && live.SOL
               ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})`
@@ -6384,6 +6396,10 @@ Order: \`${orderKey.slice(0,20)}…\`
       setWalletFull(null);
       setConnectedWalletName(null);
       setPortfolio({});
+      // Clear the "shown" flag so a genuine reconnect shows the message again
+      try {
+        Object.keys(sessionStorage).filter(k => k.startsWith("chatfi-reown-shown-")).forEach(k => sessionStorage.removeItem(k));
+      } catch {}
       // Only show "disconnected" message if the user explicitly disconnected during this session
       // (not on page refresh where Reown momentarily reports disconnected before restoring session)
       if (walletWasConnectedThisSessionRef.current) {
