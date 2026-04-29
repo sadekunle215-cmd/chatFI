@@ -1797,7 +1797,6 @@ function LandingPage({ onEnter }) {
 }
 
 // ─── MyLocks helpers ──────────────────────────────────────────────────────────
-const ML_LAMPORTS   = 1_000_000_000;
 const ML_MINT_DECS  = {
   EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 6,
   "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": 6,
@@ -1810,13 +1809,13 @@ const ml_short   = (pk) => pk ? `${pk.slice(0, 4)}…${pk.slice(-4)}` : "—";
 
 function MLBadge({ status }) {
   const styles = {
-    claimable: { background: "#0cff8820", color: "#0cff88", border: "1px solid #0cff8840" },
-    locked:    { background: "#ff6b0020", color: "#ff9d40", border: "1px solid #ff6b0040" },
-    claimed:   { background: "#ffffff10", color: "#888",    border: "1px solid #ffffff20" },
+    claimable: { background: T.greenBg,  color: T.green,  border: `1px solid ${T.greenBd}` },
+    locked:    { background: T.redBg,    color: T.red,    border: `1px solid ${T.redBd}`   },
+    claimed:   { background: T.surface,  color: T.text3,  border: `1px solid ${T.border}`  },
   };
-  const labels = { claimable: "● Claimable", locked: "⏳ Locked", claimed: "✓ Fully Claimed" };
+  const labels = { claimable: "Claimable", locked: "Locked", claimed: "Claimed" };
   return (
-    <span style={{ ...styles[status], padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", fontFamily: "monospace" }}>
+    <span style={{ ...styles[status], padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em" }}>
       {labels[status]}
     </span>
   );
@@ -1836,77 +1835,77 @@ function MLLockCard({ lock, onClaim, claiming }) {
 
   return (
     <div style={{
-      background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
-      border: status === "claimable" ? "1px solid #0cff8830" : "1px solid #ffffff15",
-      borderRadius: 16, padding: "20px 22px", marginBottom: 14,
-      boxShadow: status === "claimable" ? "0 0 20px #0cff8808" : "none",
+      background: T.surface,
+      border: `1px solid ${status === "claimable" ? T.greenBd : T.border}`,
+      borderRadius: 12, padding: "16px 18px", marginBottom: 12,
+      boxShadow: status === "claimable" ? `0 0 16px ${T.greenBg}` : "none",
       transition: "box-shadow 0.3s",
     }}>
       {/* header row */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 11, color: "#666", marginBottom: 4, fontFamily: "monospace" }}>ESCROW</div>
+          <div style={{ fontSize: 10, color: T.text3, marginBottom: 4, letterSpacing: "0.08em", textTransform: "uppercase" }}>ESCROW</div>
           <a href={`https://solscan.io/account/${lock.pubkey}`} target="_blank" rel="noreferrer"
-            style={{ color: "#7b8cff", fontSize: 12, fontFamily: "monospace", textDecoration: "none" }}>
-            {ml_short(lock.pubkey)} ↗
+            style={{ color: T.teal, fontSize: 12, fontFamily: T.mono, textDecoration: "none" }}>
+            {ml_short(lock.pubkey)}
           </a>
         </div>
         <MLBadge status={status} />
       </div>
 
       {/* amounts */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
         {[["Total Locked", total], ["Claimed", claimed], ["Claimable Now", claimable]].map(([label, val]) => (
-          <div key={label} style={{ background: "#ffffff08", borderRadius: 10, padding: "10px 12px" }}>
-            <div style={{ fontSize: 10, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#eee", fontFamily: "monospace" }}>{val}</div>
+          <div key={label} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 10px" }}>
+            <div style={{ fontSize: 9, color: T.text3, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{val}</div>
           </div>
         ))}
       </div>
 
       {/* progress bar */}
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-          <span style={{ fontSize: 11, color: "#666" }}>Claim Progress</span>
-          <span style={{ fontSize: 11, color: "#aaa", fontFamily: "monospace" }}>{pct}%</span>
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+          <span style={{ fontSize: 11, color: T.text3 }}>Claim Progress</span>
+          <span style={{ fontSize: 11, color: T.text2 }}>{pct}%</span>
         </div>
-        <div style={{ height: 4, background: "#ffffff15", borderRadius: 4, overflow: "hidden" }}>
-          <div style={{ width: `${pct}%`, height: "100%", background: "linear-gradient(90deg, #7b8cff, #0cff88)", borderRadius: 4, transition: "width 0.6s ease" }} />
+        <div style={{ height: 4, background: T.border, borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: `linear-gradient(90deg, ${T.teal}, ${T.green})`, borderRadius: 4, transition: "width 0.6s ease" }} />
         </div>
       </div>
 
       {/* dates & recipient */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
-        <div style={{ fontSize: 11, color: "#666" }}>
-          <span style={{ color: "#555" }}>Cliff Date: </span>
-          <span style={{ color: "#aaa" }}>{ml_dateFmt(lock.cliffEnd)}</span>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: T.text3 }}>
+          <span>Cliff: </span>
+          <span style={{ color: T.text2 }}>{ml_dateFmt(lock.cliffEnd)}</span>
         </div>
-        <div style={{ fontSize: 11, color: "#666" }}>
-          <span style={{ color: "#555" }}>Recipient: </span>
+        <div style={{ fontSize: 11, color: T.text3 }}>
+          <span>Recipient: </span>
           <a href={`https://solscan.io/account/${lock.recipient}`} target="_blank" rel="noreferrer"
-            style={{ color: "#7b8cff", textDecoration: "none" }}>{ml_short(lock.recipient)} ↗</a>
+            style={{ color: T.teal, textDecoration: "none" }}>{ml_short(lock.recipient)}</a>
         </div>
       </div>
 
       {/* mint */}
-      <div style={{ fontSize: 11, color: "#555", marginBottom: 14, fontFamily: "monospace" }}>
+      <div style={{ fontSize: 11, color: T.text3, marginBottom: status === "claimable" ? 12 : 0 }}>
         Mint: <a href={`https://solscan.io/token/${lock.mint}`} target="_blank" rel="noreferrer"
-          style={{ color: "#7b8cff", textDecoration: "none" }}>{ml_short(lock.mint)} ↗</a>
+          style={{ color: T.teal, textDecoration: "none" }}>{ml_short(lock.mint)}</a>
       </div>
 
       {/* claim button */}
       {status === "claimable" && (
         <button onClick={() => onClaim(lock)} disabled={claiming === lock.pubkey}
           style={{
-            width: "100%", padding: "12px",
-            background: claiming === lock.pubkey ? "#ffffff15" : "linear-gradient(135deg, #0cff8820 0%, #0cff8840 100%)",
-            border: "1px solid #0cff8860", borderRadius: 10,
-            color: claiming === lock.pubkey ? "#666" : "#0cff88",
+            width: "100%", padding: "10px",
+            background: claiming === lock.pubkey ? T.border : T.greenBg,
+            border: `1px solid ${T.greenBd}`, borderRadius: 8,
+            color: claiming === lock.pubkey ? T.text3 : T.green,
             fontWeight: 700, fontSize: 13,
             cursor: claiming === lock.pubkey ? "not-allowed" : "pointer",
-            letterSpacing: "0.04em", transition: "all 0.2s",
+            transition: "all 0.2s",
           }}>
-          {claiming === lock.pubkey ? "⏳ Confirming on-chain…" : `⚡ Claim ${claimable} Tokens`}
+          {claiming === lock.pubkey ? "Confirming on-chain..." : `Claim ${claimable} tokens`}
         </button>
       )}
     </div>
@@ -5136,13 +5135,48 @@ function JupChatInner() {
       const sol = (solJson.result?.value || 0) / 1e9;
       const splJson = await jupFetch(SOLANA_RPC, { method:"POST", body:{ jsonrpc:"2.0", id:2, method:"getTokenAccountsByOwner", params:[pubkey,{ programId:SPL_PROGRAM },{ encoding:"jsonParsed", commitment:"confirmed" }] } });
       const balances = { SOL: sol };
+      const unknownMints = []; // { mint, uiAmount }
+
       for (const acc of (splJson.result?.value || [])) {
-        const info = acc.account.data.parsed.info;
+        const info   = acc.account.data.parsed.info;
+        const uiAmt  = info.tokenAmount.uiAmount;
+        if (!uiAmt || uiAmt <= 0) continue;
         // Try cache first, then known mints map
         const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === info.mint)?.[0]
                  || KNOWN_MINTS[info.mint];
-        if (sym && info.tokenAmount.uiAmount > 0) balances[sym] = info.tokenAmount.uiAmount;
+        if (sym) {
+          balances[sym] = uiAmt;
+        } else {
+          // Queue unknown mint for batch Jupiter metadata lookup
+          unknownMints.push({ mint: info.mint, uiAmt });
+        }
       }
+
+      // Batch-resolve unknown mints → real symbol + logo via Jupiter token API
+      if (unknownMints.length > 0) {
+        const resolved = await Promise.allSettled(
+          unknownMints.slice(0, 20).map(({ mint, uiAmt }) =>
+            fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`)
+              .then(r => r.json())
+              .then(meta => ({ mint, uiAmt, sym: meta?.symbol || null, name: meta?.name || null, logo: meta?.logoURI || null }))
+              .catch(() => ({ mint, uiAmt, sym: null, name: null, logo: null }))
+          )
+        );
+        for (const r of resolved) {
+          if (r.status !== "fulfilled") continue;
+          const { mint, uiAmt, sym, logo } = r.value;
+          // Use resolved symbol, or fall back to short mint address
+          const finalSym = sym || mint.slice(0, 8);
+          // Avoid overwriting an existing known symbol
+          if (balances[finalSym] === undefined) balances[finalSym] = uiAmt;
+          // Populate caches so logo shows in both simple wallet banner and full portfolio panel
+          if (sym && !tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
+          if (logo && logoMapRef.current) logoMapRef.current[finalSym] = logo;
+          else if (logoMapRef.current && !logoMapRef.current[finalSym])
+            logoMapRef.current[finalSym] = `https://img.jup.ag/tokens/${mint}`;
+        }
+      }
+
       return balances;
     } catch { return {}; }
   };
@@ -6769,6 +6803,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         else if (type === "triggerV2")   { setShowTrigV2(false);      await doTriggerV2(); }
         else if (type === "recurring")   { setShowRecurring(false);   await doRecurring(); }
         else if (type === "borrow")      { setShowBorrow(false);      await doBorrow(); }
+        else if (type === "claimLocks") {
+          const locks = pendingDirectAction.locks || [];
+          push("ai", `Claiming ${locks.length} lock${locks.length > 1 ? "s" : ""}…`);
+          for (const lk of locks) {
+            const id = lk.lockId || lk.pubkey || lk.id;
+            await doClaimLock(id, lk.pubkey);
+          }
+        }
         else if (type === "prediction")  {
           push("ai", `Placing bet…`);
           const res = await doDirectPredictionBet(pendingDirectAction.betData);
@@ -7535,6 +7577,19 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       } else if (action === "FETCH_LOCKS") {
         push("ai", text);
         await fetchLocks();
+        // In direct mode, if there are claimable locks, offer to claim immediately
+        if (directMode && walletFull) {
+          await new Promise(r => setTimeout(r, 300));
+          setLockList(current => {
+            const claimable = current.filter(lk => parseFloat(lk.claimableAmount || 0) > 0 || lk.claimable === true);
+            if (claimable.length > 0) {
+              const summary = claimable.map(lk => `${lk.claimableAmount || ""} ${lk.symbol || "tokens"}`.trim()).join(", ");
+              push("ai", `Direct Mode — ${claimable.length} lock${claimable.length > 1 ? "s" : ""} ready to claim: **${summary}**\n\nReply **yes** to claim all or **no** to cancel.`);
+              setPendingDirectAction({ type: "claimLocks", locks: claimable });
+            }
+            return current;
+          });
+        }
 
       } else if (action === "SHOW_ROUTE") {
         push("ai", text);
@@ -11863,76 +11918,67 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               };
             });
 
-            // Filter state — stored in a simple local ref trick via useState inside IIFE
-            // We keep it simple: use the existing JupChat lockList and add a filter pill row
             const claimableCount = mlLocks.filter(l => l.claimableRaw > 0).length;
             const lockedCount    = mlLocks.filter(l => l.claimableRaw === 0 && l.totalClaimed < l.totalRaw).length;
             const claimedCount   = mlLocks.filter(l => l.totalRaw > 0 && l.totalClaimed >= l.totalRaw).length;
 
             return (
-              <div style={{ margin:"0 0 20px 44px", padding:"20px 22px", background:"linear-gradient(135deg,#0d1117 0%,#0a0f1e 100%)", border:`1px solid #7b8cff30`, borderRadius:16, fontFamily:"'DM Mono','Courier New',monospace" }}>
+              <div style={{ margin:"0 0 20px 44px", padding:"18px 20px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
 
                 {/* Header */}
-                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
                   <div>
                     <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                      <SvgLock size={16} color="#7b8cff"/>
-                      <span style={{ fontSize:16, fontWeight:700, color:"#fff", letterSpacing:"-0.02em" }}>🔐 My Locked Tokens</span>
+                      <SvgLock size={15} color={T.accent}/>
+                      <span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Token Locks</span>
                     </div>
                     {walletFull && (
-                      <div style={{ fontSize:11, color:"#555", marginTop:4, fontFamily:"monospace" }}>
+                      <div style={{ fontSize:11, color:T.text3, marginTop:4 }}>
                         Wallet: {ml_short(walletFull)}
                       </div>
                     )}
                   </div>
                   <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                     <button onClick={fetchLocks} disabled={locksLoading}
-                      style={{ padding:"5px 12px", borderRadius:20, border:"1px solid #ffffff20", background:"transparent", color:"#666", fontSize:11, cursor: locksLoading ? "not-allowed" : "pointer" }}>
-                      {locksLoading ? "↻ Loading…" : "↻ Refresh"}
+                      style={{ padding:"5px 12px", borderRadius:20, border:`1px solid ${T.border}`, background:"transparent", color:T.text3, fontSize:11, cursor: locksLoading ? "not-allowed" : "pointer" }}>
+                      {locksLoading ? "Loading..." : "Refresh"}
                     </button>
                     <button onClick={() => setShowLocks(false)}
-                      style={{ background:"none", border:"none", color:"#555", fontSize:18, cursor:"pointer", lineHeight:1 }}>✕</button>
+                      style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer", lineHeight:1 }}>✕</button>
                   </div>
                 </div>
 
                 {/* Filter tabs */}
-                {mlLocks.length > 0 && (() => {
-                  const tabs = [
-                    ["all",       `All (${mlLocks.length})`],
-                    ["claimable", `Claimable (${claimableCount})`],
-                    ["locked",    `Locked (${lockedCount})`],
-                    ["claimed",   `Claimed (${claimedCount})`],
-                  ];
-                  // We store filter in the panel itself via a child component trick —
-                  // simplest approach: use a data attribute on a hidden input or just render all
-                  // Since IIFE can't use hooks, we render all cards and rely on CSS display
-                  return (
-                    <div style={{ display:"flex", gap:8, marginBottom:18, flexWrap:"wrap" }}>
-                      {tabs.map(([key, label]) => (
-                        <span key={key} style={{
-                          padding:"5px 13px", borderRadius:20, fontSize:11, fontWeight:600,
-                          border:"1px solid #ffffff20", color:"#666", background:"transparent", cursor:"default",
-                        }}>{label}</span>
-                      ))}
-                    </div>
-                  );
-                })()}
+                {mlLocks.length > 0 && (
+                  <div style={{ display:"flex", gap:8, marginBottom:16, flexWrap:"wrap" }}>
+                    {[
+                      ["all",       `All (${mlLocks.length})`],
+                      ["claimable", `Claimable (${claimableCount})`],
+                      ["locked",    `Locked (${lockedCount})`],
+                      ["claimed",   `Claimed (${claimedCount})`],
+                    ].map(([key, label]) => (
+                      <span key={key} style={{
+                        padding:"4px 12px", borderRadius:20, fontSize:11, fontWeight:600,
+                        border:`1px solid ${T.border}`, color:T.text3, background:"transparent",
+                      }}>{label}</span>
+                    ))}
+                  </div>
+                )}
 
-                {/* Loading */}
+                {/* Loading skeleton */}
                 {locksLoading && (
                   <div>
                     {[1,2].map(i => (
-                      <div key={i} style={{ height:160, background:"linear-gradient(90deg,#1a1a2e,#16213e,#1a1a2e)", backgroundSize:"200% 100%", animation:"shimmer 1.5s infinite", borderRadius:16, marginBottom:14 }} />
+                      <div key={i} style={{ height:140, background:T.bg, border:`1px solid ${T.border}`, borderRadius:12, marginBottom:12, opacity:0.6 }} />
                     ))}
-                    <style>{`@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}`}</style>
                   </div>
                 )}
 
                 {/* Empty */}
                 {!locksLoading && mlLocks.length === 0 && (
-                  <div style={{ textAlign:"center", padding:"40px 0", color:"#444" }}>
-                    <div style={{ fontSize:36, marginBottom:10 }}>📭</div>
-                    <div>No locks found for this wallet</div>
+                  <div style={{ textAlign:"center", padding:"32px 0", color:T.text3 }}>
+                    
+                    <div style={{ fontSize:13 }}>No locks found for this wallet</div>
                   </div>
                 )}
 
