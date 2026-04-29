@@ -6914,10 +6914,17 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       setInput("");
       // Close every panel so nothing is left stranded
       setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
-      setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
+      setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowEarnWithdraw(false); setShowBet(false); setShowMultiply(false); setShowMultiplyForm(false); setShowBorrow(false);
       setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false); setShowPerps(false);
       setShowTokenCard(false); setTokenCardData(null);
       setShowCopyTrade(false); setCopyTradeData(null);
+      setShowRoute(false); setRouteData(null);
+      setShowLock(false); setShowLocks(false);
+      setShowLendPos(false);
+      setShowStudio(false); setShowStudioFees(false); setStudioFees(null);
+      setShowBlog(false);
+      setPortfolioData(null);
+      setEarnWithdraw({ vault:null, amount:"", positionAmount:0 });
       histRef.current = [];
       try { sessionStorage.removeItem("chatfi-msgs"); } catch {}
       try { sessionStorage.removeItem("chatfi-wallet-shown"); } catch {}
@@ -6965,6 +6972,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       try {
         // Strip markdown fences if present
         let cleanText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        // Strip JS-style inline comments (// ...) which the model sometimes adds inside JSON
+        cleanText = cleanText.replace(/\/\/[^\n"]*/g, "");
         // If model wrapped JSON in surrounding text, extract the first {...} block
         if (!cleanText.startsWith("{")) {
           const braceMatch = cleanText.match(/\{[\s\S]*\}/);
@@ -6993,6 +7002,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         const textMatch = rawText.match(/"text"\s*:\s*"((?:[^\\"]|\\[\s\S])*)"/s);
         const salvaged  = textMatch ? textMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\") : rawText;
         parsed = { text: salvaged, action: null, actionData: {} };
+      }
+
+      // Guard: if the parsed text looks like a raw JSON block (model leaked its response format),
+      // replace it with a sensible fallback so we never show JSON to the user
+      if (parsed.text && parsed.text.trim().startsWith("{") && parsed.action) {
+        parsed.text = "";
       }
 
       const { text, action, actionData } = parsed;
@@ -8616,9 +8631,16 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               try{sessionStorage.removeItem("chatfi-msgs");}catch{}
               setMsgs([INITIAL_MSG]);
               setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
-              setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
+              setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowEarnWithdraw(false); setShowBet(false); setShowMultiply(false); setShowMultiplyForm(false); setShowBorrow(false);
               setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false); setShowPerps(false);
               setShowTokenCard(false); setTokenCardData(null); setShowCopyTrade(false); setCopyTradeData(null);
+              setShowRoute(false); setRouteData(null);
+              setShowLock(false); setShowLocks(false);
+              setShowLendPos(false);
+              setShowStudio(false); setShowStudioFees(false); setStudioFees(null);
+              setShowBlog(false);
+              setPortfolioData(null);
+              setEarnWithdraw({ vault:null, amount:"", positionAmount:0 });
               setChatHistory(h=>[{id:Date.now(),title:"New conversation",active:true},...h.map(c=>({...c,active:false}))]);
             }}
               style={{ width:"100%", padding:"8px 12px", background:"transparent", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer", textAlign:"left", display:"flex", alignItems:"center", gap:8 }}
@@ -10311,69 +10333,25 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           {/* ── Borrow panel ─────────────────────────────────────────────── */}
           {showBorrow && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Borrow from Jupiter Lend</div>
-                <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>COLLATERAL</span>
+                <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>COMING SOON</span>
               </div>
-              <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>Deposit collateral → borrow against it. Up to 95% LTV. Position is an NFT on-chain.</div>
-
-              {/* Vault selector */}
-              <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Select vault</div>
-              <select value={borrowCfg.vaultId}
-                onChange={e => {
-                  const v = MULTIPLY_VAULTS.find(x => x.vaultId === parseInt(e.target.value));
-                  if (v) setBorrowCfg(c => ({ ...c, vaultId:v.vaultId, collateral:v.collateral, debt:v.debt, colDecimals:v.colDecimals, debtDecimals:v.debtDecimals }));
-                }}
-                style={{ width:"100%", padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:10 }}>
-                {MULTIPLY_VAULTS.map(v => (
-                  <option key={v.vaultId} value={v.vaultId}>{v.collateral} → {v.debt} · LTV {v.ltv} · {v.risk} risk</option>
-                ))}
-              </select>
-
-              {/* Amounts row */}
-              <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Collateral to deposit ({borrowCfg.collateral})</div>
-                  <input type="number" min="0" placeholder="e.g. 10"
-                    value={borrowCfg.colAmount}
-                    onChange={e => setBorrowCfg(c => ({ ...c, colAmount:e.target.value }))}
-                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
-                  />
+              <div style={{ textAlign:"center", padding:"24px 0 16px" }}>
+                <div style={{ fontSize:32, marginBottom:10 }}>🚧</div>
+                <div style={{ fontSize:14, fontWeight:700, color:T.text1, marginBottom:6 }}>Not available on ChatFi yet</div>
+                <div style={{ fontSize:12, color:T.text3, lineHeight:1.7, marginBottom:18 }}>
+                  Borrow is currently in integration. For now, you can deposit collateral and borrow directly on Jupiter Lend.
                 </div>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount to borrow ({borrowCfg.debt})</div>
-                  <input type="number" min="0" placeholder="e.g. 200"
-                    value={borrowCfg.borrowAmount}
-                    onChange={e => setBorrowCfg(c => ({ ...c, borrowAmount:e.target.value }))}
-                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
-                  />
-                </div>
+                <a href="https://jup.ag/lend" target="_blank" rel="noreferrer"
+                  style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"10px 20px", background:T.teal, borderRadius:10, color:"#fff", fontSize:13, fontWeight:700, textDecoration:"none" }}>
+                  Open Jupiter Lend ↗
+                </a>
               </div>
-
-              {/* Info box */}
-              {borrowCfg.colAmount && (
-                <div style={{ fontSize:12, color:T.teal, background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:8, padding:"8px 12px", marginBottom:12, lineHeight:1.7 }}>
-                  Deposit <strong>{borrowCfg.colAmount} {borrowCfg.collateral}</strong> · Borrow <strong>{borrowCfg.borrowAmount || "?"} {borrowCfg.debt}</strong><br/>
-                  <span style={{ fontSize:11, color:T.text3 }}>Max LTV: {(MULTIPLY_VAULTS.find(v=>v.vaultId===borrowCfg.vaultId)||MULTIPLY_VAULTS[0]).ltv} · Position NFT created automatically · positionId:0</span>
-                </div>
-              )}
-
-              {/* Warning */}
-              <div style={{ fontSize:11, color:T.text3, background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
-                Note: Borrowing accrues interest. Keep LTV below the liquidation threshold or your collateral may be sold.
-              </div>
-
-              <div style={{ display:"flex", gap:8 }}>
-                <button onClick={doBorrow}
-                  disabled={!borrowCfg.colAmount || parseFloat(borrowCfg.colAmount) <= 0 || !borrowCfg.borrowAmount || parseFloat(borrowCfg.borrowAmount) <= 0 || borrowStatus === "signing"}
-                  style={{ flex:1, padding:"11px", background: (!borrowCfg.colAmount || !borrowCfg.borrowAmount || borrowStatus==="signing") ? T.border : T.teal, border:"none", borderRadius:10, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>
-                  {borrowStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#fff", display:"inline-block", marginRight:6 }}/> Signing…</> : `Deposit & Borrow ${borrowCfg.debt}`}
-                </button>
-                <button onClick={() => setShowBorrow(false)}
-                  style={{ padding:"11px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:14, cursor:"pointer" }}>
-                  Cancel
-                </button>
-              </div>
+              <button onClick={() => setShowBorrow(false)}
+                style={{ marginTop:8, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                Close
+              </button>
             </div>
           )}
 
@@ -11448,146 +11426,45 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     {/* ── Multiply (Leverage) panel ─────────────────────────────── */}
           {showMultiply && (
             <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              {/* Header */}
-              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Jupiter Multiply</div>
-                <span style={{ fontSize:10, padding:"2px 7px", background:T.purpleBg, border:`1px solid ${T.purple}33`, borderRadius:10, color:T.purple, fontWeight:600 }}>LEVERAGE</span>
+                <span style={{ fontSize:10, padding:"2px 7px", background:T.purpleBg, border:`1px solid ${T.purple}33`, borderRadius:10, color:T.purple, fontWeight:600 }}>COMING SOON</span>
               </div>
-              {/* How it works box */}
-              <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 14px", marginBottom:14, fontSize:12, color:T.text2, lineHeight:1.7 }}>
-                <div style={{ fontWeight:600, color:T.text1, marginBottom:6 }}>How Multiply works</div>
-                <div>Multiply uses <strong>zero-fee Jupiter Flashloans</strong> to loop your position in a single atomic Solana transaction. <a href="https://developers.jup.ag/docs/lend/advanced/multiply" target="_blank" rel="noreferrer" style={{ color:T.teal, fontSize:11 }}>Docs ↗</a></div>
-                <div style={{ margin:"6px 0 0 0", color:T.text3, fontSize:11 }}>
-                  1. Deposit collateral (e.g. JupSOL)<br/>
-                  2. Flash-loan borrows the debt asset (e.g. SOL)<br/>
-                  3. Borrowed SOL is swapped back to JupSOL<br/>
-                  4. Looped collateral deposited — position closed atomically<br/>
-                  5. You now hold 3x–10x amplified exposure to yield
+              <div style={{ textAlign:"center", padding:"24px 0 16px" }}>
+                <div style={{ fontSize:32, marginBottom:10 }}>🚧</div>
+                <div style={{ fontSize:14, fontWeight:700, color:T.text1, marginBottom:6 }}>Not available on ChatFi yet</div>
+                <div style={{ fontSize:12, color:T.text3, lineHeight:1.7, marginBottom:18 }}>
+                  Multiply (leveraged looping via Flashloans) is currently in integration. Use Jupiter Lend directly to multiply your positions now.
                 </div>
-                <div style={{ marginTop:8, padding:"6px 10px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:6, color:T.red, fontSize:11 }}>
-                  Risk: Liquidation if LTV breached. High borrow rate may erode yield. Start conservative at 2x–3x. Monitor at jup.ag/lend.
-                </div>
-              </div>
-
-              {/* Filter tabs */}
-              <div style={{ display:"flex", gap:6, marginBottom:12, flexWrap:"wrap" }}>
-                {["All", "Low Risk", "SOL", "BTC", "Stable"].map(f => (
-                  <button key={f} onClick={() => setMultiplyFilter(f === "All" ? null : f)}
-                    style={{ padding:"4px 10px", borderRadius:16, fontSize:11, fontWeight:600, cursor:"pointer", border:`1px solid ${(multiplyFilter||"All")===f ? T.accent : T.border}`, background:(multiplyFilter||"All")===f ? T.accentBg : "transparent", color:(multiplyFilter||"All")===f ? T.accent : T.text3 }}>
-                    {f}
-                  </button>
-                ))}
-              </div>
-              {/* Vault cards */}
-              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                {MULTIPLY_VAULTS.filter(v => {
-                  if (!multiplyFilter) return true;
-                  if (multiplyFilter === "Low Risk") return v.risk === "Low";
-                  if (multiplyFilter === "Stable") return ["USDC","USDT","USDG","USDS"].some(s => v.collateral.includes(s));
-                  return v.collateral.toUpperCase().includes(multiplyFilter) || v.debt.toUpperCase().includes(multiplyFilter);
-                }).map(v => (
-                  <div key={v.id} style={{ padding:"12px 14px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
-                      <div>
-                        <span style={{ fontWeight:600, fontSize:13, color:T.text1 }}>{v.collateral} / {v.debt}</span>
-                        <span style={{ marginLeft:8, fontSize:11, color: v.risk==="Low"?T.green : v.risk==="Medium"?T.accent : T.red, fontWeight:600, background: v.risk==="Low"?T.greenBg : v.risk==="Medium"?T.accentBg : T.redBg, border:`1px solid ${v.risk==="Low"?T.greenBd : v.risk==="Medium"?T.accent+"44" : T.redBd}`, borderRadius:6, padding:"1px 6px" }}>{v.risk} Risk</span>
-                      </div>
-                      <span style={{ fontSize:12, color:T.purple, fontWeight:700 }}>Up to {v.maxLev}</span>
-                    </div>
-                    <div style={{ fontSize:11, color:T.text3, marginBottom:8, lineHeight:1.5 }}>{v.desc}</div>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8 }}>
-                      <span style={{ fontSize:11, color:T.text3 }}>Max LTV: {v.ltv}</span>
-                      <button onClick={() => { setMultiplyPos({ vault:v, colAmount:"", leverage:"2" }); setShowMultiplyForm(true); setShowMultiply(false); }}
-                        style={{ padding:"6px 14px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                        Select →
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                <a href="https://jup.ag/lend" target="_blank" rel="noreferrer"
+                  style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"10px 20px", background:T.accent, borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:700, textDecoration:"none" }}>
+                  Open Jupiter Lend ↗
+                </a>
               </div>
               <button onClick={() => setShowMultiply(false)}
-                style={{ marginTop:12, padding:"6px 14px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                style={{ marginTop:8, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
                 Close
               </button>
             </div>
           )}
 
-          {/* ── Multiply position form — deep link to Jupiter ──────────── */}
-          {showMultiplyForm && multiplyPos.vault && (() => {
-            const v = multiplyPos.vault;
-            const bal = portfolio[v.collateral] ?? 0;
-            const lev = parseFloat(multiplyPos.leverage);
-            const col = parseFloat(multiplyPos.colAmount) || 0;
-            const exposure = col * lev;
-            const debt = col * (lev - 1);
-            return (
-              <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:2, color:T.text1, display:"flex", alignItems:"center", gap:10 }}>
-                  {v.collateral}/{v.debt} Multiply
-                </div>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>
-                  Max {v.maxLev} · {v.risk} Risk · Max LTV {v.ltv}
-                </div>
-
-                {/* Leverage slider */}
-                <div style={{ marginBottom:14 }}>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:T.text2, marginBottom:6 }}>
-                    <span>Leverage</span>
-                    <span style={{ fontWeight:700, color:T.accent }}>{multiplyPos.leverage}x</span>
-                  </div>
-                  <input type="range" min="1.1" max={parseFloat(v.maxLev)} step="0.1"
-                    value={multiplyPos.leverage}
-                    onChange={e => setMultiplyPos(p => ({ ...p, leverage: parseFloat(e.target.value).toFixed(1) }))}
-                    style={{ width:"100%", accentColor:T.accent }}
-                  />
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.text3 }}>
-                    <span>1x</span><span>{v.maxLev} max</span>
-                  </div>
-                </div>
-
-                {/* Collateral input */}
-                {bal > 0 && (
-                  <div style={{ display:"flex", gap:6, marginBottom:8 }}>
-                    {[["25%",0.25],["50%",0.5],["75%",0.75],["Max",1]].map(([label,frac]) => (
-                      <button key={label} onClick={() => setMultiplyPos(p => ({ ...p, colAmount:(bal*frac).toFixed(6).replace(/\.?0+$/,"") }))}
-                        style={{ flex:1, padding:"5px 0", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:11, fontWeight:600, cursor:"pointer" }}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <input type="number" placeholder={`Amount (${v.collateral}${bal>0?` · bal: ${bal.toFixed(4)}`:""})`}
-                  value={multiplyPos.colAmount}
-                  onChange={e => setMultiplyPos(p => ({ ...p, colAmount:e.target.value }))}
-                  style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, marginBottom:12 }}
-                />
-
-                {/* Position preview */}
-                {col > 0 && (
-                  <div style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, padding:"10px 12px", marginBottom:14, fontSize:12, color:T.text2, lineHeight:1.8 }}>
-                    <div>Collateral: <strong style={{ color:T.text1 }}>{col.toFixed(4)} {v.collateral}</strong></div>
-                    <div>Total exposure: <strong style={{ color:T.accent }}>{exposure.toFixed(4)} {v.collateral}</strong></div>
-                    <div>Debt to borrow: <strong style={{ color:T.red }}>{debt.toFixed(4)} {v.debt}</strong></div>
-                    <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Note: Position tracked as NFT. Monitor at jup.ag/lend.</div>
-                  </div>
-                )}
-
-                {/* Confirm button */}
-                <button onClick={doMultiply}
-                  disabled={!multiplyPos.colAmount || parseFloat(multiplyPos.colAmount) <= 0 || multiplyStatus === "signing"}
-                  style={{ width:"100%", padding:"11px", background: (!multiplyPos.colAmount || multiplyStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:8, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
-                  {multiplyStatus === "signing"
-                    ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Opening Position…</>
-                    : `Open ${multiplyPos.leverage}x ${v.collateral}/${v.debt} Position`}
-                </button>
-
-                <button onClick={() => setShowMultiplyForm(false)}
-                  style={{ width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
-                  Cancel
-                </button>
+          {/* ── Multiply position form — disabled (coming soon) ────────── */}
+          {showMultiplyForm && (
+            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ textAlign:"center", padding:"16px 0" }}>
+                <div style={{ fontSize:14, fontWeight:700, color:T.text1, marginBottom:6 }}>Multiply — Coming Soon</div>
+                <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>Use Jupiter Lend directly in the meantime.</div>
+                <a href="https://jup.ag/lend" target="_blank" rel="noreferrer"
+                  style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"10px 20px", background:T.accent, borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:700, textDecoration:"none" }}>
+                  Open Jupiter Lend ↗
+                </a>
               </div>
-            );
-          })()}
+              <button onClick={() => setShowMultiplyForm(false)}
+                style={{ marginTop:8, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
+                Close
+              </button>
+            </div>
+          )}
 
           {/* ── Earn deposit panel ────────────────────────────────────────── */}
           {showEarnDeposit && earnDeposit.vault && (
