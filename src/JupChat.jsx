@@ -2981,52 +2981,74 @@ function JupChatInner() {
           }
         }
 
-        // Batch-resolve unknown mints via Jupiter token list (reliable logos) + per-token fallback
+        // Batch-resolve unknown mints via per-mint Jupiter token API (fast, no huge list download)
         if (unknownMints.length > 0) {
           let tokenListMap = {};
-          try {
-            // Jupiter token list has logoURI hosted on reliable CDNs (not img.jup.ag which blocks cross-origin)
-            const tokenListRes = await fetch("https://tokens.jup.ag/tokens?tags=all")
-              .then(r => r.json()).catch(() => []);
-            for (const t of (Array.isArray(tokenListRes) ? tokenListRes : [])) {
-              if (t.address) tokenListMap[t.address] = t;
-            }
-          } catch {}
 
-          // Per-token fallback for any mints not in the list
-          const stillUnknown = unknownMints.slice(0, 20).filter(({ mint }) => !tokenListMap[mint]);
-          if (stillUnknown.length > 0) {
-            const perToken = await Promise.allSettled(
-              stillUnknown.map(({ mint, uiAmt }) =>
-                fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint)
-                  .then(r => r.json())
-                  .then(meta => ({ mint, uiAmt, sym: meta?.symbol || mint.slice(0,6), name: meta?.name || null, logo: meta?.logoURI || null }))
-                  .catch(() => ({ mint, uiAmt, sym: mint.slice(0,6), name: null, logo: null }))
-              )
-            );
-            for (const r of perToken) {
-              if (r.status === "fulfilled" && r.value) {
-                const { mint, sym, name, logo } = r.value;
-                // Inject into tokenListMap so unified loop below handles it
-                tokenListMap[mint] = { address: mint, symbol: sym, name, logoURI: logo || null };
-              }
+          // Fetch all unknown mints in parallel using Jupiter's single-token endpoint
+          // Try primary API first, then lite-api as fallback, then DAS metadata as last resort
+          const resolveResults = await Promise.allSettled(
+            unknownMints.slice(0, 30).map(({ mint }) =>
+              fetch("https://tokens.jup.ag/token/" + mint)
+                .then(r => r.ok ? r.json() : Promise.reject())
+                .catch(() =>
+                  fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint)
+                    .then(r => r.ok ? r.json() : Promise.reject())
+                    .catch(() =>
+                      // Last resort: Solana DAS API for any token metadata
+                      fetch("https://mainnet.helius-rpc.com/?api-key=public", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"getAsset", params:{ id: mint } })
+                      }).then(r => r.json())
+                        .then(d => {
+                          const asset = d?.result;
+                          if (!asset) return null;
+                          return {
+                            address: mint,
+                            symbol: asset.content?.metadata?.symbol || asset.token_info?.symbol || null,
+                            name: asset.content?.metadata?.name || null,
+                            logoURI: asset.content?.links?.image || asset.content?.files?.[0]?.uri || null,
+                            decimals: asset.token_info?.decimals ?? 6,
+                          };
+                        })
+                        .catch(() => null)
+                    )
+                )
+                .then(meta => meta ? { mint, meta } : { mint, meta: null })
+            )
+          );
+
+          for (const r of resolveResults) {
+            if (r.status === "fulfilled" && r.value?.meta) {
+              const { mint, meta } = r.value;
+              tokenListMap[mint] = {
+                address: mint,
+                symbol: meta.symbol || null,
+                name: meta.name || null,
+                logoURI: meta.logoURI || meta.logo_uri || meta.icon || null,
+                decimals: meta.decimals ?? 6,
+              };
             }
           }
 
-          for (const { mint, uiAmt } of unknownMints.slice(0, 20)) {
+          for (const { mint, uiAmt } of unknownMints.slice(0, 30)) {
             const meta = tokenListMap[mint];
             const sym = meta?.symbol || mint.slice(0, 6);
             const finalSym = balances[sym] !== undefined ? mint.slice(0, 8) : sym;
             balances[finalSym] = uiAmt;
             mintMap[finalSym]  = mint;
-            // Prefer logoURI from token list (reliable CDN). img.jup.ag blocks cross-origin so avoid as primary.
-            const logoFromList = meta?.logoURI && !meta.logoURI.includes("img.jup.ag")
-              ? meta.logoURI
-              : meta?.logoURI || `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mint}/logo.png`;
-            logoMap[finalSym] = logoFromList;
+            // Use logo from API response; fall back to img.jup.ag (works server-side) then solana token list
+            const logoFromMeta = meta?.logoURI;
+            logoMap[finalSym] = logoFromMeta
+              || `https://img.jup.ag/tokens/${mint}`; // img.jup.ag works fine in browser fetch/img tags
             if (meta?.name) {
               if (!results.nameMap) results.nameMap = {};
               results.nameMap[finalSym] = meta.name;
+            }
+            // Cache so swap panel can address these tokens by symbol
+            if (meta?.symbol && !tokenCacheRef.current[meta.symbol.toUpperCase()]) {
+              tokenCacheRef.current[meta.symbol.toUpperCase()] = mint;
             }
             if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
           }
@@ -7069,10 +7091,15 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 const priceJson = await fetch(`${JUP_PRICE_API}?ids=${mintIds.join(",")}`)
                   .then(r => r.json()).catch(() => ({}));
                 for (const [mint, info] of Object.entries(priceJson || {})) {
+                  if (!info?.usdPrice) continue;
+                  const price = parseFloat(info.usdPrice);
+                  // Store by mint address so unknown tokens (keyed by truncated mint sym) always resolve
+                  freshPrices[mint] = price;
+                  // Also store by symbol for known tokens
                   const sym = allPortfolioSyms.find(s =>
                     (pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s]) === mint
                   );
-                  if (sym && info?.usdPrice) freshPrices[sym] = parseFloat(info.usdPrice);
+                  if (sym) freshPrices[sym] = price;
                 }
               }
             } catch {}
@@ -8479,10 +8506,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     const priceJson2 = await fetch(`${JUP_PRICE_API}?ids=${mintIds2.join(",")}`)
                       .then(r => r.json()).catch(() => ({}));
                     for (const [mint, info] of Object.entries(priceJson2 || {})) {
+                      if (!info?.usdPrice) continue;
+                      const price = parseFloat(info.usdPrice);
+                      freshPrices2[mint] = price; // always store by mint address
                       const sym = allPortfolioSyms2.find(s =>
                         (pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s]) === mint
                       );
-                      if (sym && info?.usdPrice) freshPrices2[sym] = parseFloat(info.usdPrice);
+                      if (sym) freshPrices2[sym] = price;
                     }
                   }
                 } catch {}
@@ -10671,14 +10701,17 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         <div style={{ fontSize:12, color:T.text3 }}>No balances found.</div>
                       ) : (
                         Object.entries(portfolioData.walletBalances || portfolioData.solBalance || {})
-                          .sort(([,a], [,b]) => {
-                            const aUsd = portfolioData.prices?.[Object.keys(portfolioData.walletBalances||{})[0]] ? a * (portfolioData.prices?.[Object.keys(portfolioData.walletBalances||{})[0]]||0) : a;
-                            const bUsd = portfolioData.prices?.[Object.keys(portfolioData.walletBalances||{})[1]] ? b * (portfolioData.prices?.[Object.keys(portfolioData.walletBalances||{})[1]]||0) : b;
-                            return bUsd - aUsd;
+                          .sort(([symA, balA], [symB, balB]) => {
+                            const mintA = portfolioData.mintMap?.[symA];
+                            const mintB = portfolioData.mintMap?.[symB];
+                            const priceA = portfolioData.prices?.[symA] ?? portfolioData.prices?.[mintA] ?? 0;
+                            const priceB = portfolioData.prices?.[symB] ?? portfolioData.prices?.[mintB] ?? 0;
+                            return (balB * priceB) - (balA * priceA);
                           })
                           .map(([sym, bal]) => {
-                          const usdVal  = portfolioData.prices?.[sym] ? (bal * portfolioData.prices[sym]) : null;
                           const mintAddr = portfolioData.mintMap?.[sym];
+                          const tokenPrice = portfolioData.prices?.[sym] ?? portfolioData.prices?.[mintAddr] ?? null;
+                          const usdVal  = tokenPrice != null ? bal * tokenPrice : null;
                           const logoUrl = portfolioData.logoMap?.[sym]
                             || (mintAddr ? `https://img.jup.ag/tokens/${mintAddr}` : null);
                           const tokenName = portfolioData.nameMap?.[sym] || null;
@@ -10698,7 +10731,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                                 <div>
                                   <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{sym}</div>
                                   {tokenName && <div style={{ fontSize:10, color:T.text3, marginTop:1 }}>{tokenName}</div>}
-                                  {!tokenName && portfolioData.prices?.[sym] && <div style={{ fontSize:10, color:T.text3 }}>${portfolioData.prices[sym] < 1 ? portfolioData.prices[sym].toFixed(4) : portfolioData.prices[sym].toFixed(2)}</div>}
+                                  {!tokenName && tokenPrice != null && <div style={{ fontSize:10, color:T.text3 }}>${tokenPrice < 0.0001 ? tokenPrice.toExponential(2) : tokenPrice < 1 ? tokenPrice.toFixed(4) : tokenPrice.toFixed(2)}</div>}
                                 </div>
                               </div>
                               <div style={{ textAlign:"right" }}>
