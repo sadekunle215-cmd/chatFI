@@ -21,6 +21,41 @@ function u64LE(buf, val, off) {
   buf.writeBigUInt64LE(typeof val === "bigint" ? val : BigInt(val), off);
 }
 
+// Retry wrapper for getAccountInfo — handles 429 / StructError from rate-limited RPC
+async function getAccountInfoWithRetry(connection, pubkey, maxRetries = 4) {
+  let delay = 500;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const info = await connection.getAccountInfo(pubkey);
+      return info;
+    } catch (err) {
+      const msg = err?.message || "";
+      const isRateLimit =
+        msg.includes("429") ||
+        msg.includes("rate limit") ||
+        msg.includes("Too Many Requests") ||
+        msg.includes("StructError") ||          // malformed response from overloaded RPC
+        msg.includes("satisfy a union of type"); // superstruct parse failure on bad response
+      if (isRateLimit && attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, delay));
+        delay *= 2; // exponential back-off: 500 → 1000 → 2000 → 4000
+        continue;
+      }
+      // Not a rate-limit error, or out of retries — re-throw with clear message
+      if (isRateLimit) {
+        const e = new Error(
+          "The Solana RPC is rate-limited right now. Please set a SOLANA_RPC " +
+          "environment variable pointing to a private/paid RPC endpoint " +
+          "(e.g. Helius, QuickNode, Triton) and try again."
+        );
+        e.statusCode = 503;
+        throw e;
+      }
+      throw err;
+    }
+  }
+}
+
 export default async function handler(req, res) {
   res.setHeader("Content-Type", "application/json");
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
@@ -69,7 +104,7 @@ export default async function handler(req, res) {
 
       // Block Token-2022 — Jupiter Lock only supports the standard Token Program
       const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-      const mintInfo = await connection.getAccountInfo(mintKey);
+      const mintInfo = await getAccountInfoWithRetry(connection, mintKey);
       if (!mintInfo) return res.status(400).json({ error: "Mint account not found on-chain. Check the token address." });
       if (mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)) {
         return res.status(400).json({ error: "Token-2022 tokens are not supported by Jupiter Lock. Use a standard SPL token like USDC or JUP." });
@@ -93,7 +128,7 @@ export default async function handler(req, res) {
       const escrowToken = await getAssociatedTokenAddress(mintKey, escrowPDA,  true,  TOKEN_PROGRAM_ID);
 
       // Validate the sender actually holds this token before building the tx
-      const senderTokenInfo = await connection.getAccountInfo(senderToken);
+      const senderTokenInfo = await getAccountInfoWithRetry(connection, senderToken);
       if (!senderTokenInfo) {
         return res.status(400).json({ error: "No token account found for this mint in your wallet. Make sure you hold this token before locking it." });
       }
@@ -160,7 +195,7 @@ export default async function handler(req, res) {
 
       const recipientKey = new PublicKey(recipient);
       const escrowKey    = new PublicKey(escrow);
-      const acctInfo     = await connection.getAccountInfo(escrowKey);
+      const acctInfo     = await getAccountInfoWithRetry(connection, escrowKey);
       if (!acctInfo) return res.status(400).json({ error: "Escrow account not found" });
 
       const mintKey      = new PublicKey(acctInfo.data.slice(40, 72));
@@ -257,6 +292,7 @@ export default async function handler(req, res) {
 
   } catch (err) {
     console.error("[api/lock]", err);
-    return res.status(500).json({ error: err?.message || "Lock API error" });
+    const statusCode = err?.statusCode || 500;
+    return res.status(statusCode).json({ error: err?.message || "Lock API error" });
   }
 }
