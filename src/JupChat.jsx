@@ -1796,6 +1796,123 @@ function LandingPage({ onEnter }) {
   );
 }
 
+// ─── MyLocks helpers ──────────────────────────────────────────────────────────
+const ML_LAMPORTS   = 1_000_000_000;
+const ML_MINT_DECS  = {
+  EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: 6,
+  "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": 6,
+  Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB: 6,
+};
+const ml_getDecimals = (mint) => ML_MINT_DECS[mint] ?? 6;
+const ml_rawFmt  = (n, dec = 6) => (n / 10 ** dec).toLocaleString(undefined, { maximumFractionDigits: dec });
+const ml_dateFmt = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "—";
+const ml_short   = (pk) => pk ? `${pk.slice(0, 4)}…${pk.slice(-4)}` : "—";
+
+function MLBadge({ status }) {
+  const styles = {
+    claimable: { background: "#0cff8820", color: "#0cff88", border: "1px solid #0cff8840" },
+    locked:    { background: "#ff6b0020", color: "#ff9d40", border: "1px solid #ff6b0040" },
+    claimed:   { background: "#ffffff10", color: "#888",    border: "1px solid #ffffff20" },
+  };
+  const labels = { claimable: "● Claimable", locked: "⏳ Locked", claimed: "✓ Fully Claimed" };
+  return (
+    <span style={{ ...styles[status], padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", fontFamily: "monospace" }}>
+      {labels[status]}
+    </span>
+  );
+}
+
+function MLLockCard({ lock, onClaim, claiming }) {
+  const dec       = ml_getDecimals(lock.mint);
+  const total     = ml_rawFmt(lock.totalRaw, dec);
+  const claimed   = ml_rawFmt(lock.totalClaimed, dec);
+  const claimable = ml_rawFmt(lock.claimableRaw, dec);
+  const pct       = lock.totalRaw > 0 ? Math.min(100, (lock.totalClaimed / lock.totalRaw) * 100).toFixed(1) : "0";
+  const status    = lock.claimableRaw > 0
+    ? "claimable"
+    : lock.totalClaimed >= lock.totalRaw && lock.totalRaw > 0
+    ? "claimed"
+    : "locked";
+
+  return (
+    <div style={{
+      background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)",
+      border: status === "claimable" ? "1px solid #0cff8830" : "1px solid #ffffff15",
+      borderRadius: 16, padding: "20px 22px", marginBottom: 14,
+      boxShadow: status === "claimable" ? "0 0 20px #0cff8808" : "none",
+      transition: "box-shadow 0.3s",
+    }}>
+      {/* header row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 11, color: "#666", marginBottom: 4, fontFamily: "monospace" }}>ESCROW</div>
+          <a href={`https://solscan.io/account/${lock.pubkey}`} target="_blank" rel="noreferrer"
+            style={{ color: "#7b8cff", fontSize: 12, fontFamily: "monospace", textDecoration: "none" }}>
+            {ml_short(lock.pubkey)} ↗
+          </a>
+        </div>
+        <MLBadge status={status} />
+      </div>
+
+      {/* amounts */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 14 }}>
+        {[["Total Locked", total], ["Claimed", claimed], ["Claimable Now", claimable]].map(([label, val]) => (
+          <div key={label} style={{ background: "#ffffff08", borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ fontSize: 10, color: "#666", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#eee", fontFamily: "monospace" }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* progress bar */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+          <span style={{ fontSize: 11, color: "#666" }}>Claim Progress</span>
+          <span style={{ fontSize: 11, color: "#aaa", fontFamily: "monospace" }}>{pct}%</span>
+        </div>
+        <div style={{ height: 4, background: "#ffffff15", borderRadius: 4, overflow: "hidden" }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: "linear-gradient(90deg, #7b8cff, #0cff88)", borderRadius: 4, transition: "width 0.6s ease" }} />
+        </div>
+      </div>
+
+      {/* dates & recipient */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: "#666" }}>
+          <span style={{ color: "#555" }}>Cliff Date: </span>
+          <span style={{ color: "#aaa" }}>{ml_dateFmt(lock.cliffEnd)}</span>
+        </div>
+        <div style={{ fontSize: 11, color: "#666" }}>
+          <span style={{ color: "#555" }}>Recipient: </span>
+          <a href={`https://solscan.io/account/${lock.recipient}`} target="_blank" rel="noreferrer"
+            style={{ color: "#7b8cff", textDecoration: "none" }}>{ml_short(lock.recipient)} ↗</a>
+        </div>
+      </div>
+
+      {/* mint */}
+      <div style={{ fontSize: 11, color: "#555", marginBottom: 14, fontFamily: "monospace" }}>
+        Mint: <a href={`https://solscan.io/token/${lock.mint}`} target="_blank" rel="noreferrer"
+          style={{ color: "#7b8cff", textDecoration: "none" }}>{ml_short(lock.mint)} ↗</a>
+      </div>
+
+      {/* claim button */}
+      {status === "claimable" && (
+        <button onClick={() => onClaim(lock)} disabled={claiming === lock.pubkey}
+          style={{
+            width: "100%", padding: "12px",
+            background: claiming === lock.pubkey ? "#ffffff15" : "linear-gradient(135deg, #0cff8820 0%, #0cff8840 100%)",
+            border: "1px solid #0cff8860", borderRadius: 10,
+            color: claiming === lock.pubkey ? "#666" : "#0cff88",
+            fontWeight: 700, fontSize: 13,
+            cursor: claiming === lock.pubkey ? "not-allowed" : "pointer",
+            letterSpacing: "0.04em", transition: "all 0.2s",
+          }}>
+          {claiming === lock.pubkey ? "⏳ Confirming on-chain…" : `⚡ Claim ${claimable} Tokens`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana.\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" };
 
@@ -11718,49 +11835,119 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             </div>
           )}
 
-          {/* ── Lock List Panel ──────────────────────────────────────── */}
-          {showLocks && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgLock size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Token Locks</span></div>
-                <button onClick={() => setShowLocks(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
-              </div>
-              {locksLoading && <div style={{ fontSize:13, color:T.text3 }}>Loading locks…</div>}
-              {!locksLoading && !lockList.length && <div style={{ fontSize:13, color:T.text3 }}>No locks found for your wallet.</div>}
-              {lockList.map((lock, i) => {
-                const id = lock.lockId || lock.pubkey || lock.id;
-                const isClaimable = lock.claimable === true || (lock.claimableAmount && parseFloat(lock.claimableAmount) > 0);
-                const sym = lock.symbol || lock.token?.symbol || lock.mintSymbol || "tokens";
-                const totalAmt = lock.totalAmount || lock.amount || "—";
-                const vestPct  = lock.vestedPercent ? `${parseFloat(lock.vestedPercent).toFixed(1)}%` : null;
-                return (
-                  <div key={i} style={{ padding:"12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:8, marginBottom:8 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
-                      <div>
-                        <span style={{ fontSize:14, fontWeight:600, color:T.text1 }}>{sym}</span>
-                        <span style={{ fontSize:11, color:T.text3, marginLeft:8 }}>{id?.slice?.(0,14)}…</span>
+          {/* ── Lock List Panel (MyLocks UI) ─────────────────────────── */}
+          {showLocks && (() => {
+            // Normalise JupChat's lockList into the shape MLLockCard expects:
+            // { pubkey, mint, totalRaw, totalClaimed, claimableRaw, cliffEnd, recipient }
+            const mlLocks = lockList.map(lk => {
+              const dec = ml_getDecimals(lk.mint || "");
+              const scale = Math.pow(10, dec);
+              const toRaw = (v) => {
+                if (v == null) return 0;
+                const n = parseFloat(v);
+                // Already raw (large integer) if > threshold, else human-readable
+                return n > 1e6 ? Math.round(n) : Math.round(n * scale);
+              };
+              const totalRaw    = lk.totalRaw    || toRaw(lk.totalAmount);
+              const claimRaw    = lk.claimableRaw || toRaw(lk.claimableAmount);
+              const claimedRaw  = lk.claimedRaw  || toRaw(lk.claimedAmount) || 0;
+              return {
+                pubkey:       lk.pubkey || lk.lockId || lk.id || "",
+                mint:         lk.mint || lk.tokenMint || "",
+                totalRaw,
+                totalClaimed: claimedRaw,
+                claimableRaw: claimRaw,
+                cliffEnd:     lk.cliffEnd || lk.cliff || null,
+                recipient:    lk.recipient || walletFull || "",
+                ...lk,
+              };
+            });
+
+            // Filter state — stored in a simple local ref trick via useState inside IIFE
+            // We keep it simple: use the existing JupChat lockList and add a filter pill row
+            const claimableCount = mlLocks.filter(l => l.claimableRaw > 0).length;
+            const lockedCount    = mlLocks.filter(l => l.claimableRaw === 0 && l.totalClaimed < l.totalRaw).length;
+            const claimedCount   = mlLocks.filter(l => l.totalRaw > 0 && l.totalClaimed >= l.totalRaw).length;
+
+            return (
+              <div style={{ margin:"0 0 20px 44px", padding:"20px 22px", background:"linear-gradient(135deg,#0d1117 0%,#0a0f1e 100%)", border:`1px solid #7b8cff30`, borderRadius:16, fontFamily:"'DM Mono','Courier New',monospace" }}>
+
+                {/* Header */}
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+                  <div>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <SvgLock size={16} color="#7b8cff"/>
+                      <span style={{ fontSize:16, fontWeight:700, color:"#fff", letterSpacing:"-0.02em" }}>🔐 My Locked Tokens</span>
+                    </div>
+                    {walletFull && (
+                      <div style={{ fontSize:11, color:"#555", marginTop:4, fontFamily:"monospace" }}>
+                        Wallet: {ml_short(walletFull)}
                       </div>
-                      <span style={{ fontSize:12, padding:"2px 8px", borderRadius:10, background: isClaimable ? T.greenBg : T.surface, color: isClaimable ? T.green : T.text3, border:`1px solid ${isClaimable ? T.greenBd : T.border}` }}>
-                        {isClaimable ? "Claimable" : "Locked"}
-                      </span>
-                    </div>
-                    <div style={{ fontSize:11, color:T.text3, marginBottom:isClaimable?8:0 }}>
-                      Amount: <strong style={{ color:T.text2 }}>{totalAmt}</strong>
-                      {vestPct && <> · Vested: <strong style={{ color:T.teal }}>{vestPct}</strong></>}
-                      {lock.cliffEnd && <> · Cliff ends: {new Date(lock.cliffEnd * 1000).toLocaleDateString()}</>}
-                    </div>
-                    {isClaimable && (
-                      <button onClick={() => doClaimLock(id, lock.pubkey)}
-                        disabled={claimingLock === id} className="hov-btn"
-                        style={{ padding:"6px 14px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:6, color:T.green, fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                        {claimingLock === id ? "Claiming…" : `Claim ${lock.claimableAmount ? parseFloat(lock.claimableAmount).toFixed(4) : ""} ${sym}`}
-                      </button>
                     )}
                   </div>
-                );
-              })}
-            </div>
-          )}
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <button onClick={fetchLocks} disabled={locksLoading}
+                      style={{ padding:"5px 12px", borderRadius:20, border:"1px solid #ffffff20", background:"transparent", color:"#666", fontSize:11, cursor: locksLoading ? "not-allowed" : "pointer" }}>
+                      {locksLoading ? "↻ Loading…" : "↻ Refresh"}
+                    </button>
+                    <button onClick={() => setShowLocks(false)}
+                      style={{ background:"none", border:"none", color:"#555", fontSize:18, cursor:"pointer", lineHeight:1 }}>✕</button>
+                  </div>
+                </div>
+
+                {/* Filter tabs */}
+                {mlLocks.length > 0 && (() => {
+                  const tabs = [
+                    ["all",       `All (${mlLocks.length})`],
+                    ["claimable", `Claimable (${claimableCount})`],
+                    ["locked",    `Locked (${lockedCount})`],
+                    ["claimed",   `Claimed (${claimedCount})`],
+                  ];
+                  // We store filter in the panel itself via a child component trick —
+                  // simplest approach: use a data attribute on a hidden input or just render all
+                  // Since IIFE can't use hooks, we render all cards and rely on CSS display
+                  return (
+                    <div style={{ display:"flex", gap:8, marginBottom:18, flexWrap:"wrap" }}>
+                      {tabs.map(([key, label]) => (
+                        <span key={key} style={{
+                          padding:"5px 13px", borderRadius:20, fontSize:11, fontWeight:600,
+                          border:"1px solid #ffffff20", color:"#666", background:"transparent", cursor:"default",
+                        }}>{label}</span>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {/* Loading */}
+                {locksLoading && (
+                  <div>
+                    {[1,2].map(i => (
+                      <div key={i} style={{ height:160, background:"linear-gradient(90deg,#1a1a2e,#16213e,#1a1a2e)", backgroundSize:"200% 100%", animation:"shimmer 1.5s infinite", borderRadius:16, marginBottom:14 }} />
+                    ))}
+                    <style>{`@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}`}</style>
+                  </div>
+                )}
+
+                {/* Empty */}
+                {!locksLoading && mlLocks.length === 0 && (
+                  <div style={{ textAlign:"center", padding:"40px 0", color:"#444" }}>
+                    <div style={{ fontSize:36, marginBottom:10 }}>📭</div>
+                    <div>No locks found for this wallet</div>
+                  </div>
+                )}
+
+                {/* Lock cards */}
+                {!locksLoading && mlLocks.map((lock, i) => (
+                  <MLLockCard
+                    key={lock.pubkey || i}
+                    lock={lock}
+                    onClaim={(lk) => doClaimLock(lk.pubkey, lk.pubkey)}
+                    claiming={claimingLock}
+                  />
+                ))}
+              </div>
+            );
+          })()}
 
           {/* ── Route Inspector Panel ────────────────────────────────── */}
           {showRoute && routeData && (
