@@ -25,6 +25,18 @@ import { Client } from "@jup-ag/lend/api";
 const MAX_REPAY    = MAX_REPAY_AMOUNT   ?? new BN("9007199254740991");
 const MAX_WITHDRAW = MAX_WITHDRAW_AMOUNT ?? new BN("9007199254740991");
 
+// Native SOL mint address — SDK cannot handle this directly in flash loan calls.
+// Must always use the WSOL mint (same address, but treated as a wrapped token account).
+const NATIVE_SOL_MINT = "So11111111111111111111111111111111111111112";
+const WSOL_MINT       = "So11111111111111111111111111111111111111112"; // identical address, but used as SPL token
+
+/** For flash loan asset param: native SOL must be passed as a PublicKey of WSOL */
+function toFlashAsset(mintPubkey) {
+  // If the mint IS native SOL, return as-is (same address) but log so we know.
+  // The real fix is that the SDK needs a WSOL *token account* to exist — handled via ATA creation.
+  return mintPubkey;
+}
+
 const RPC_URL     = process.env.SOLANA_RPC;
 const JUP_API_KEY = process.env.JUP_API_KEY || "";
 const SWAP_API    = "https://lite-api.jup.ag/swap/v1";
@@ -143,7 +155,23 @@ async function getAtaCreateIxIfNeeded(connection, mint, owner) {
   return createAssociatedTokenAccountIdempotentInstruction(owner, ata, owner, mint, TOKEN_PROGRAM_ID);
 }
 
-// ── Build versioned transaction ────────────────────────────────────────────────
+// ── WSOL wrapping helper ───────────────────────────────────────────────────────
+// When the flash loan asset is native SOL (So111...112), the SDK calls getMint()
+// on it which fails because native SOL has no mint struct. We must ensure a WSOL
+// token account (ATA) exists for the signer before the flash loan instruction runs.
+async function ensureWsolAtaIx(connection, owner) {
+  const wsolMint = new PublicKey(WSOL_MINT);
+  const ata = getAssociatedTokenAddressSync(wsolMint, owner, false, TOKEN_PROGRAM_ID);
+  try {
+    const info = await connection.getAccountInfo(ata);
+    if (info) return null; // already exists
+  } catch {}
+  return createAssociatedTokenAccountIdempotentInstruction(owner, ata, owner, wsolMint, TOKEN_PROGRAM_ID);
+}
+
+function isNativeSOL(mintPubkey) {
+  return mintPubkey.toBase58() === NATIVE_SOL_MINT;
+}
 async function buildTx(connection, signerPubkey, ixs, alts) {
   if (!ixs?.length) throw new Error("No instructions returned from SDK.");
   const cuIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
@@ -237,9 +265,14 @@ export default async function handler(req, res) {
 
       await sleep(isStable ? 800 : 500);
 
+      // If debt is native SOL, ensure WSOL ATA exists before flash loan (SDK calls getMint internally)
+      const debtIsSOL = isNativeSOL(debtMint);
+      const wsolAtaIxOpen = debtIsSOL ? await ensureWsolAtaIx(connection, signerPubkey) : null;
+
       let flashBorrowIx, flashPayIx;
       try {
-        const r = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: debtMint, amount: borrowBN, cluster: "mainnet" }, 5, isStable);
+        // NOTE: getFlashBorrowIx does NOT accept a cluster param — only { connection, signer, asset, amount }
+        const r = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: debtMint, amount: borrowBN }, 5, isStable);
         flashBorrowIx = r.flashBorrowIx;
         flashPayIx    = r.flashPaybackIx;
       } catch (e) {
@@ -273,7 +306,7 @@ export default async function handler(req, res) {
         getAtaCreateIxIfNeeded(connection, colMint, signerPubkey),
         getAtaCreateIxIfNeeded(connection, debtMint, signerPubkey),
       ]);
-      const ataIxs = [colAtaIx, debtAtaIx].filter(Boolean);
+      const ataIxs = [wsolAtaIxOpen, colAtaIx, debtAtaIx].filter(Boolean);
 
       const { blockhash: setupBh } = await connection.getLatestBlockhash("confirmed");
       const setupTx = new Transaction({ feePayer: signerPubkey, recentBlockhash: setupBh });
@@ -316,9 +349,14 @@ export default async function handler(req, res) {
 
       await sleep(isStable ? 800 : 500);
 
+      // If collateral is native SOL, ensure WSOL ATA exists before flash loan
+      const colIsSOL = isNativeSOL(colMint);
+      const wsolAtaIxUnwind = colIsSOL ? await ensureWsolAtaIx(connection, signerPubkey) : null;
+
       let flashBorrowIx, flashPayIx;
       try {
-        const r = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: colMint, amount: flashColBN, cluster: "mainnet" }, 5, isStable);
+        // NOTE: getFlashBorrowIx does NOT accept a cluster param — only { connection, signer, asset, amount }
+        const r = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: colMint, amount: flashColBN }, 5, isStable);
         flashBorrowIx = r.flashBorrowIx;
         flashPayIx    = r.flashPaybackIx;
       } catch (e) {
@@ -344,7 +382,9 @@ export default async function handler(req, res) {
       const swapIx   = toIx(swapApiRes.swapInstruction);
       const swapAlts = await resolveAlts(connection, swapApiRes.addressLookupTableAddresses ?? []);
       const allAlts  = dedupeAlts([...(operateResult.addressLookupTableAccounts ?? []), ...swapAlts]);
-      const transaction = await buildTx(connection, signerPubkey, [flashBorrowIx, swapIx, ...operateResult.ixs, flashPayIx], allAlts);
+      const unwindSetupIxs = [wsolAtaIxUnwind].filter(Boolean);
+      const mainUnwindIxs  = [...unwindSetupIxs, flashBorrowIx, swapIx, ...operateResult.ixs, flashPayIx];
+      const transaction = await buildTx(connection, signerPubkey, mainUnwindIxs, allAlts);
       return res.status(200).json({ transaction });
     }
 
