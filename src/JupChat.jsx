@@ -2981,28 +2981,54 @@ function JupChatInner() {
           }
         }
 
-        // Batch-resolve unknown mints via Jupiter token metadata API
+        // Batch-resolve unknown mints via Jupiter token list (reliable logos) + per-token fallback
         if (unknownMints.length > 0) {
-          const resolved = await Promise.allSettled(
-            unknownMints.slice(0, 15).map(({ mint, uiAmt }) =>
-              fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint)
-                .then(r => r.json())
-                .then(meta => ({ mint, uiAmt, sym: meta?.symbol || mint.slice(0,6), name: meta?.name || null, logo: meta?.logoURI || null }))
-                .catch(() => ({ mint, uiAmt, sym: mint.slice(0,6), name: null, logo: null }))
-            )
-          );
-          for (const r of resolved) {
-            if (r.status === "fulfilled") {
-              const { mint, uiAmt, sym, name, logo } = r.value;
-              const finalSym = balances[sym] !== undefined ? mint.slice(0,8) : sym;
-              balances[finalSym] = uiAmt;
-              mintMap[finalSym]  = mint;
-              // Always store a logo — use CDN fallback if API returned nothing
-              logoMap[finalSym] = logo || `https://img.jup.ag/tokens/${mint}`;
-              if (name && !results.nameMap) results.nameMap = {};
-              if (name) results.nameMap[finalSym] = name;
-              if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
+          let tokenListMap = {};
+          try {
+            // Jupiter token list has logoURI hosted on reliable CDNs (not img.jup.ag which blocks cross-origin)
+            const tokenListRes = await fetch("https://tokens.jup.ag/tokens?tags=all")
+              .then(r => r.json()).catch(() => []);
+            for (const t of (Array.isArray(tokenListRes) ? tokenListRes : [])) {
+              if (t.address) tokenListMap[t.address] = t;
             }
+          } catch {}
+
+          // Per-token fallback for any mints not in the list
+          const stillUnknown = unknownMints.slice(0, 20).filter(({ mint }) => !tokenListMap[mint]);
+          if (stillUnknown.length > 0) {
+            const perToken = await Promise.allSettled(
+              stillUnknown.map(({ mint, uiAmt }) =>
+                fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint)
+                  .then(r => r.json())
+                  .then(meta => ({ mint, uiAmt, sym: meta?.symbol || mint.slice(0,6), name: meta?.name || null, logo: meta?.logoURI || null }))
+                  .catch(() => ({ mint, uiAmt, sym: mint.slice(0,6), name: null, logo: null }))
+              )
+            );
+            for (const r of perToken) {
+              if (r.status === "fulfilled" && r.value) {
+                const { mint, sym, name, logo } = r.value;
+                // Inject into tokenListMap so unified loop below handles it
+                tokenListMap[mint] = { address: mint, symbol: sym, name, logoURI: logo || null };
+              }
+            }
+          }
+
+          for (const { mint, uiAmt } of unknownMints.slice(0, 20)) {
+            const meta = tokenListMap[mint];
+            const sym = meta?.symbol || mint.slice(0, 6);
+            const finalSym = balances[sym] !== undefined ? mint.slice(0, 8) : sym;
+            balances[finalSym] = uiAmt;
+            mintMap[finalSym]  = mint;
+            // Prefer logoURI from token list (reliable CDN). img.jup.ag blocks cross-origin so avoid as primary.
+            const logoFromList = meta?.logoURI && !meta.logoURI.includes("img.jup.ag")
+              ? meta.logoURI
+              : meta?.logoURI || `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mint}/logo.png`;
+            logoMap[finalSym] = logoFromList;
+            if (meta?.name) {
+              if (!results.nameMap) results.nameMap = {};
+              results.nameMap[finalSym] = meta.name;
+            }
+            if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
           }
         }
 
@@ -7000,7 +7026,27 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const pData = await fetchPortfolioData(addr);
           // Merge reliable known logos (TOKEN_LOGO_URLS) with any logos fetched by the API
           const mergedLogoMap = { ...TOKEN_LOGO_URLS, ...(pData?.logoMap || {}) };
-          setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices });
+          // Fetch prices for ALL resolved tokens (including unknowns resolved during fetchPortfolioData)
+          const allPortfolioSyms = Object.keys(pData?.walletBalances || {});
+          let freshPrices = { ...prices };
+          if (allPortfolioSyms.length > 0) {
+            try {
+              const mintIds = allPortfolioSyms
+                .map(s => pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s])
+                .filter(Boolean);
+              if (mintIds.length > 0) {
+                const priceJson = await fetch(`${JUP_PRICE_API}?ids=${mintIds.join(",")}`)
+                  .then(r => r.json()).catch(() => ({}));
+                for (const [mint, info] of Object.entries(priceJson || {})) {
+                  const sym = allPortfolioSyms.find(s =>
+                    (pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s]) === mint
+                  );
+                  if (sym && info?.usdPrice) freshPrices[sym] = parseFloat(info.usdPrice);
+                }
+              }
+            } catch {}
+          }
+          setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices });
           setPortfolioLoading(false);
         }
 
@@ -8390,7 +8436,27 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               setPortfolioData(null);
               const pData = await fetchPortfolioData(walletFull);
               const mergedLogoMap = { ...TOKEN_LOGO_URLS, ...(pData?.logoMap || {}) };
-              setPortfolioData({ ...pData, wallet: walletFull, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices });
+              // Fetch prices for ALL resolved tokens (including unknowns resolved during fetchPortfolioData)
+              const allPortfolioSyms2 = Object.keys(pData?.walletBalances || {});
+              let freshPrices2 = { ...prices };
+              if (allPortfolioSyms2.length > 0) {
+                try {
+                  const mintIds2 = allPortfolioSyms2
+                    .map(s => pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s])
+                    .filter(Boolean);
+                  if (mintIds2.length > 0) {
+                    const priceJson2 = await fetch(`${JUP_PRICE_API}?ids=${mintIds2.join(",")}`)
+                      .then(r => r.json()).catch(() => ({}));
+                    for (const [mint, info] of Object.entries(priceJson2 || {})) {
+                      const sym = allPortfolioSyms2.find(s =>
+                        (pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s]) === mint
+                      );
+                      if (sym && info?.usdPrice) freshPrices2[sym] = parseFloat(info.usdPrice);
+                    }
+                  }
+                } catch {}
+              }
+              setPortfolioData({ ...pData, wallet: walletFull, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices2 });
               setPortfolioLoading(false);
 
             // ── FETCH_TOKEN_INFO ────────────────────────────────────────────────
