@@ -339,6 +339,9 @@ Available actions:
 - "SET_PRICE_ALERT" → actionData: { "token": "SOL", "condition": "above"|"below", "price": "200" } — set an in-session price alert; ChatFi notifies in chat when price crosses the threshold.
 - "DETECT_VOLATILITY" → actionData: { "token": "SOL", "thresholdPct": "2", "autoOrder": true, "from": "USDC", "amount": "50" } — monitor a token's rolling price volatility (% std-dev over 10 samples, polled every 30s). When volatility exceeds thresholdPct, fires a chat alert. If autoOrder:true, automatically opens a pre-filled OCO limit order panel with TP=+2σ and SL=-1.5σ from current price. thresholdPct default 2. from/amount configure the auto-order size. Use for: volatility-based entries, auto-bracket orders on volatile tokens.
 - "FETCH_VOL_MONITORS" → actionData: {} — show all active volatility monitors with cancel buttons.
+- "SCAN_PRED_ODDS"    → actionData: { "category": "sports"|"crypto"|"politics"|null, "query": null, "limit": 20, "minEdge": "5", "sortBy": "edge"|"volume"|"probability" } — CLI-style odds scanner: fetches live prediction markets, calculates implied probability, edge score (deviation from 50/50 or from user-supplied fair value), and ranks by sharpest opportunities. minEdge = minimum % edge to show (default 5). sortBy: "edge" (sharpest mispricing first), "volume" (most liquid), "probability" (most lopsided). Shows a terminal-style table with event, outcome, YES%, NO%, edge, volume. Opens the pred CLI dashboard panel.
+- "AUTO_PRED_BET"     → actionData: { "category": "sports"|"crypto"|"politics"|null, "query": null, "minEdge": "10", "maxAmount": "20", "side": "yes"|"no"|"best", "limit": 5, "dryRun": false } — automatically scan odds and place bets on markets where edge exceeds minEdge%. maxAmount = max USDC per bet (default 20, min $5). side: "yes" = only take YES positions, "no" = only NO, "best" = take whichever side has edge. dryRun:true = show what it WOULD bet without placing. limit = max number of bets to place. ALWAYS confirm with text summary of what was bet and why.
+- "SHOW_PRED_CLI"     → actionData: {} — open the prediction market CLI dashboard (live odds table, edge scanner, auto-bet controls).
 - "SHOW_TRADE_JOURNAL" → actionData: { "period": "all"|"today"|"week" } — show the user's local trade history and estimated PnL.
 - "BASKET_SWAP"     → actionData: { "trades": [...] } — execute multiple swaps in sequence. Each trade supports THREE amount modes (pick one): amountUSD:"100" (spend $100 of from token), amount:"5.4" (native token units — parse k/K suffix as ×1000, m/M as ×1000000), or portion:"all"|"max"|"half"|"quarter"|"N%" (wallet balance fraction). from/to can vary per trade (many-to-one and one-to-many both work). Examples: "buy $100 each of SOL JUP BONK" → [{from:"USDC",to:"SOL",amountUSD:"100"},…]; "swap 5.4 JUP, 158.4k BONK to USDC" → [{from:"JUP",to:"USDC",amount:"5.4"},{from:"BONK",to:"USDC",amount:"158400"}]; "swap max of SOL PENGU to USDC" → [{from:"SOL",to:"USDC",portion:"max"},{from:"PENGU",to:"USDC",portion:"max"}]; "swap half my JUP and all my FARTCOIN to SOL" → [{from:"JUP",to:"SOL",portion:"half"},{from:"FARTCOIN",to:"SOL",portion:"all"}].
 - "SWAP_ALL_WALLET" → actionData: { "to": "USDC", "exclude": ["SOL","USDC"] } — use ONLY when user says "swap everything/all tokens in my wallet" or "swap all tokens except X" and does NOT name specific tokens. The client will read the live wallet balances and build the trades list. "exclude" must always contain the target "to" token plus any tokens the user explicitly wants to keep. Examples: "swap all tokens to USDC except SOL" → to:"USDC", exclude:["SOL","USDC"]; "convert my whole wallet to SOL except USDC" → to:"SOL", exclude:["SOL","USDC"]; "dump everything to USDC" → to:"USDC", exclude:["USDC"]. CRITICAL: use BASKET_SWAP (not this) when user names the specific tokens to swap.
@@ -390,6 +393,9 @@ Rules:
 - "volatility monitor" / "watch volatility" / "detect volatility" / "auto-order when volatile" / "set limit if volatile" / "trade volatility" / "monitor X for volatility" / "auto-bracket X" / "auto OCO on volatility" → DETECT_VOLATILITY — extract token, thresholdPct (default 2), autoOrder (true if user says auto/automatic/set order), from (default USDC), amount
 - "VOLATILITY CHAINING: "monitor SOL volatility and auto-set OCO" → DETECT_VOLATILITY with autoOrder:true. "watch BONK volatility then show my monitors" → CHAINED_ACTIONS [DETECT_VOLATILITY, FETCH_VOL_MONITORS]
 - "my volatility monitors" / "show vol monitors" / "active volatility watches" / "cancel vol monitor" → FETCH_VOL_MONITORS
+- "scan odds" / "find value bets" / "best prediction odds" / "odds scanner" / "edge scanner" / "which prediction has best odds" / "show me mispriced markets" / "find underpriced bets" → SCAN_PRED_ODDS — extract category, minEdge (default 5), sortBy (default "edge")
+- "auto bet" / "auto-bet" / "automatically place prediction bets" / "bet on all good odds" / "auto trade predictions" / "place bets where edge > X%" / "auto predict" → AUTO_PRED_BET — extract category, minEdge, maxAmount, side preference, dryRun. ALWAYS clarify dryRun:true unless user explicitly says to place real bets. When user says "just show me" / "dry run" / "what would you bet" → dryRun:true.
+- "prediction CLI" / "pred CLI" / "odds dashboard" / "open pred terminal" / "prediction dashboard" → SHOW_PRED_CLI
 - "my trades" / "trade history" / "trade journal" / "my PnL" / "what have I traded" / "show my swaps" / "trading history" → SHOW_TRADE_JOURNAL
 - "swap all tokens in my wallet to X" / "convert everything to X" / "swap all my tokens except Y to X" / "dump my whole wallet into X" / "liquidate everything to X" / "sell all tokens except X" → SWAP_ALL_WALLET — use when user does NOT name specific tokens; client will read live wallet
 - "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" / "swap X JUP and Y BONK to USDC" / "swap all these tokens to USDC" / "swap max/all of A B C to X" / "dump all my A B C into X" → BASKET_SWAP — parse each token, amount mode, and direction into trades array; default from:"USDC" when buying, default to:"USDC" when selling/dumping
@@ -408,7 +414,7 @@ Rules:
 - XSTOCKS CHAINING: "show me xStocks then swap USDC to SPY" → CHAINED_ACTIONS steps: [FETCH_XSTOCKS, SHOW_SWAP]
 - LOCK CHAINING: "lock X for Y minutes/hours/days then claim and swap/send" / "lock USDC for 10 minutes, after unlock claim and swap to SOL" / "lock tokens then after vesting swap proceeds" → CHAINED_ACTIONS with steps: [SHOW_LOCK (lock the tokens), then SHOW_SWAP or BASKET_SWAP (swap after unlock), then optionally SHOW_SEND (invite link)]. The lock step vesting/cliff times must be converted to days: minutes÷1440, hours÷24. After the lock step, include subsequent swap/send steps so the UI opens them in sequence after lock confirms. Example: "lock 10 USDC for 10 min then swap to SOL and send 5 USDC invite link" → steps: [SHOW_LOCK(USDC,10,cliffDays:0,vestingDays:0.00694), SHOW_SWAP(USDC→SOL,10), SHOW_SEND(USDC,5)]
 - TIME CONVERSION for lock vestingDays: 10 minutes = 0.00694 days (10/1440), 1 hour = 0.04167 days (1/24), 30 minutes = 0.02083 days. Always convert to days for the vestingDays field.
-- CHAINED_ACTIONS supported step actions — ALL actions work as chain steps: BASKET_SWAP, SWAP_ALL_WALLET, SHOW_SWAP, SHOW_TRIGGER_V2, SHOW_RECURRING, SHOW_LOCK, FETCH_EARN, SHOW_SEND, SHOW_PERPS, SHOW_BORROW, SHOW_MULTIPLY, SHOW_STUDIO, SHOW_PREDICTION, PLACE_PREDICTION, BASKET_PREDICTION, SHOW_ROUTE, SET_PRICE_ALERT, DETECT_VOLATILITY, FETCH_VOL_MONITORS, SHOW_TRADE_JOURNAL, FETCH_PORTFOLIO, FETCH_TOKEN_INFO, FETCH_XSTOCKS, FETCH_LOCKS, FETCH_STUDIO_FEES, FETCH_SEND_HISTORY, FETCH_PERPS_POSITIONS, FETCH_RECURRING_ORDERS, FETCH_TRIGGER_ORDERS, FETCH_PREDICTIONS, SHOW_LEND_POSITIONS, CLAIM_PAYOUTS, COPY_TRADE. Each step: { "action": "STEP_ACTION", "actionData": {...} }
+- CHAINED_ACTIONS supported step actions — ALL actions work as chain steps: BASKET_SWAP, SWAP_ALL_WALLET, SHOW_SWAP, SHOW_TRIGGER_V2, SHOW_RECURRING, SHOW_LOCK, FETCH_EARN, SHOW_SEND, SHOW_PERPS, SHOW_BORROW, SHOW_MULTIPLY, SHOW_STUDIO, SHOW_PREDICTION, PLACE_PREDICTION, BASKET_PREDICTION, SHOW_ROUTE, SET_PRICE_ALERT, DETECT_VOLATILITY, FETCH_VOL_MONITORS, SCAN_PRED_ODDS, AUTO_PRED_BET, SHOW_PRED_CLI, SHOW_TRADE_JOURNAL, FETCH_PORTFOLIO, FETCH_TOKEN_INFO, FETCH_XSTOCKS, FETCH_LOCKS, FETCH_STUDIO_FEES, FETCH_SEND_HISTORY, FETCH_PERPS_POSITIONS, FETCH_RECURRING_ORDERS, FETCH_TRIGGER_ORDERS, FETCH_PREDICTIONS, SHOW_LEND_POSITIONS, CLAIM_PAYOUTS, COPY_TRADE. Each step: { "action": "STEP_ACTION", "actionData": {...} }
 - "buy $X each of A B C and use $N for a limit/trigger order on Y" / "buy multiple tokens and set a trigger" / "buy A B C and also set a limit order" / any intent that combines BUYING multiple tokens WITH a separate trigger/limit/DCA order → CHAINED_ACTIONS with step 1 as BASKET_SWAP (trades array = all the buy trades, from:"USDC" for each) and step 2 as SHOW_TRIGGER_V2 or SHOW_RECURRING. CRITICAL: fully populate trades array in step 1 — e.g. "buy 1 USDC of bonk, pengu, jup, fartcoin" → trades:[{from:"USDC",to:"BONK",amountUSD:"1"},{from:"USDC",to:"PENGU",amountUSD:"1"},{from:"USDC",to:"JUP",amountUSD:"1"},{from:"USDC",to:"FARTCOIN",amountUSD:"1"}].
 - REVERSE TRADING / TIMED SELL-BACK: When user says "buy A B C then sell them back to USDC after X minutes/seconds/hours" OR "buy X Y Z and sell back to USDC after [time]" OR "buy these, wait [time], then sell all back" → use CHAINED_ACTIONS: step 1 = BASKET_SWAP (buy trades, from USDC), step 2 = SHOW_RECURRING or null (if time-based sell is wanted, note it in text). HOWEVER if the user says "buy X Y Z and sell back to USDC after [time]" — the SELL step is a DELAYED action, so: include the sell-back trades as a second BASKET_SWAP step in CHAINED_ACTIONS and set a note in text that the sells will be shown after the delay. The client processes steps sequentially so the sell BASKET_SWAP panel shows up right after buys complete. If the user says "sell them back" / "now sell" as a follow-up message after buying, treat it as a new BASKET_SWAP selling all the previously mentioned tokens back to USDC.
 - DELAYED/TIMED SELL: "after 4 seconds sell X to USDC" / "sell back in 2 minutes" → include a second BASKET_SWAP step in CHAINED_ACTIONS with the sell trades. The UI executes steps in sequence — the user will see the sell panel open immediately after buys complete. Mention the timing in your text but do not skip the action.
@@ -517,7 +523,7 @@ const SUGGESTION_GROUPS = [
   {
     label: "Tools",
     color: "#f6ad55",
-    items: ["Send 1 SOL via invite link", "Create a token on Jupiter Studio", "Lock 1000 JUP for 1 year", "Alert me when SOL hits $200", "My trade journal", "Arsenal vs Man City prediction"],
+    items: ["Send 1 SOL via invite link", "Create a token on Jupiter Studio", "Lock 1000 JUP for 1 year", "Alert me when SOL hits $200", "My trade journal", "Arsenal vs Man City prediction", "Scan prediction odds for value bets"],
   },
 ];
 
@@ -2183,6 +2189,19 @@ function JupChatInner() {
   const priceHistoryRef = useRef({}); // { [SYM]: [{ price, ts }] }
   const volIntervalRef  = useRef(null);
 
+  // ── Prediction Market CLI / Odds Scanner ──────────────────────────────────────
+  const [showPredCLI, setShowPredCLI]         = useState(false);
+  const [predCLIMarkets, setPredCLIMarkets]   = useState([]); // enriched with edge scores
+  const [predCLILoading, setPredCLILoading]   = useState(false);
+  const [predCLIFilter, setPredCLIFilter]     = useState({ category: null, minEdge: 5, sortBy: "edge" });
+  const [predCLILog, setPredCLILog]           = useState([]); // CLI output lines
+  const [predCLIBetting, setPredCLIBetting]   = useState(false); // auto-bet in progress
+  const predCLILogRef = useRef([]); // sync ref so async loops can append without stale closure
+  const appendCLILog = (line) => {
+    predCLILogRef.current = [...predCLILogRef.current, { ts: Date.now(), text: line }].slice(-200);
+    setPredCLILog([...predCLILogRef.current]);
+  };
+
   // ── Trade Journal ─────────────────────────────────────────────────────────────
   const [tradeJournal, setTradeJournal] = useState(() => {
     try { return JSON.parse(localStorage.getItem("chatfi-journal") || "[]"); } catch { return []; }
@@ -2335,7 +2354,7 @@ function JupChatInner() {
     if (!container) return;
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (isNearBottom) endRef.current?.scrollIntoView({ behavior:"smooth" });
-  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showTrigV2, showTrigOrders, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders, showStudio, showStudioFees, showLock, showLocks, showRoute, showVolMonitors]);
+  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showTrigV2, showTrigOrders, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders, showStudio, showStudioFees, showLock, showLocks, showRoute, showVolMonitors, showPredCLI]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -4079,7 +4098,182 @@ function JupChatInner() {
     return { markets: [], source: "empty" };
   };
 
-  // ── Earn / Lend vaults — correct endpoint: GET /lend/v1/earn/tokens ───────
+  // ── Prediction Odds Scanner — computes edge on every live market ──────────────
+  // Edge = deviation of implied probability from 50% (no-info baseline).
+  // A market where YES trades at 20¢ has 80% implied NO probability →
+  // if your prior is 50/50 that's a +30pp edge on NO.
+  // Edge score also rewards high volume (more liquid = more reliable price).
+  const computeEdge = (mk) => {
+    const yesRaw = mk.pricing?.buyYesPriceUsd;
+    const noRaw  = mk.pricing?.buyNoPriceUsd;
+    if (yesRaw == null && noRaw == null) return null;
+
+    // Prices are in micro-USD (1_000_000 = $1.00)
+    const yesPr = yesRaw != null ? yesRaw / 1_000_000 : null;
+    const noPr  = noRaw  != null ? noRaw  / 1_000_000 : null;
+
+    // Implied probability from market price (price = probability on prediction markets)
+    const yesProb = yesPr != null ? Math.min(0.99, Math.max(0.01, yesPr)) : null;
+    const noProb  = noPr  != null ? Math.min(0.99, Math.max(0.01, noPr))  : null;
+
+    // Edge vs 50/50 baseline (absolute pp deviation)
+    const yesEdge = yesProb != null ? Math.abs(yesProb - 0.5) * 100 : 0;
+    const noEdge  = noProb  != null ? Math.abs(noProb  - 0.5) * 100 : 0;
+
+    // Best side: whichever is more deviated from 50%
+    // If YES < 0.5  → market thinks this is unlikely → "NO" side has edge
+    // If YES > 0.5  → market thinks this is likely   → "YES" side has edge
+    const bestSide    = (yesProb != null && yesProb < 0.5) ? "no" : "yes";
+    const bestEdge    = Math.max(yesEdge, noEdge);
+    const bestPrice   = bestSide === "yes" ? yesPr : noPr;
+    const bestProb    = bestSide === "yes" ? yesProb : noProb;
+
+    // Payout ratio: $1 in → $1/price back if correct
+    const payoutRatio = bestPrice != null && bestPrice > 0 ? (1 / bestPrice).toFixed(2) : null;
+
+    return {
+      yesPr, noPr, yesProb, noProb,
+      yesEdge, noEdge, bestSide, bestEdge, bestPrice, bestProb, payoutRatio,
+    };
+  };
+
+  const scanPredOdds = async ({ category = null, query = null, limit = 50, minEdge = 5, sortBy = "edge" }) => {
+    setPredCLILoading(true);
+    appendCLILog(`> scanning markets — category=${category || "all"} query=${query || "—"} minEdge=${minEdge}%`);
+    try {
+      const result = await fetchPredictionMarkets(category, query, Math.max(limit, 50));
+      const events = result.markets || [];
+      appendCLILog(`> fetched ${events.length} events`);
+
+      const enriched = [];
+      for (const evt of events) {
+        const evtTitle  = evt.metadata?.title  || evt.title  || "Unknown Event";
+        const closeTs   = evt.metadata?.closeTime || evt.closeTime;
+        const vol       = parseFloat(evt.volumeUsd || evt.volume || 0);
+        const allMks    = Array.isArray(evt.markets) ? evt.markets : [];
+        const openMks   = allMks.filter(mk => mk.status === "open" || !mk.status);
+
+        for (const mk of openMks) {
+          const edge = computeEdge(mk);
+          if (!edge) continue;
+          if (edge.bestEdge < minEdge) continue;
+          const outcomeLabel = mk.metadata?.title || mk.title || "—";
+          const marketId     = mk.marketId || mk.id;
+          enriched.push({
+            eventId:    evt.eventId,
+            marketId,
+            evtTitle,
+            outcomeLabel,
+            closeTs,
+            vol,
+            ...edge,
+          });
+        }
+      }
+
+      // Sort
+      if (sortBy === "volume")      enriched.sort((a, b) => b.vol - a.vol);
+      else if (sortBy === "probability") enriched.sort((a, b) => b.bestProb - a.bestProb);
+      else                          enriched.sort((a, b) => b.bestEdge - a.bestEdge); // "edge" default
+
+      appendCLILog(`> found ${enriched.length} markets above ${minEdge}% edge threshold`);
+      enriched.slice(0, 5).forEach((m, i) => {
+        appendCLILog(
+          `  [${i+1}] ${m.outcomeLabel.slice(0, 32).padEnd(32)} | ` +
+          `${m.bestSide.toUpperCase()} @ $${(m.bestPrice||0).toFixed(3)} | ` +
+          `edge ${m.bestEdge.toFixed(1)}% | payout ${m.payoutRatio}x`
+        );
+      });
+      setPredCLIMarkets(enriched.slice(0, limit));
+    } catch (e) {
+      appendCLILog(`> ERROR: ${e?.message || "unknown"}`);
+    }
+    setPredCLILoading(false);
+  };
+
+  // ── Auto-bet: scan → filter → place bets on top-edge markets ─────────────────
+  const autoPredBet = async ({ category, query, minEdge = 10, maxAmount = 20, side = "best", limit = 5, dryRun = true }) => {
+    if (!walletFull && !dryRun) {
+      appendCLILog("> ERROR: wallet not connected");
+      push("ai", "Connect your wallet first to place prediction bets.");
+      return;
+    }
+    setPredCLIBetting(true);
+    appendCLILog(`> auto-bet — minEdge=${minEdge}% maxAmount=$${maxAmount} side=${side} limit=${limit} dryRun=${dryRun}`);
+
+    try {
+      await scanPredOdds({ category, query, limit: 100, minEdge, sortBy: "edge" });
+      // Give state a tick to settle then read ref
+      await new Promise(r => setTimeout(r, 200));
+
+      const targets = predCLILogRef.current; // we'll re-fetch from markets state via closure
+      // Re-fetch fresh enriched list (scanPredOdds sets state async — read the returned value instead)
+      const result = await fetchPredictionMarkets(category, query, 100);
+      const events = result.markets || [];
+      const enriched = [];
+      for (const evt of events) {
+        const evtTitle  = evt.metadata?.title || evt.title || "Unknown";
+        const allMks    = Array.isArray(evt.markets) ? evt.markets : [];
+        const openMks   = allMks.filter(mk => mk.status === "open" || !mk.status);
+        for (const mk of openMks) {
+          const edge = computeEdge(mk);
+          if (!edge || edge.bestEdge < minEdge) continue;
+          enriched.push({ evtTitle, outcomeLabel: mk.metadata?.title || mk.title || "—", marketId: mk.marketId || mk.id, ...edge });
+        }
+      }
+      enriched.sort((a, b) => b.bestEdge - a.bestEdge);
+
+      // Apply side filter
+      const filtered = enriched.filter(m => {
+        if (side === "yes") return m.bestSide === "yes";
+        if (side === "no")  return m.bestSide === "no";
+        return true; // "best"
+      }).slice(0, limit);
+
+      if (!filtered.length) {
+        appendCLILog(`> no markets met criteria — try lowering minEdge (currently ${minEdge}%)`);
+        push("ai", `No prediction markets found with ≥${minEdge}% edge. Try *"scan prediction odds"* to browse available markets, or lower the threshold.`);
+        setPredCLIBetting(false);
+        return;
+      }
+
+      appendCLILog(`> ${dryRun ? "DRY RUN" : "LIVE"} — placing ${filtered.length} bet${filtered.length > 1 ? "s" : ""}`);
+
+      const results = [];
+      for (const m of filtered) {
+        const betSideActual = m.bestSide;
+        const amtNum = Math.min(maxAmount, Math.max(5, maxAmount));
+        appendCLILog(`> ${dryRun ? "[DRY]" : "[LIVE]"} ${betSideActual.toUpperCase()} $${amtNum} on "${m.outcomeLabel.slice(0, 40)}" — edge ${m.bestEdge.toFixed(1)}%`);
+
+        if (!dryRun) {
+          const res = await doDirectPredictionBet({
+            searchQuery: m.evtTitle,
+            outcome: m.outcomeLabel,
+            side: betSideActual,
+            amount: String(amtNum),
+          });
+          appendCLILog(`  → ${res.success ? "SUCCESS" : "FAILED"}: ${res.msg.replace(/\*\*/g, "").slice(0, 80)}`);
+          results.push({ ...m, betSide: betSideActual, amount: amtNum, success: res.success, msg: res.msg });
+        } else {
+          results.push({ ...m, betSide: betSideActual, amount: amtNum, dryRun: true });
+        }
+      }
+
+      const summary = results.map((r, i) =>
+        `${i + 1}. **${r.betSide.toUpperCase()}** $${r.amount} — _${r.outcomeLabel}_ · edge ${r.bestEdge.toFixed(1)}%${r.dryRun ? " *(dry run)*" : (r.success ? " ✓" : " ✗")}`
+      ).join("\n");
+
+      push("ai",
+        (dryRun ? "**🔍 Dry Run — Prediction Auto-Bet**\n\n" : "**⚡ Auto-Bet Complete**\n\n") +
+        summary + "\n\n" +
+        (dryRun ? "To place real bets, say *\"auto bet with real money\"*." : `${results.filter(r=>r.success).length}/${results.length} bets placed successfully.`)
+      );
+    } catch (e) {
+      appendCLILog(`> FATAL: ${e?.message}`);
+      push("ai", `Auto-bet failed: ${e?.message}`);
+    }
+    setPredCLIBetting(false);
+  };
   const fetchEarnVaults = async () => {
     setEarnLoading(true);
     try {
@@ -7930,6 +8124,44 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         push("ai", text);
         setShowVolMonitors(true);
 
+      // ── SCAN_PRED_ODDS — odds scanner CLI ─────────────────────────────────
+      } else if (action === "SCAN_PRED_ODDS") {
+        const minEdge = parseFloat(actionData?.minEdge ?? "5");
+        const sortBy  = actionData?.sortBy || "edge";
+        const cat     = actionData?.category || null;
+        const query   = actionData?.query    || null;
+        const limit   = parseInt(actionData?.limit || "20");
+        push("ai", text);
+        predCLILogRef.current = [];
+        setPredCLILog([]);
+        setShowPredCLI(true);
+        await scanPredOdds({ category: cat, query, limit, minEdge, sortBy });
+
+      // ── AUTO_PRED_BET — auto-scan + auto-place bets ───────────────────────
+      } else if (action === "AUTO_PRED_BET") {
+        const minEdge   = parseFloat(actionData?.minEdge   ?? "10");
+        const maxAmount = parseFloat(actionData?.maxAmount  ?? "20");
+        const side      = actionData?.side    || "best";
+        const limit     = parseInt(actionData?.limit  || "5");
+        const dryRun    = actionData?.dryRun !== false && actionData?.dryRun !== "false";
+        const cat       = actionData?.category || null;
+        const query     = actionData?.query    || null;
+        push("ai", text);
+        predCLILogRef.current = [];
+        setPredCLILog([]);
+        setShowPredCLI(true);
+        await autoPredBet({ category: cat, query, minEdge, maxAmount, side, limit, dryRun });
+
+      // ── SHOW_PRED_CLI — open CLI dashboard ────────────────────────────────
+      } else if (action === "SHOW_PRED_CLI") {
+        push("ai", text || "Opening prediction market CLI dashboard…");
+        setShowPredCLI(true);
+        if (!predCLIMarkets.length && !predCLILoading) {
+          predCLILogRef.current = [];
+          setPredCLILog([]);
+          await scanPredOdds({ category: null, query: null, limit: 30, minEdge: 0, sortBy: "volume" });
+        }
+
       // ── SHOW_TRADE_JOURNAL ─────────────────────────────────────────────────
       } else if (action === "SHOW_TRADE_JOURNAL") {
         const period = actionData?.period || "all";
@@ -11386,6 +11618,193 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               </div>
             </div>
           )}
+
+          {/* ── Prediction Market CLI / Odds Scanner panel ───────────────────── */}
+          {showPredCLI && (() => {
+            const fmtTime = (ts) => {
+              if (!ts) return null;
+              const ms = typeof ts === "number" ? ts * 1000 : new Date(ts).getTime();
+              const diff = ms - Date.now();
+              if (diff < 0) return "closed";
+              if (diff < 3600000) return `${Math.floor(diff/60000)}m`;
+              if (diff < 86400000) return `${Math.floor(diff/3600000)}h`;
+              return new Date(ms).toLocaleDateString("en-US", { month:"short", day:"numeric" });
+            };
+
+            const sorted = [...predCLIMarkets].sort((a, b) => {
+              if (predCLIFilter.sortBy === "volume")      return b.vol - a.vol;
+              if (predCLIFilter.sortBy === "probability") return b.bestProb - a.bestProb;
+              return b.bestEdge - a.bestEdge;
+            }).filter(m => m.bestEdge >= predCLIFilter.minEdge);
+
+            return (
+              <div style={{ margin:"0 0 20px 44px", background:"#0a0e13", border:`1px solid #1a3a2a`, borderRadius:12, overflow:"hidden", fontFamily:T.mono }}>
+                {/* Terminal title bar */}
+                <div style={{ background:"#111820", padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid #1a3a2a` }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <div style={{ display:"flex", gap:5 }}>
+                      <div style={{ width:10, height:10, borderRadius:"50%", background:"#ff5f57" }}/>
+                      <div style={{ width:10, height:10, borderRadius:"50%", background:"#febc2e" }}/>
+                      <div style={{ width:10, height:10, borderRadius:"50%", background:"#28c840" }}/>
+                    </div>
+                    <span style={{ fontSize:11, color:T.text3, fontFamily:T.mono }}>chatfi — prediction-cli</span>
+                  </div>
+                  <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                    {predCLILoading && <span style={{ fontSize:10, color:T.green, animation:"blink 1s infinite" }}>● scanning…</span>}
+                    {predCLIBetting && <span style={{ fontSize:10, color:"#febc2e", animation:"blink 1s infinite" }}>● betting…</span>}
+                    <button onClick={() => setShowPredCLI(false)} className="hov-btn"
+                      style={{ fontSize:11, color:T.text3, background:"none", border:"none", cursor:"pointer", fontFamily:T.mono }}>
+                      ✕ close
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter / control bar */}
+                <div style={{ padding:"10px 16px", background:"#0d1117", borderBottom:`1px solid #1a2d1a`, display:"flex", flexWrap:"wrap", gap:8, alignItems:"center" }}>
+                  {/* Min edge slider */}
+                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <span style={{ fontSize:10, color:T.text3 }}>min-edge</span>
+                    <input type="range" min="0" max="40" step="1"
+                      value={predCLIFilter.minEdge}
+                      onChange={e => setPredCLIFilter(f => ({ ...f, minEdge: parseFloat(e.target.value) }))}
+                      style={{ width:70, accentColor:T.green }}
+                    />
+                    <span style={{ fontSize:10, color:T.green, minWidth:28 }}>{predCLIFilter.minEdge}%</span>
+                  </div>
+                  {/* Sort selector */}
+                  <select value={predCLIFilter.sortBy}
+                    onChange={e => setPredCLIFilter(f => ({ ...f, sortBy: e.target.value }))}
+                    style={{ fontSize:10, background:"#111820", color:T.text2, border:`1px solid #1a2d1a`, borderRadius:4, padding:"3px 6px", fontFamily:T.mono }}>
+                    <option value="edge">sort: edge</option>
+                    <option value="volume">sort: volume</option>
+                    <option value="probability">sort: probability</option>
+                  </select>
+                  {/* Category filter */}
+                  {["all","sports","crypto","politics","esports"].map(cat => (
+                    <button key={cat} onClick={() => {
+                      const c = cat === "all" ? null : cat;
+                      setPredCLIFilter(f => ({ ...f, category: c }));
+                      predCLILogRef.current = [];
+                      setPredCLILog([]);
+                      scanPredOdds({ category: c, query: null, limit: 50, minEdge: predCLIFilter.minEdge, sortBy: predCLIFilter.sortBy });
+                    }} className="hov-btn"
+                      style={{
+                        fontSize:10, padding:"3px 8px",
+                        background: (predCLIFilter.category || "all") === cat ? T.greenBg : "transparent",
+                        border:`1px solid ${(predCLIFilter.category || "all") === cat ? T.greenBd : "#1a2d1a"}`,
+                        borderRadius:4, color: (predCLIFilter.category || "all") === cat ? T.green : T.text3,
+                        cursor:"pointer", fontFamily:T.mono,
+                      }}>
+                      {cat}
+                    </button>
+                  ))}
+                  {/* Refresh */}
+                  <button onClick={() => {
+                    predCLILogRef.current = [];
+                    setPredCLILog([]);
+                    scanPredOdds({ category: predCLIFilter.category, query: null, limit: 50, minEdge: predCLIFilter.minEdge, sortBy: predCLIFilter.sortBy });
+                  }} className="hov-btn"
+                    style={{ fontSize:10, padding:"3px 8px", background:"transparent", border:`1px solid #1a2d1a`, borderRadius:4, color:T.text3, cursor:"pointer", fontFamily:T.mono }}>
+                    ↺ refresh
+                  </button>
+                </div>
+
+                {/* Odds table */}
+                <div style={{ maxHeight:360, overflowY:"auto" }}>
+                  {sorted.length === 0 && !predCLILoading ? (
+                    <div style={{ padding:"24px 16px", color:T.text3, fontSize:12, textAlign:"center" }}>
+                      {predCLIMarkets.length === 0 ? "No data — hit refresh or lower min-edge" : `No markets above ${predCLIFilter.minEdge}% edge`}
+                    </div>
+                  ) : (
+                    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                      <thead>
+                        <tr style={{ background:"#0d1117", borderBottom:`1px solid #1a2d1a` }}>
+                          {["#","OUTCOME","EVENT","YES%","NO%","EDGE","PAYOUT","VOL","CLOSES","BET"].map(h => (
+                            <th key={h} style={{ padding:"6px 8px", color:T.text3, fontWeight:600, textAlign:"left", whiteSpace:"nowrap", letterSpacing:"0.05em", fontSize:9 }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sorted.map((m, i) => {
+                          const yesPct  = m.yesProb != null ? `${(m.yesProb * 100).toFixed(0)}%` : "—";
+                          const noPct   = m.noProb  != null ? `${(m.noProb  * 100).toFixed(0)}%` : "—";
+                          const edgePct = `${m.bestEdge.toFixed(1)}%`;
+                          const volFmt  = m.vol > 0 ? (m.vol >= 1_000_000 ? `$${(m.vol/1_000_000).toFixed(1)}M` : `$${(m.vol/1_000).toFixed(0)}K`) : "—";
+                          const edgeColor = m.bestEdge >= 20 ? T.green : m.bestEdge >= 10 ? "#febc2e" : T.text2;
+                          return (
+                            <tr key={`${m.marketId||i}`} style={{ borderBottom:`1px solid #0f1e10` }}
+                              onMouseEnter={e => e.currentTarget.style.background="#0d1a10"}
+                              onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                              <td style={{ padding:"7px 8px", color:T.text3 }}>{i+1}</td>
+                              <td style={{ padding:"7px 8px", color:T.text1, maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                {m.outcomeLabel.slice(0, 22)}
+                              </td>
+                              <td style={{ padding:"7px 8px", color:T.text3, maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                                {m.evtTitle.slice(0, 28)}
+                              </td>
+                              <td style={{ padding:"7px 8px", color: m.bestSide==="yes" ? T.green : T.text2, fontWeight: m.bestSide==="yes" ? 700 : 400 }}>{yesPct}</td>
+                              <td style={{ padding:"7px 8px", color: m.bestSide==="no"  ? T.green : T.text2, fontWeight: m.bestSide==="no"  ? 700 : 400 }}>{noPct}</td>
+                              <td style={{ padding:"7px 8px", color:edgeColor, fontWeight:700 }}>{edgePct}</td>
+                              <td style={{ padding:"7px 8px", color:T.accent }}>{m.payoutRatio ? `${m.payoutRatio}x` : "—"}</td>
+                              <td style={{ padding:"7px 8px", color:T.text3 }}>{volFmt}</td>
+                              <td style={{ padding:"7px 8px", color:T.text3, whiteSpace:"nowrap" }}>{fmtTime(m.closeTs) || "—"}</td>
+                              <td style={{ padding:"5px 8px" }}>
+                                {m.marketId ? (
+                                  <button onClick={() => {
+                                    setBetMarket({ marketId: m.marketId, title: m.evtTitle, outcomeLabel: m.outcomeLabel });
+                                    setBetSide(m.bestSide); setBetAmount("10"); setShowBet(true);
+                                  }} className="hov-btn"
+                                    style={{ fontSize:10, padding:"3px 8px", background:T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:4, color:T.green, cursor:"pointer", fontFamily:T.mono, whiteSpace:"nowrap" }}>
+                                    {m.bestSide.toUpperCase()} →
+                                  </button>
+                                ) : <span style={{ color:T.text3 }}>—</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {/* CLI log terminal */}
+                <div style={{ borderTop:`1px solid #1a2d1a`, background:"#080c10", padding:"10px 14px", maxHeight:160, overflowY:"auto" }}>
+                  <div style={{ fontSize:9, color:"#2d5a3a", marginBottom:6, letterSpacing:"0.1em" }}>── STDOUT ──</div>
+                  {predCLILog.length === 0 ? (
+                    <div style={{ color:"#2d5a3a", fontSize:11 }}>$ ready</div>
+                  ) : (
+                    predCLILog.map((line, i) => (
+                      <div key={i} style={{ fontSize:10, color: line.text.startsWith("> ERROR") || line.text.startsWith("> FATAL") ? T.red : line.text.startsWith("  →") ? (line.text.includes("SUCCESS") ? T.green : T.red) : line.text.startsWith("  [") ? T.accent : T.green, lineHeight:1.6, fontFamily:T.mono }}>
+                        {line.text}
+                      </div>
+                    ))
+                  )}
+                  {predCLILoading && <div style={{ color:"#2d5a3a", fontSize:10, fontFamily:T.mono }}>█</div>}
+                </div>
+
+                {/* Auto-bet control strip */}
+                <div style={{ borderTop:`1px solid #1a2d1a`, padding:"10px 16px", background:"#0d1117", display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+                  <span style={{ fontSize:10, color:T.text3 }}>auto-bet:</span>
+                  <button onClick={() => autoPredBet({ category: predCLIFilter.category, query: null, minEdge: predCLIFilter.minEdge, maxAmount: 10, side: "best", limit: 3, dryRun: true })}
+                    disabled={predCLIBetting || predCLILoading} className="hov-btn"
+                    style={{ fontSize:10, padding:"4px 10px", background:"transparent", border:`1px solid #2d4a3a`, borderRadius:4, color:T.text2, cursor:"pointer", fontFamily:T.mono, opacity: predCLIBetting ? 0.5 : 1 }}>
+                    dry run (top 3)
+                  </button>
+                  <button onClick={() => {
+                    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+                    if (!window.confirm(`Place REAL bets on top markets (edge ≥${predCLIFilter.minEdge}%, max $10/bet, up to 3 bets)?`)) return;
+                    autoPredBet({ category: predCLIFilter.category, query: null, minEdge: predCLIFilter.minEdge, maxAmount: 10, side: "best", limit: 3, dryRun: false });
+                  }} disabled={predCLIBetting || predCLILoading} className="hov-btn"
+                    style={{ fontSize:10, padding:"4px 10px", background: predCLIBetting ? T.border : T.greenBg, border:`1px solid ${T.greenBd}`, borderRadius:4, color: predCLIBetting ? T.text3 : T.green, cursor:"pointer", fontFamily:T.mono }}>
+                    {predCLIBetting ? "betting…" : "place top 3 bets ($10 each)"}
+                  </button>
+                  <span style={{ fontSize:10, color:T.text3, marginLeft:"auto" }}>
+                    {sorted.length} markets · {sorted.filter(m=>m.bestEdge>=15).length} hot
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Volatility Monitors panel (FETCH_VOL_MONITORS) ──────────────── */}
           {showVolMonitors && (() => {
