@@ -340,7 +340,7 @@ Available actions:
 - "SHOW_TRADE_JOURNAL" → actionData: { "period": "all"|"today"|"week" } — show the user's local trade history and estimated PnL.
 - "BASKET_SWAP"     → actionData: { "trades": [...] } — execute multiple swaps in sequence. Each trade supports THREE amount modes (pick one): amountUSD:"100" (spend $100 of from token), amount:"5.4" (native token units — parse k/K suffix as ×1000, m/M as ×1000000), or portion:"all"|"max"|"half"|"quarter"|"N%" (wallet balance fraction). from/to can vary per trade (many-to-one and one-to-many both work). Examples: "buy $100 each of SOL JUP BONK" → [{from:"USDC",to:"SOL",amountUSD:"100"},…]; "swap 5.4 JUP, 158.4k BONK to USDC" → [{from:"JUP",to:"USDC",amount:"5.4"},{from:"BONK",to:"USDC",amount:"158400"}]; "swap max of SOL PENGU to USDC" → [{from:"SOL",to:"USDC",portion:"max"},{from:"PENGU",to:"USDC",portion:"max"}]; "swap half my JUP and all my FARTCOIN to SOL" → [{from:"JUP",to:"SOL",portion:"half"},{from:"FARTCOIN",to:"SOL",portion:"all"}].
 - "SWAP_ALL_WALLET" → actionData: { "to": "USDC", "exclude": ["SOL","USDC"] } — use ONLY when user says "swap everything/all tokens in my wallet" or "swap all tokens except X" and does NOT name specific tokens. The client will read the live wallet balances and build the trades list. "exclude" must always contain the target "to" token plus any tokens the user explicitly wants to keep. Examples: "swap all tokens to USDC except SOL" → to:"USDC", exclude:["SOL","USDC"]; "convert my whole wallet to SOL except USDC" → to:"SOL", exclude:["SOL","USDC"]; "dump everything to USDC" → to:"USDC", exclude:["USDC"]. CRITICAL: use BASKET_SWAP (not this) when user names the specific tokens to swap.
-- "CHAINED_ACTIONS"  → actionData: { "steps": [...] } — for multi-step intent where the user wants to sell/swap THEN immediately do something with the proceeds (limit order, DCA, lock, earn deposit, send). Each step is a full action object: { "action": "BASKET_SWAP"|"SHOW_SWAP"|"SHOW_TRIGGER_V2"|"SHOW_RECURRING"|"SHOW_LOCK"|"FETCH_EARN"|"SHOW_SEND", "actionData": {...} }. The UI executes steps sequentially, showing a confirmation between each. Use this ONLY when user intent is explicitly chained (sell X → then do Y with proceeds). Examples: "sell my BONK and JUP to USDC then set a $50 limit order for BTC" → step1: BASKET_SWAP sell BONK+JUP→USDC, step2: SHOW_TRIGGER_V2 buy BTC with amountUSD:"50" from USDC. "sell all my memecoins and DCA $20/day into SOL" → step1: BASKET_SWAP sell all→USDC, step2: SHOW_RECURRING USDC→SOL amountPerCycle:"20". NOTE: For the follow-up step, use amountUSD when the user specifies a dollar amount from proceeds (e.g. "$50 out of the proceeds"), or portion:"all" when user wants to use all proceeds.
+- "CHAINED_ACTIONS"  → actionData: { "steps": [...] } — execute any sequence of actions back-to-back. Every supported action can be a chain step. Each step: { "action": "<ACTION_NAME>", "actionData": {...} }. The UI runs steps sequentially, showing a brief label before each. Use whenever user intent involves 2+ actions in sequence — selling then doing something, buying then alerting, locking then sending, opening a perp then checking positions, creating a token then claiming fees, etc. Examples: "sell my BONK and JUP to USDC then set a $50 limit order for BTC" → step1: BASKET_SWAP sell BONK+JUP→USDC, step2: SHOW_TRIGGER_V2 buy BTC amountUSD:"50". "sell all my memecoins and DCA $20/day into SOL" → step1: BASKET_SWAP sell all→USDC, step2: SHOW_RECURRING USDC→SOL amountPerCycle:"20". "buy SOL then open a 5x long perp" → step1: SHOW_SWAP from:USDC to:SOL, step2: SHOW_PERPS market:SOL-PERP side:long leverage:5. "swap SOL then borrow USDC against it" → step1: SHOW_SWAP, step2: SHOW_BORROW. "create a token then check my creator fees" → step1: SHOW_STUDIO, step2: FETCH_STUDIO_FEES. "lock my JUP then show my locks" → step1: SHOW_LOCK, step2: FETCH_LOCKS. "swap USDC to SOL then alert me when it hits $200" → step1: SHOW_SWAP, step2: SET_PRICE_ALERT. "sell my bags then show my portfolio" → step1: BASKET_SWAP, step2: FETCH_PORTFOLIO. "send SOL then check pending invites" → step1: SHOW_SEND, step2: FETCH_SEND_HISTORY type:pending. "buy $50 of SOL then show the swap route" → step1: SHOW_SWAP, step2: SHOW_ROUTE. "bet on Arsenal then claim my winnings" → step1: PLACE_PREDICTION, step2: CLAIM_PAYOUTS. "swap SOL then multiply my position" → step1: SHOW_SWAP, step2: SHOW_MULTIPLY. NOTE: use amountUSD when user says "$N from proceeds", portion:"all" when user says "use all proceeds".
 - "COPY_TRADE"      → actionData: { "wallet": "WALLET_ADDRESS", "limit": 5 } — fetch and show recent swaps from another wallet so user can mirror them. limit default 5.
 
 Rules:
@@ -389,9 +389,21 @@ Rules:
 - "swap all tokens in my wallet to X" / "convert everything to X" / "swap all my tokens except Y to X" / "dump my whole wallet into X" / "liquidate everything to X" / "sell all tokens except X" → SWAP_ALL_WALLET — use when user does NOT name specific tokens; client will read live wallet
 - "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" / "swap X JUP and Y BONK to USDC" / "swap all these tokens to USDC" / "swap max/all of A B C to X" / "dump all my A B C into X" → BASKET_SWAP — parse each token, amount mode, and direction into trades array; default from:"USDC" when buying, default to:"USDC" when selling/dumping
 - "sell X and then set a limit order" / "sell my tokens and buy BTC at $Y" / "dump my bags and DCA into SOL" / "sell BONK SOL JUP and use $N for a limit order" / "sell everything then lock" / "sell then earn" / any intent that combines SELLING tokens WITH a follow-up action using proceeds → CHAINED_ACTIONS — step 1 is always BASKET_SWAP (or SHOW_SWAP for single token) selling to USDC, step 2 is the follow-up action. CRITICAL: when user says "$N out of proceeds" or "use $N from the sale", set amountUSD:"N" in the follow-up step. When user says "use all proceeds" or doesn't specify an amount, set portion:"all" in the follow-up step. IMPORTANT: CHAINED_ACTIONS is ONLY for sell→proceed flows. Do NOT use it when the user wants to BUY tokens AND set a limit/trigger order — those are independent actions, use CHAINED_ACTIONS with step 1 as BASKET_SWAP (buying) and step 2 as SHOW_TRIGGER_V2/SHOW_RECURRING, and make sure the trades array in step 1 is fully populated with all tokens and amounts the user named.
+- PERPS CHAINING: "swap USDC to SOL then open a long perp" / "buy SOL then go long 5x" / "open a short BTC perp then check my positions" → CHAINED_ACTIONS steps: [SHOW_SWAP or BASKET_SWAP, then SHOW_PERPS, then optionally FETCH_PERPS_POSITIONS]
+- BORROW CHAINING: "swap SOL then borrow USDC against it" / "buy JLP then use it as collateral to borrow" / "borrow USDC against my SOL then DCA into JUP" → CHAINED_ACTIONS steps: [SHOW_SWAP, SHOW_BORROW, optionally SHOW_RECURRING]
+- MULTIPLY CHAINING: "earn yield then multiply my position" / "deposit SOL to earn then loop it 3x" → CHAINED_ACTIONS steps: [FETCH_EARN, SHOW_MULTIPLY]
+- STUDIO CHAINING: "create a token then check my creator fees" / "launch a token then lock the team allocation" → CHAINED_ACTIONS steps: [SHOW_STUDIO, FETCH_STUDIO_FEES or SHOW_LOCK]
+- ALERT CHAINING: "swap SOL to BONK then alert me when it hits $0.00003" / "buy JUP then set a price alert at $2" → CHAINED_ACTIONS steps: [SHOW_SWAP or BASKET_SWAP, SET_PRICE_ALERT]
+- PORTFOLIO CHAINING: "sell my bags then show my portfolio" / "swap all tokens to USDC then check what I have" → CHAINED_ACTIONS steps: [BASKET_SWAP or SWAP_ALL_WALLET, FETCH_PORTFOLIO]
+- PREDICTION CHAINING: "bet on Arsenal then claim my winnings" / "place bets on these 3 matches then check my portfolio" → CHAINED_ACTIONS steps: [PLACE_PREDICTION or BASKET_PREDICTION, CLAIM_PAYOUTS or FETCH_PORTFOLIO]
+- RESEARCH CHAINING: "buy $50 of SOL then show me its swap route" / "research BONK then swap to it" → CHAINED_ACTIONS steps: [FETCH_TOKEN_INFO or SHOW_ROUTE, SHOW_SWAP]
+- SEND CHAINING: "swap SOL then send 1 SOL via invite link" / "sell my bags then send proceeds to a friend" / "send tokens then check pending invites" → CHAINED_ACTIONS steps: [BASKET_SWAP or SHOW_SWAP, SHOW_SEND, optionally FETCH_SEND_HISTORY type:pending]
+- TRADE JOURNAL CHAINING: "swap then show my trade history" / "make a basket swap then show my PnL" → CHAINED_ACTIONS steps: [BASKET_SWAP or SHOW_SWAP, SHOW_TRADE_JOURNAL]
+- COPY TRADE CHAINING: "copy this wallet's trades then show my portfolio" → CHAINED_ACTIONS steps: [COPY_TRADE, FETCH_PORTFOLIO]
+- XSTOCKS CHAINING: "show me xStocks then swap USDC to SPY" → CHAINED_ACTIONS steps: [FETCH_XSTOCKS, SHOW_SWAP]
 - LOCK CHAINING: "lock X for Y minutes/hours/days then claim and swap/send" / "lock USDC for 10 minutes, after unlock claim and swap to SOL" / "lock tokens then after vesting swap proceeds" → CHAINED_ACTIONS with steps: [SHOW_LOCK (lock the tokens), then SHOW_SWAP or BASKET_SWAP (swap after unlock), then optionally SHOW_SEND (invite link)]. The lock step vesting/cliff times must be converted to days: minutes÷1440, hours÷24. After the lock step, include subsequent swap/send steps so the UI opens them in sequence after lock confirms. Example: "lock 10 USDC for 10 min then swap to SOL and send 5 USDC invite link" → steps: [SHOW_LOCK(USDC,10,cliffDays:0,vestingDays:0.00694), SHOW_SWAP(USDC→SOL,10), SHOW_SEND(USDC,5)]
 - TIME CONVERSION for lock vestingDays: 10 minutes = 0.00694 days (10/1440), 1 hour = 0.04167 days (1/24), 30 minutes = 0.02083 days. Always convert to days for the vestingDays field.
-- CHAINED_ACTIONS supported step actions: BASKET_SWAP, SHOW_SWAP, SHOW_TRIGGER_V2, SHOW_RECURRING, SHOW_LOCK, FETCH_EARN, SHOW_SEND. Each step object: { "action": "STEP_ACTION", "actionData": {...} }
+- CHAINED_ACTIONS supported step actions — ALL actions work as chain steps: BASKET_SWAP, SWAP_ALL_WALLET, SHOW_SWAP, SHOW_TRIGGER_V2, SHOW_RECURRING, SHOW_LOCK, FETCH_EARN, SHOW_SEND, SHOW_PERPS, SHOW_BORROW, SHOW_MULTIPLY, SHOW_STUDIO, SHOW_PREDICTION, PLACE_PREDICTION, BASKET_PREDICTION, SHOW_ROUTE, SET_PRICE_ALERT, SHOW_TRADE_JOURNAL, FETCH_PORTFOLIO, FETCH_TOKEN_INFO, FETCH_XSTOCKS, FETCH_LOCKS, FETCH_STUDIO_FEES, FETCH_SEND_HISTORY, FETCH_PERPS_POSITIONS, FETCH_RECURRING_ORDERS, FETCH_TRIGGER_ORDERS, FETCH_PREDICTIONS, SHOW_LEND_POSITIONS, CLAIM_PAYOUTS, COPY_TRADE. Each step: { "action": "STEP_ACTION", "actionData": {...} }
 - "buy $X each of A B C and use $N for a limit/trigger order on Y" / "buy multiple tokens and set a trigger" / "buy A B C and also set a limit order" / any intent that combines BUYING multiple tokens WITH a separate trigger/limit/DCA order → CHAINED_ACTIONS with step 1 as BASKET_SWAP (trades array = all the buy trades, from:"USDC" for each) and step 2 as SHOW_TRIGGER_V2 or SHOW_RECURRING. CRITICAL: fully populate trades array in step 1 — e.g. "buy 1 USDC of bonk, pengu, jup, fartcoin" → trades:[{from:"USDC",to:"BONK",amountUSD:"1"},{from:"USDC",to:"PENGU",amountUSD:"1"},{from:"USDC",to:"JUP",amountUSD:"1"},{from:"USDC",to:"FARTCOIN",amountUSD:"1"}].
 - REVERSE TRADING / TIMED SELL-BACK: When user says "buy A B C then sell them back to USDC after X minutes/seconds/hours" OR "buy X Y Z and sell back to USDC after [time]" OR "buy these, wait [time], then sell all back" → use CHAINED_ACTIONS: step 1 = BASKET_SWAP (buy trades, from USDC), step 2 = SHOW_RECURRING or null (if time-based sell is wanted, note it in text). HOWEVER if the user says "buy X Y Z and sell back to USDC after [time]" — the SELL step is a DELAYED action, so: include the sell-back trades as a second BASKET_SWAP step in CHAINED_ACTIONS and set a note in text that the sells will be shown after the delay. The client processes steps sequentially so the sell BASKET_SWAP panel shows up right after buys complete. If the user says "sell them back" / "now sell" as a follow-up message after buying, treat it as a new BASKET_SWAP selling all the previously mentioned tokens back to USDC.
 - DELAYED/TIMED SELL: "after 4 seconds sell X to USDC" / "sell back in 2 minutes" → include a second BASKET_SWAP step in CHAINED_ACTIONS with the sell trades. The UI executes steps in sequence — the user will see the sell panel open immediately after buys complete. Mention the timing in your text but do not skip the action.
@@ -7991,6 +8003,294 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               } else {
                 setShowSend(true);
               }
+
+            // ── SHOW_PERPS ──────────────────────────────────────────────────────
+            } else if (stepAction === "SHOW_PERPS") {
+              const { market = "SOL-PERP", side = "long", collateral = "", leverage = "10" } = stepData;
+              setPerpCfg({ market, side, collateral, leverage });
+              setShowPerps(true);
+
+            // ── FETCH_PERPS_POSITIONS ───────────────────────────────────────────
+            } else if (stepAction === "FETCH_PERPS_POSITIONS") {
+              if (!walletFull) { push("ai", "Connect your wallet to view perps positions."); continue; }
+              setPerpsLoading(true);
+              setShowPerpsPos(true);
+              setPerpPositions([]);
+              try {
+                const data = await jupFetch(`${JUP_PORTFOLIO}/positions/${walletFull}?platforms=jupiter-perps`);
+                const elements = (data?.elements || []).filter(el =>
+                  el.platformId === "jupiter-perps" || el.name?.toLowerCase().includes("perp")
+                );
+                const positions = elements.flatMap(el => {
+                  const assets = el.data?.assets || el.data?.borrows || [];
+                  return assets.map(asset => ({
+                    market: asset.data?.symbol || el.name || "PERP",
+                    side: el.data?.side || asset.data?.side || "long",
+                    sizeUsd: asset.value ?? el.value ?? null,
+                    entryPrice: asset.data?.price ?? null,
+                    unrealizedPnlUsd: el.data?.pnl ?? asset.data?.pnl ?? null,
+                    leverage: el.data?.leverage ?? null,
+                    liquidationPrice: el.data?.liquidationPrice ?? null,
+                    positionKey: el.id || asset.data?.address || Math.random().toString(),
+                  }));
+                });
+                setPerpPositions(positions);
+              } catch { push("ai", "Could not fetch perps positions."); }
+              setPerpsLoading(false);
+
+            // ── SHOW_BORROW ─────────────────────────────────────────────────────
+            } else if (stepAction === "SHOW_BORROW") {
+              const colSym  = (stepData.collateral || "SOL").toUpperCase();
+              const debtSym = (stepData.debt || "USDC").toUpperCase();
+              const vault   = MULTIPLY_VAULTS.find(v =>
+                v.collateral.toUpperCase() === colSym && v.debt.toUpperCase() === debtSym
+              ) || MULTIPLY_VAULTS.find(v => v.collateral.toUpperCase() === colSym) || MULTIPLY_VAULTS[0];
+              setBorrowCfg(c => ({
+                ...c,
+                vaultId: vault.vaultId, collateral: vault.collateral, debt: vault.debt,
+                colDecimals: vault.colDecimals, debtDecimals: vault.debtDecimals,
+                colAmount: stepData.colAmount || c.colAmount,
+                borrowAmount: stepData.borrowAmount || c.borrowAmount,
+              }));
+              setShowBorrow(true);
+
+            // ── SHOW_MULTIPLY ───────────────────────────────────────────────────
+            } else if (stepAction === "SHOW_MULTIPLY") {
+              setMultiplyFilter(stepData.asset?.toUpperCase() || null);
+              setShowMultiply(true);
+
+            // ── SHOW_LEND_POSITIONS ─────────────────────────────────────────────
+            } else if (stepAction === "SHOW_LEND_POSITIONS") {
+              fetchLendPositions();
+
+            // ── CLAIM_PAYOUTS ───────────────────────────────────────────────────
+            } else if (stepAction === "CLAIM_PAYOUTS") {
+              if (!walletFull) { push("ai", "Connect your wallet to claim payouts."); continue; }
+              await doClaimPayouts("");
+
+            // ── SHOW_STUDIO ─────────────────────────────────────────────────────
+            } else if (stepAction === "SHOW_STUDIO") {
+              setStudioCfg(c => ({
+                ...c,
+                name:        stepData.name        || c.name,
+                symbol:      stepData.symbol      || c.symbol,
+                description: stepData.description || c.description,
+                website:     stepData.website     || c.website,
+                twitter:     stepData.twitter     || c.twitter,
+              }));
+              setStudioImage(null); setStudioStatus(null); setStudioResult(null);
+              setShowStudio(true);
+
+            // ── FETCH_STUDIO_FEES ───────────────────────────────────────────────
+            } else if (stepAction === "FETCH_STUDIO_FEES") {
+              await fetchStudioFees();
+
+            // ── FETCH_LOCKS ─────────────────────────────────────────────────────
+            } else if (stepAction === "FETCH_LOCKS") {
+              await fetchLocks();
+
+            // ── FETCH_SEND_HISTORY ──────────────────────────────────────────────
+            } else if (stepAction === "FETCH_SEND_HISTORY") {
+              if (!walletFull) { push("ai", "Connect your wallet to view send history."); continue; }
+              try {
+                const type = stepData.type || "pending";
+                const endpoint = type === "pending"
+                  ? `${JUP_SEND_API}/pending-invites?wallet=${walletFull}`
+                  : `${JUP_SEND_API}/invite-history?wallet=${walletFull}`;
+                const data = await jupFetch(endpoint);
+                const items = data?.invites || data?.history || data || [];
+                if (!items.length) {
+                  push("ai", `No ${type === "pending" ? "pending invites" : "send history"} found.`);
+                } else {
+                  const lines = items.slice(0, 10).map((inv, i) => {
+                    const amt    = inv.amount || inv.tokenAmount || "?";
+                    const tok    = inv.token  || inv.mint        || "token";
+                    const status = inv.status || (type === "pending" ? "Unclaimed" : inv.claimed ? "Claimed" : "Clawed back");
+                    return `${i+1}. **${amt} ${tok}** — ${status}`;
+                  }).join("\n");
+                  const clawbackItems = type === "pending"
+                    ? items.slice(0, 10).map(inv => ({
+                        code: inv.inviteCode || inv.code || null,
+                        amount: inv.amount || inv.tokenAmount || "?",
+                        token: inv.token || inv.mint || "token",
+                      })).filter(i => i.code)
+                    : [];
+                  push("ai", `**${type === "pending" ? "Pending Invites" : "Send History"}**\n${lines}`, { clawbackItems });
+                }
+              } catch { push("ai", "Could not fetch send history."); }
+
+            // ── SHOW_PREDICTION ─────────────────────────────────────────────────
+            } else if (stepAction === "SHOW_PREDICTION") {
+              setPred(stepData);
+              setPick(null);
+              setShowPred(true);
+              const matchQuery = stepData.searchQuery
+                || [stepData.teamA, stepData.teamB].filter(Boolean).join(" ")
+                || stepData.league || null;
+              if (matchQuery) {
+                const result = await fetchPredictionMarkets(null, matchQuery);
+                if (result.markets?.length > 0) {
+                  setPredMarkets(result.markets); setPredCategory(matchQuery); setShowPredList(true);
+                }
+              }
+
+            // ── FETCH_PREDICTIONS ───────────────────────────────────────────────
+            } else if (stepAction === "FETCH_PREDICTIONS") {
+              const result = await fetchPredictionMarkets(stepData.sport || "sports", stepData.query || null, stepData.limit || 20);
+              if (result.markets?.length) {
+                setPredMarkets(result.markets); setPredCategory(stepData.sport || "sports"); setShowPredList(true);
+              } else { push("ai", "No prediction markets found for that query."); }
+
+            // ── PLACE_PREDICTION ────────────────────────────────────────────────
+            } else if (stepAction === "PLACE_PREDICTION") {
+              push("ai", `Placing prediction bet: **${stepData.outcome}** (${stepData.side?.toUpperCase()}) — $${stepData.amount}…`);
+              try {
+                const markets = await fetchPredictionMarkets(null, stepData.searchQuery);
+                const market  = markets.markets?.[0];
+                if (!market) { push("ai", "Could not find that prediction market."); continue; }
+                setBetMarket(market);
+                setBetOutcome(market.outcomes?.find(o => o.title?.toLowerCase().includes(stepData.outcome?.toLowerCase())) || market.outcomes?.[0]);
+                setBetSide(stepData.side || "yes");
+                setBetAmount(String(stepData.amount || "5"));
+                setShowBet(true);
+              } catch { push("ai", "Could not load that prediction market."); }
+
+            // ── BASKET_PREDICTION ───────────────────────────────────────────────
+            } else if (stepAction === "BASKET_PREDICTION") {
+              const bets = stepData.bets || [];
+              push("ai", `Queuing **${bets.length} prediction bets** in sequence…`);
+              for (const bet of bets) {
+                await new Promise(r => setTimeout(r, 400));
+                try {
+                  const markets = await fetchPredictionMarkets(null, bet.searchQuery);
+                  const market  = markets.markets?.[0];
+                  if (!market) { push("ai", `Could not find market for: ${bet.searchQuery}`); continue; }
+                  setBetMarket(market);
+                  setBetOutcome(market.outcomes?.find(o => o.title?.toLowerCase().includes(bet.outcome?.toLowerCase())) || market.outcomes?.[0]);
+                  setBetSide(bet.side || "yes");
+                  setBetAmount(String(bet.amount || "5"));
+                  setShowBet(true);
+                  push("ai", `Bet panel opened: **${bet.outcome}** (${bet.side?.toUpperCase()}) $${bet.amount}`);
+                } catch { push("ai", `Failed to load market: ${bet.searchQuery}`); }
+              }
+
+            // ── SET_PRICE_ALERT ─────────────────────────────────────────────────
+            } else if (stepAction === "SET_PRICE_ALERT") {
+              const alertToken = (stepData.token || "SOL").toUpperCase();
+              const alertCond  = stepData.condition === "below" ? "below" : "above";
+              const alertPrice = parseFloat(stepData.price);
+              if (!alertPrice || isNaN(alertPrice)) {
+                push("ai", "Price alert step skipped — missing a valid price."); continue;
+              }
+              const newAlert = { token: alertToken, condition: alertCond, target: alertPrice, triggered: false, id: Date.now() };
+              const updated = [...priceAlerts, newAlert];
+              setPriceAlerts(updated);
+              try { localStorage.setItem("chatfi-alerts", JSON.stringify(updated)); } catch {}
+              push("ai", `🔔 Alert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**`);
+
+            // ── SHOW_TRADE_JOURNAL ──────────────────────────────────────────────
+            } else if (stepAction === "SHOW_TRADE_JOURNAL") {
+              const period = stepData.period || "all";
+              const now    = Date.now();
+              const cutoff = period === "today" ? now - 86400000 : period === "week" ? now - 604800000 : 0;
+              const trades = tradeJournal.filter(t => t.ts >= cutoff);
+              if (!trades.length) {
+                push("ai", "No trades in journal yet — your swaps will appear here automatically.");
+              } else {
+                const lines = trades.slice(0, 50).map((t, i) => {
+                  const d = new Date(t.ts).toLocaleDateString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
+                  if (t.type === "swap")   return `${i+1}. **${t.from}→${t.to}** — ${t.amount} → ~${t.out}  ·  ${d}`;
+                  if (t.type === "basket") return `${i+1}. **Basket** — ${t.summary}  ·  ${d}`;
+                  return `${i+1}. ${t.type}  ·  ${d}`;
+                }).join("\n");
+                push("ai", `**Trade Journal** (${trades.length} trades):\n${lines}`);
+              }
+
+            // ── SHOW_ROUTE ──────────────────────────────────────────────────────
+            } else if (stepAction === "SHOW_ROUTE") {
+              await fetchRouteBreakdown(stepData.from || "SOL", stepData.to || "USDC", stepData.amount || "1");
+
+            // ── FETCH_PORTFOLIO ─────────────────────────────────────────────────
+            } else if (stepAction === "FETCH_PORTFOLIO") {
+              if (!walletFull) { push("ai", "Connect your wallet to view portfolio."); continue; }
+              setPortfolioLoading(true);
+              setShowPortfolio(true);
+              setPortfolioData(null);
+              const pData = await fetchPortfolioData(walletFull);
+              const mergedLogoMap = { ...TOKEN_LOGO_URLS, ...(pData?.logoMap || {}) };
+              setPortfolioData({ ...pData, wallet: walletFull, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices });
+              setPortfolioLoading(false);
+
+            // ── FETCH_TOKEN_INFO ────────────────────────────────────────────────
+            } else if (stepAction === "FETCH_TOKEN_INFO") {
+              const info = await fetchTokenInfo(stepData.symbol);
+              if (info) { setTokenCardData(info); setShowTokenCard(true); }
+              else { push("ai", `Could not find token info for **${stepData.symbol || "that token"}**.`); }
+
+            // ── FETCH_XSTOCKS ───────────────────────────────────────────────────
+            } else if (stepAction === "FETCH_XSTOCKS") {
+              // Reuse the main FETCH_XSTOCKS handler path by dispatching as inner action
+              push("ai", "Loading tokenized stocks…");
+              try {
+                const url = `https://lite-api.jup.ag/v1/tokens/search?query=xstock&limit=${stepData.limit || 15}`;
+                const data = await jupFetch(url);
+                const tokens = (data?.tokens || data || []).slice(0, stepData.limit || 15);
+                if (!tokens.length) { push("ai", "No xStocks data found right now."); continue; }
+                const lines = tokens.map((t, i) =>
+                  `${i+1}. **${t.symbol}** — ${t.name || ""} $${t.price ? Number(t.price).toFixed(2) : "?"}`
+                ).join("\n");
+                push("ai", `**Tokenized Stocks (xStocks)**\n${lines}`);
+              } catch { push("ai", "Could not load xStocks data."); }
+
+            // ── FETCH_TRIGGER_ORDERS ────────────────────────────────────────────
+            } else if (stepAction === "FETCH_TRIGGER_ORDERS") {
+              push("ai", "Loading trigger orders…");
+              setTrigOrdersState(stepData.state === "past" ? "past" : "active");
+              setShowTrigOrders(true);
+
+            // ── FETCH_RECURRING_ORDERS ──────────────────────────────────────────
+            } else if (stepAction === "FETCH_RECURRING_ORDERS") {
+              push("ai", "Loading recurring orders…");
+              setRecurringOrdersStatus(stepData.status === "history" ? "history" : "active");
+              setShowRecurringOrders(true);
+
+            // ── SWAP_ALL_WALLET ─────────────────────────────────────────────────
+            } else if (stepAction === "SWAP_ALL_WALLET") {
+              if (!walletFull) { push("ai", "Connect your wallet to swap all tokens."); continue; }
+              const toSym  = (stepData.to || "USDC").toUpperCase();
+              const exclude = [...(stepData.exclude || [toSym])].map(s => s.toUpperCase());
+              const tokensToDump = Object.entries(portfolio)
+                .filter(([sym, bal]) => bal > 0 && !exclude.includes(sym.toUpperCase()))
+                .map(([sym]) => sym);
+              if (!tokensToDump.length) { push("ai", "No tokens to swap after exclusions."); continue; }
+              push("ai", `Swapping all wallet tokens to **${toSym}** (excluding ${exclude.join(", ")})…`);
+              // Build trades and re-use BASKET_SWAP logic by injecting a sub-step
+              const allTrades = tokensToDump.map(sym => ({ from: sym, to: toSym, portion: "all" }));
+              // Re-use BASKET_SWAP path by temporarily building step data and recursing
+              steps.splice(i + 1, 0, { action: "BASKET_SWAP", actionData: { trades: allTrades } });
+
+            // ── COPY_TRADE ──────────────────────────────────────────────────────
+            } else if (stepAction === "COPY_TRADE") {
+              const ctWallet = stepData.wallet;
+              if (!ctWallet) { push("ai", "Copy trade step skipped — no wallet address provided."); continue; }
+              push("ai", `Analysing wallet \`${ctWallet.slice(0,8)}…${ctWallet.slice(-4)}\`…`);
+              try {
+                const { trades, profile } = await analyseWalletBehaviour(ctWallet);
+                if (!trades?.length) { push("ai", "No recent swaps found for that wallet."); continue; }
+                setCopyTradeData({ wallet: ctWallet, trades, profile });
+                setShowCopyTrade(true);
+                const profileSummary = profile ? [
+                  `**Style:** ${profile.tradingStyle}`,
+                  `**Sentiment:** ${profile.sentiment}`,
+                  profile.topTokens?.length ? `**Favourites:** ${profile.topTokens.join(", ")}` : null,
+                  profile.avgUsd ? `**Avg trade:** ~$${parseInt(profile.avgUsd).toLocaleString()}` : null,
+                ].filter(Boolean).join("  ·  ") : "";
+                push("ai", `**Wallet Analysis** — \`${ctWallet.slice(0,8)}…${ctWallet.slice(-4)}\`\n${profileSummary}`);
+              } catch(e) { push("ai", `Could not fetch trades: ${e?.message || "unknown error"}`); }
+
+            } else {
+              // Fallback: unknown step type — just log and skip
+              push("ai", `⚠️ Unknown chain step: **${stepAction}** — skipped.`);
             }
           }
         }
