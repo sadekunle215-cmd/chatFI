@@ -389,7 +389,12 @@ Rules:
 - "swap all tokens in my wallet to X" / "convert everything to X" / "swap all my tokens except Y to X" / "dump my whole wallet into X" / "liquidate everything to X" / "sell all tokens except X" → SWAP_ALL_WALLET — use when user does NOT name specific tokens; client will read live wallet
 - "buy $X each of A B C" / "split $N between" / "basket buy" / "buy multiple tokens" / "swap X JUP and Y BONK to USDC" / "swap all these tokens to USDC" / "swap max/all of A B C to X" / "dump all my A B C into X" → BASKET_SWAP — parse each token, amount mode, and direction into trades array; default from:"USDC" when buying, default to:"USDC" when selling/dumping
 - "sell X and then set a limit order" / "sell my tokens and buy BTC at $Y" / "dump my bags and DCA into SOL" / "sell BONK SOL JUP and use $N for a limit order" / "sell everything then lock" / "sell then earn" / any intent that combines SELLING tokens WITH a follow-up action using proceeds → CHAINED_ACTIONS — step 1 is always BASKET_SWAP (or SHOW_SWAP for single token) selling to USDC, step 2 is the follow-up action. CRITICAL: when user says "$N out of proceeds" or "use $N from the sale", set amountUSD:"N" in the follow-up step. When user says "use all proceeds" or doesn't specify an amount, set portion:"all" in the follow-up step. IMPORTANT: CHAINED_ACTIONS is ONLY for sell→proceed flows. Do NOT use it when the user wants to BUY tokens AND set a limit/trigger order — those are independent actions, use CHAINED_ACTIONS with step 1 as BASKET_SWAP (buying) and step 2 as SHOW_TRIGGER_V2/SHOW_RECURRING, and make sure the trades array in step 1 is fully populated with all tokens and amounts the user named.
+- LOCK CHAINING: "lock X for Y minutes/hours/days then claim and swap/send" / "lock USDC for 10 minutes, after unlock claim and swap to SOL" / "lock tokens then after vesting swap proceeds" → CHAINED_ACTIONS with steps: [SHOW_LOCK (lock the tokens), then SHOW_SWAP or BASKET_SWAP (swap after unlock), then optionally SHOW_SEND (invite link)]. The lock step vesting/cliff times must be converted to days: minutes÷1440, hours÷24. After the lock step, include subsequent swap/send steps so the UI opens them in sequence after lock confirms. Example: "lock 10 USDC for 10 min then swap to SOL and send 5 USDC invite link" → steps: [SHOW_LOCK(USDC,10,cliffDays:0,vestingDays:0.00694), SHOW_SWAP(USDC→SOL,10), SHOW_SEND(USDC,5)]
+- TIME CONVERSION for lock vestingDays: 10 minutes = 0.00694 days (10/1440), 1 hour = 0.04167 days (1/24), 30 minutes = 0.02083 days. Always convert to days for the vestingDays field.
+- CHAINED_ACTIONS supported step actions: BASKET_SWAP, SHOW_SWAP, SHOW_TRIGGER_V2, SHOW_RECURRING, SHOW_LOCK, FETCH_EARN, SHOW_SEND. Each step object: { "action": "STEP_ACTION", "actionData": {...} }
 - "buy $X each of A B C and use $N for a limit/trigger order on Y" / "buy multiple tokens and set a trigger" / "buy A B C and also set a limit order" / any intent that combines BUYING multiple tokens WITH a separate trigger/limit/DCA order → CHAINED_ACTIONS with step 1 as BASKET_SWAP (trades array = all the buy trades, from:"USDC" for each) and step 2 as SHOW_TRIGGER_V2 or SHOW_RECURRING. CRITICAL: fully populate trades array in step 1 — e.g. "buy 1 USDC of bonk, pengu, jup, fartcoin" → trades:[{from:"USDC",to:"BONK",amountUSD:"1"},{from:"USDC",to:"PENGU",amountUSD:"1"},{from:"USDC",to:"JUP",amountUSD:"1"},{from:"USDC",to:"FARTCOIN",amountUSD:"1"}].
+- REVERSE TRADING / TIMED SELL-BACK: When user says "buy A B C then sell them back to USDC after X minutes/seconds/hours" OR "buy X Y Z and sell back to USDC after [time]" OR "buy these, wait [time], then sell all back" → use CHAINED_ACTIONS: step 1 = BASKET_SWAP (buy trades, from USDC), step 2 = SHOW_RECURRING or null (if time-based sell is wanted, note it in text). HOWEVER if the user says "buy X Y Z and sell back to USDC after [time]" — the SELL step is a DELAYED action, so: include the sell-back trades as a second BASKET_SWAP step in CHAINED_ACTIONS and set a note in text that the sells will be shown after the delay. The client processes steps sequentially so the sell BASKET_SWAP panel shows up right after buys complete. If the user says "sell them back" / "now sell" as a follow-up message after buying, treat it as a new BASKET_SWAP selling all the previously mentioned tokens back to USDC.
+- DELAYED/TIMED SELL: "after 4 seconds sell X to USDC" / "sell back in 2 minutes" → include a second BASKET_SWAP step in CHAINED_ACTIONS with the sell trades. The UI executes steps in sequence — the user will see the sell panel open immediately after buys complete. Mention the timing in your text but do not skip the action.
 - "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
@@ -1836,6 +1841,7 @@ function JupChatInner() {
   const { walletInfo: reownWalletInfo }                         = useWalletInfo();
   const [connectedWalletIcon, setConnectedWalletIcon]           = useState(null);
   const prevConnectedRef = useRef(false);
+  const walletWasConnectedThisSessionRef = useRef(false); // true only after first explicit connect in this page load
 
   // ── Privy hooks (social login + embedded wallet) ───────────────────────────
   const { ready: privyReady, authenticated: privyAuthed, user: privyUser,
@@ -4022,8 +4028,8 @@ function JupChatInner() {
     return Keypair.fromSeed(new Uint8Array(hashBuffer));
   };
 
-  const doSend = async () => {
-    const { token, amount, mint } = sendCfg;
+  const doSend = async (cfgOverride) => {
+    const { token, amount, mint } = cfgOverride || sendCfg;
     if (!amount || parseFloat(amount) <= 0) return;
     if (!walletFull) { push("ai", "Connect your wallet first to send tokens."); return; }
     const provider = getActiveProvider();
@@ -6168,6 +6174,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       fetchSolanaBalances(reownAddress).then(balances => {
         setPortfolio(balances);
         if (justConnected) {
+          walletWasConnectedThisSessionRef.current = true;
           fetchPrices().then(live => {
             const solUSD = balances.SOL && live.SOL
               ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})`
@@ -6188,7 +6195,12 @@ Order: \`${orderKey.slice(0,20)}…\`
       setWalletFull(null);
       setConnectedWalletName(null);
       setPortfolio({});
-      push("ai", "Wallet disconnected. Connect again anytime to access your portfolio and trading features.");
+      // Only show "disconnected" message if the user explicitly disconnected during this session
+      // (not on page refresh where Reown momentarily reports disconnected before restoring session)
+      if (walletWasConnectedThisSessionRef.current) {
+        push("ai", "Wallet disconnected. Connect again anytime to access your portfolio and trading features.");
+      }
+      walletWasConnectedThisSessionRef.current = false;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reownConnected, reownAddress, reownProvider, privyMode]);
@@ -6228,6 +6240,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       fetchSolanaBalances(address).then(balances => {
         setPortfolio(balances);
         if (justConnected) {
+          walletWasConnectedThisSessionRef.current = true;
           fetchPrices().then(live => {
             const solUSD = balances.SOL && live.SOL ? (balances.SOL * live.SOL).toFixed(2) : null;
             const emailLabel = privyUser?.email?.address || privyUser?.google?.email || privyUser?.twitter?.username || "your account";
@@ -6258,7 +6271,10 @@ Order: \`${orderKey.slice(0,20)}…\`
       setConnectedWalletName(null);
       setPortfolio({});
       try { sessionStorage.removeItem("chatfi-wallet-shown"); } catch {}
-      push("ai", "Signed out. Connect again anytime.");
+      if (walletWasConnectedThisSessionRef.current) {
+        push("ai", "Signed out. Connect again anytime.");
+      }
+      walletWasConnectedThisSessionRef.current = false;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [privyReady, privyAuthed, privyEmbeddedWallet, privyUser]);
@@ -6722,7 +6738,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 1024,
+          max_tokens: 2048,
           system: jupDocs
             ? `## Jupiter Official API Documentation (llms-full.txt)\n\n${jupDocs}\n\n---\n\n${SYSTEM_PROMPT}`
             : SYSTEM_PROMPT,
@@ -6741,7 +6757,24 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const braceMatch = cleanText.match(/\{[\s\S]*\}/);
           if (braceMatch) cleanText = braceMatch[0];
         }
-        parsed = JSON.parse(cleanText);
+        // If JSON appears truncated (parse will fail), try to close unclosed braces/brackets
+        try {
+          parsed = JSON.parse(cleanText);
+        } catch {
+          // Count unclosed braces/brackets and try to close them
+          let open = 0, openBracket = 0;
+          for (const ch of cleanText) {
+            if (ch === "{") open++;
+            else if (ch === "}") open--;
+            else if (ch === "[") openBracket++;
+            else if (ch === "]") openBracket--;
+          }
+          // Remove trailing incomplete token (partial string/key), then close structures
+          let repaired = cleanText.replace(/,\s*$/, "").replace(/,\s*"[^"]*$/, "");
+          while (openBracket > 0) { repaired += "]"; openBracket--; }
+          while (open > 0) { repaired += "}"; open--; }
+          parsed = JSON.parse(repaired);
+        }
       } catch {
         // Full parse failed — try to salvage just the "text" field with regex
         const textMatch = rawText.match(/"text"\s*:\s*"((?:[^\\"]|\\[\s\S])*)"/s);
@@ -7229,9 +7262,15 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           setSendStatus(null); setSendLink(""); setSendRecipient(""); setSendTxSig("");
           setSendMode(privyMode ? "direct" : "invite");
           if (directMode && amount && actionData?.recipient) {
+            // Direct mode + known recipient → direct transfer, no panel
             setSendRecipient(actionData.recipient);
             push("ai", `⚡ **Direct Mode** — Send **${amount} ${upperTok}** to \`${actionData.recipient.slice(0,8)}…\`\n\nReply **yes** to execute or **no** to cancel.`);
             setPendingDirectAction({ type:"send", label:`${amount} ${upperTok} to ${actionData.recipient.slice(0,8)}…` });
+          } else if (directMode && amount) {
+            // Direct mode + invite link (no recipient needed) → execute immediately, skip panel
+            // Must call doSend with explicit config since setSendCfg is async
+            push("ai", `⚡ **Direct Mode** — Creating **${amount} ${upperTok}** invite link…`);
+            await doSend({ token: upperTok, amount, mint });
           } else {
             setShowSend(true);
             push("ai", text);
@@ -7549,6 +7588,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         if (!basketTrades.length) { push("ai", "No trades found in basket. Try: *buy $100 each of SOL, JUP, and BONK* or *swap 5.4 JUP and all my BONK to USDC*."); }
         else if (!walletFull) { push("ai", "Connect your wallet first to execute a basket swap."); }
         else {
+          // Direct mode: execute immediately — no yes/no for group orders
           push("ai", (text || "") + `\n\nPreparing **${basketTrades.length} swaps** — you'll approve all at once…`);
           const provider = getActiveProvider();
           if (!provider) { push("ai", "Wallet not connected. Please connect your wallet first."); setTyping(false); return; }
@@ -7899,11 +7939,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 tpPriceUsd: stepData.tpPriceUsd||c.tpPriceUsd,
                 slPriceUsd: stepData.slPriceUsd||c.slPriceUsd,
               }));
-              if (directMode && walletFull && resolvedAmt && stepData.triggerPriceUsd) {
-                const cond = stepData.triggerCondition||"above";
-                push("ai", `⚡ **Direct Mode** — Limit order: **${resolvedAmt} ${fromSym} → ${toSym}** when ${toSym} is ${cond} **$${stepData.triggerPriceUsd}**\n\nReply **yes** to execute or **no** to cancel.`);
-                setPendingDirectAction({ type:"triggerV2", label:`${resolvedAmt} ${fromSym} → ${toSym} @ $${stepData.triggerPriceUsd}` });
-              } else { setShowTrigV2(true); }
+              // In CHAINED_ACTIONS, always open the panel — no yes/no interruption in a multi-step flow
+              setShowTrigV2(true);
             } else if (stepAction === "SHOW_RECURRING") {
               const fromSym = (stepData.from||"USDC").toUpperCase();
               const toSym   = (stepData.to||"SOL").toUpperCase();
@@ -7919,12 +7956,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 numberOfOrders: stepData.numberOfOrders||c.numberOfOrders,
                 intervalSecs: stepData.intervalSecs||c.intervalSecs,
               }));
-              if (directMode && walletFull && stepData.amountPerCycle && stepData.numberOfOrders) {
-                const intSecs = stepData.intervalSecs||86400;
-                const intLabel = intSecs>=604800?`${Math.round(intSecs/604800)}w`:intSecs>=86400?`${Math.round(intSecs/86400)}d`:`${Math.round(intSecs/3600)}h`;
-                push("ai", `⚡ **Direct Mode** — DCA: **${stepData.amountPerCycle} ${fromSym} → ${toSym}** every ${intLabel} for ${stepData.numberOfOrders} orders\n\nReply **yes** to execute or **no** to cancel.`);
-                setPendingDirectAction({ type:"recurring", label:`${stepData.amountPerCycle} ${fromSym} → ${toSym}` });
-              } else { setShowRecurring(true); }
+              // In CHAINED_ACTIONS, always open the panel — no yes/no in a multi-step flow
+              setShowRecurring(true);
             } else if (stepAction === "SHOW_LOCK") {
               const tokSym = (stepData.token||"JUP").toUpperCase();
               const resolvedTok = await resolveToken(tokSym);
@@ -7939,10 +7972,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               }));
               if (resolvedTok?.decimals) tokenDecimalsRef.current[tokSym] = resolvedTok.decimals;
               setLockStatus(null); setLockResult(null);
-              if (directMode && walletFull && stepData.amount) {
-                push("ai", `⚡ **Direct Mode** — Lock **${stepData.amount} ${tokSym}**\n\nReply **yes** to execute or **no** to cancel.`);
-                setPendingDirectAction({ type:"lock", label:`${stepData.amount} ${tokSym}` });
-              } else { setShowLock(true); }
+              // In CHAINED_ACTIONS, always open the panel — no yes/no in a multi-step flow
+              setShowLock(true);
             } else if (stepAction === "FETCH_EARN") {
               push("ai", "Opening earn vaults…");
               await fetchEarnVaults();
@@ -7950,9 +7981,16 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               setShowEarn(true);
             } else if (stepAction === "SHOW_SEND") {
               const upperTok = (stepData.token||"SOL").toUpperCase();
-              setSendCfg({ token: upperTok, amount: stepData.amount||"", mint: tokenCacheRef.current[upperTok]||TOKEN_MINTS[upperTok]||TOKEN_MINTS.SOL });
+              const sendMint = tokenCacheRef.current[upperTok]||TOKEN_MINTS[upperTok]||TOKEN_MINTS.SOL;
+              const sendAmt  = stepData.amount||"";
+              setSendCfg({ token: upperTok, amount: sendAmt, mint: sendMint });
               setSendStatus(null); setSendLink(""); setSendRecipient(""); setSendTxSig("");
-              setShowSend(true);
+              if (directMode && sendAmt) {
+                push("ai", `⚡ **Direct Mode** — Creating **${sendAmt} ${upperTok}** invite link…`);
+                await doSend({ token: upperTok, amount: sendAmt, mint: sendMint });
+              } else {
+                setShowSend(true);
+              }
             }
           }
         }
