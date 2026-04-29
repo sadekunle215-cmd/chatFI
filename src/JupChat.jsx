@@ -2948,25 +2948,15 @@ function JupChatInner() {
           "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
           "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
           "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
-          "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
-          "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
-          "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R": "RAY",
-          "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3": "PYTH",
           "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
           "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
           "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1": "BSOL",
-          "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU": "SAMO",
-          "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE": "ORCA",
-          "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr": "POPCAT",
-          "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN": "TRUMP",
           // LSTs
           "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v": "jupSOL",
           "Jito4APyf642JPzcbhPdHtTkuLFkHy5SfxGgwGiRBGP":  "JitoSOL",
           "So11111111111111111111111111111111111111112":   "SOL",
-          // Common memecoins
-          "A8C3xuqscfmyLrte3VmTqrAq8kgMASius9AFNANwpump": "FARTCOIN",
-          "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv": "BOME",
-          "8uYFv4cKTW9qh1ZDkRSaUPARmtmahGa7dAh1mstAgrQU": "SLOP",
+          // All other tokens (memecoins, DeFi, etc.) are resolved live via Jupiter API
+          // so symbols and logos are always accurate and never stale.
         };
 
         const unknownMints = [];
