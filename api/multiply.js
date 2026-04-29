@@ -239,14 +239,14 @@ export default async function handler(req, res) {
 
       let flashBorrowIx, flashPayIx;
       try {
-        const r = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: debtMint, amount: borrowBN }, 5, isStable);
+        const r = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: debtMint, amount: borrowBN, cluster: "mainnet" }, 5, isStable);
         flashBorrowIx = r.flashBorrowIx;
         flashPayIx    = r.flashPaybackIx;
       } catch (e) {
         return res.status(502).json({ error: e.message });
       }
 
-      const { ix: initIx, nftId } = await getInitPositionIx({ vaultId: Number(vaultId), connection, signer: signerPubkey });
+      const { ix: initIx, nftId } = await getInitPositionIx({ vaultId: Number(vaultId), connection, signer: signerPubkey, cluster: "mainnet" });
       console.log(`[multiply/open] nftId=${nftId}`);
 
       const operateResult = await getOperateIxWithRetry({
@@ -256,6 +256,7 @@ export default async function handler(req, res) {
         debtAmount: borrowBN,
         signer:     signerPubkey,
         connection,
+        cluster:    "mainnet",
       }, 5, isStable);
 
       const swapApiRes = await fetch(`${SWAP_API}/swap-instructions`, {
@@ -317,7 +318,7 @@ export default async function handler(req, res) {
 
       let flashBorrowIx, flashPayIx;
       try {
-        const r = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: colMint, amount: flashColBN }, 5, isStable);
+        const r = await getFlashIxsWithRetry({ connection, signer: signerPubkey, asset: colMint, amount: flashColBN, cluster: "mainnet" }, 5, isStable);
         flashBorrowIx = r.flashBorrowIx;
         flashPayIx    = r.flashPaybackIx;
       } catch (e) {
@@ -335,7 +336,7 @@ export default async function handler(req, res) {
       const operateResult = await getOperateIxWithRetry({
         vaultId: Number(vaultId), positionId: Number(positionId),
         colAmount: opColAmount, debtAmount: opDebtAmount,
-        signer: signerPubkey, connection,
+        signer: signerPubkey, connection, cluster: "mainnet",
       }, 5, isStable);
 
       if (swapApiRes.error) return res.status(502).json({ error: `Unwind swap failed: ${swapApiRes.error}` });
@@ -360,7 +361,7 @@ export default async function handler(req, res) {
       const { ixs, addressLookupTableAccounts } = await getOperateIx({
         vaultId: Number(vaultId), positionId: Number(positionId),
         colAmount: finalCol, debtAmount: finalDebt,
-        signer: signerPubkey, connection,
+        signer: signerPubkey, connection, cluster: "mainnet",
       });
       const transaction = await buildTx(connection, signerPubkey, ixs, addressLookupTableAccounts);
       return res.status(200).json({ transaction });
