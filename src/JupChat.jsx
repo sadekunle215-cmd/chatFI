@@ -2959,6 +2959,14 @@ function JupChatInner() {
           "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE": "ORCA",
           "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr": "POPCAT",
           "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN": "TRUMP",
+          // LSTs
+          "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v": "jupSOL",
+          "Jito4APyf642JPzcbhPdHtTkuLFkHy5SfxGgwGiRBGP":  "JitoSOL",
+          "So11111111111111111111111111111111111111112":   "SOL",
+          // Common memecoins
+          "A8C3xuqscfmyLrte3VmTqrAq8kgMASius9AFNANwpump": "FARTCOIN",
+          "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv": "BOME",
+          "8uYFv4cKTW9qh1ZDkRSaUPARmtmahGa7dAh1mstAgrQU": "SLOP",
         };
 
         const unknownMints = [];
@@ -2997,6 +3005,17 @@ function JupChatInner() {
             return { address: mint, symbol, name, logoURI, decimals };
           };
 
+          // Helper: create a timeout signal safely (AbortSignal.timeout not supported on all mobile browsers)
+          const timeoutSignal = (ms) => {
+            try {
+              return AbortSignal.timeout(ms);
+            } catch {
+              const ctrl = new AbortController();
+              setTimeout(() => ctrl.abort(), ms);
+              return ctrl.signal;
+            }
+          };
+
           // Fetch all unknown mints in parallel with a 4-source waterfall:
           // 1. tokens.jup.ag/token/{mint}          — primary Jupiter verified registry
           // 2. lite-api.jup.ag/tokens/v1/token/{mint} — Jupiter lite (wider coverage)
@@ -3004,17 +3023,16 @@ function JupChatInner() {
           // 4. img.jup.ag CDN logo + short label    — absolute last resort, at least shows logo
           const resolveResults = await Promise.allSettled(
             unknownMints.slice(0, 30).map(({ mint }) =>
-              fetch("https://tokens.jup.ag/token/" + mint, { signal: AbortSignal.timeout(4000) })
+              fetch("https://tokens.jup.ag/token/" + mint, { signal: timeoutSignal(5000) })
                 .then(r => r.ok ? r.json() : Promise.reject("jup-404"))
                 .catch(() =>
-                  fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint, { signal: AbortSignal.timeout(4000) })
+                  fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint, { signal: timeoutSignal(5000) })
                     .then(r => r.ok ? r.json() : Promise.reject("lite-404"))
                     .catch(() =>
                       // SolanaFM — free, no auth, wide SPL token coverage
-                      fetch("https://api.solana.fm/v0/tokens/" + mint, { signal: AbortSignal.timeout(4000) })
+                      fetch("https://api.solana.fm/v0/tokens/" + mint, { signal: timeoutSignal(5000) })
                         .then(r => r.ok ? r.json() : Promise.reject("sfm-404"))
                         .then(d => {
-                          // SolanaFM wraps data in tokenList
                           const t = d?.tokenList || d?.result || d;
                           if (!t?.name && !t?.symbol) return Promise.reject("sfm-empty");
                           return {
@@ -3054,11 +3072,8 @@ function JupChatInner() {
             if (meta?.name) {
               if (!results.nameMap) results.nameMap = {};
               results.nameMap[finalSym] = meta.name;
-            } else if (!meta?.symbol) {
-              // No name or symbol — store the full mint as name so user can copy it
-              if (!results.nameMap) results.nameMap = {};
-              results.nameMap[finalSym] = mint;
             }
+            // Don't store the full mint as name — it pollutes the UI with long addresses
             // Cache so swap panel can address these tokens by symbol
             if (meta?.symbol && !tokenCacheRef.current[meta.symbol.toUpperCase()]) {
               tokenCacheRef.current[meta.symbol.toUpperCase()] = mint;
@@ -5194,8 +5209,9 @@ function JupChatInner() {
     try {
       // ── Primary: Jupiter Ultra balance API — more reliable than public RPC ──
       // Same source used by the full portfolio panel, so balances always match.
+      const safeTimeout = (ms) => { try { return AbortSignal.timeout(ms); } catch { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; } };
       const ultraRes = await fetch(`https://lite-api.jup.ag/ultra/v1/balances/${pubkey}`, {
-        signal: AbortSignal.timeout(6000),
+        signal: safeTimeout(6000),
       }).then(r => r.ok ? r.json() : Promise.reject("ultra-fail")).catch(() => null);
 
       if (ultraRes && typeof ultraRes === "object") {
