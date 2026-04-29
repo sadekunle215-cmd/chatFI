@@ -7170,7 +7170,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               }
             } catch {}
           }
-          setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices });
+          setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || {}, solBalance: ((pData?.walletBalances?.SOL) || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices });
           setPortfolioLoading(false);
         }
 
@@ -8583,7 +8583,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   }
                 } catch {}
               }
-              setPortfolioData({ ...pData, wallet: walletFull, walletBalances: pData?.walletBalances || portfolio, solBalance: pData?.walletBalances || portfolio, logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices2 });
+              setPortfolioData({ ...pData, wallet: walletFull, walletBalances: pData?.walletBalances || {}, solBalance: ((pData?.walletBalances?.SOL) || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices2 });
               setPortfolioLoading(false);
 
             // ── FETCH_TOKEN_INFO ────────────────────────────────────────────────
