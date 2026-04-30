@@ -10,6 +10,71 @@ import { solana as solanaMainnet } from "@reown/appkit/networks";
 // ── Privy (social / email login with embedded Solana wallet) ─────────────────
 import { PrivyProvider, usePrivy, useWallets, useSolanaWallets } from "@privy-io/react-auth";
 
+// ── Firebase — tool progress persistence (keyed by wallet address, no personal data) ──
+import { initializeApp, getApps } from "firebase/app";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteField } from "firebase/firestore";
+
+const _fbConfig = {
+  apiKey: "AIzaSyDzpj9sEoB04R91F0Qf8JjwADC_5HGaPW8",
+  authDomain: "chatfi-63a83.firebaseapp.com",
+  databaseURL: "https://chatfi-63a83-default-rtdb.firebaseio.com",
+  projectId: "chatfi-63a83",
+  storageBucket: "chatfi-63a83.firebasestorage.app",
+  messagingSenderId: "727945607965",
+  appId: "1:727945607965:web:a510cc96b210ac883c3ff4",
+};
+const _fbApp = getApps().length ? getApps()[0] : initializeApp(_fbConfig);
+const _db    = getFirestore(_fbApp);
+
+// Tool-progress fields stored per wallet doc in "chatfi_users/{walletAddress}"
+// Fields: yieldvault, yieldvault_stats, yieldvault_log, alerts, volmon, journal
+// No emails, no names — wallet address is the only identifier (public on-chain data).
+
+const _userDoc = (wallet) => doc(_db, "chatfi_users", wallet);
+
+/** Read all tool-progress fields for a wallet from Firestore.
+ *  Returns an object with whatever fields exist, or {} on error. */
+async function fsLoad(wallet) {
+  if (!wallet) return {};
+  try {
+    const snap = await getDoc(_userDoc(wallet));
+    return snap.exists() ? snap.data() : {};
+  } catch { return {}; }
+}
+
+/** Write one or more fields to the wallet doc (merge, no overwrite of others).
+ *  fieldMap = { yieldvault: {...}, alerts: [...], ... }  — call fire-and-forget */
+async function fsSave(wallet, fieldMap) {
+  if (!wallet || !fieldMap) {
+    const d = document.createElement("div");
+    d.style = "position:fixed;bottom:20px;left:20px;background:#f59e0b;color:#000;padding:8px 14px;border-radius:8px;z-index:99999;font-size:13px;";
+    d.textContent = "⚠️ fsSave skipped: wallet=" + wallet;
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 5000);
+    return;
+  }
+  try {
+    await setDoc(_userDoc(wallet), fieldMap, { merge: true });
+    const d = document.createElement("div");
+    d.style = "position:fixed;bottom:20px;left:20px;background:#10b981;color:#fff;padding:8px 14px;border-radius:8px;z-index:99999;font-size:13px;";
+    d.textContent = "✅ Firebase write OK: " + Object.keys(fieldMap).join(", ");
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 4000);
+  } catch(e) {
+    const d = document.createElement("div");
+    d.style = "position:fixed;bottom:20px;left:20px;background:#ef4444;color:#fff;padding:8px 14px;border-radius:8px;z-index:99999;font-size:13px;";
+    d.textContent = "❌ Firebase error: " + e.message;
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 8000);
+  }
+}
+
+/** Delete one field from the wallet doc */
+async function fsDel(wallet, field) {
+  if (!wallet || !field) return;
+  try { await updateDoc(_userDoc(wallet), { [field]: deleteField() }); } catch {}
+}
+
 // ── Plugins (add new feature files here) ─────────────────────────────────────
 // import ExamplePlugin, { suggestionGroup as exampleSuggestions } from "./plugins/ExamplePlugin";
 // To activate: 1) uncomment import above  2) add exampleSuggestions to PLUGIN_SUGGESTION_GROUPS below
@@ -2955,17 +3020,79 @@ function JupChatInner() {
       setPriceAlerts([]); setVolMonitors([]); setTradeJournal([]);
       return;
     }
-    const load = (key, fallback) => { try { return JSON.parse(localStorage.getItem(`${key}-${walletFull}`) || fallback); } catch { return JSON.parse(fallback); } };
-    // Yield vault
-    const v  = load("chatfi-yieldvault", "null");
-    const s  = load("chatfi-yieldvault-stats", "null");
-    const lg = load("chatfi-yieldvault-log", "[]");
-    setYieldVault(v); setYieldVaultStats(s); setYieldVaultLog(lg);
-    if (v?.status === "active") startYieldVaultLoop(v, s);
-    // Per-wallet user data
-    setPriceAlerts(load("chatfi-alerts", "[]"));
-    setVolMonitors(load("chatfi-volmon", "[]"));
-    setTradeJournal(load("chatfi-journal", "[]"));
+    const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(`${key}-${walletFull}`) || fallback); } catch { return JSON.parse(fallback); } };
+    // ── Load tool progress: Firestore first, localStorage as fallback ──────────
+    (async () => {
+      const remote = await fsLoad(walletFull);
+      // Helper: prefer Firestore value, fall back to localStorage
+      const pick = (fsField, lsKey, fallback) => {
+        if (remote[fsField] !== undefined) return remote[fsField];
+        return loadLocal(lsKey, fallback);
+      };
+      const v  = pick("yieldvault",       "chatfi-yieldvault",       "null");
+      const s  = pick("yieldvault_stats", "chatfi-yieldvault-stats", "null");
+      const lg = pick("yieldvault_log",   "chatfi-yieldvault-log",   "[]");
+      setYieldVault(v); setYieldVaultStats(s); setYieldVaultLog(lg);
+      // Also load alerts / volmon / journal from remote
+      const alerts  = pick("alerts",  "chatfi-alerts",  "[]");
+      const volmon  = pick("volmon",  "chatfi-volmon",  "[]");
+      const journal = pick("journal", "chatfi-journal", "[]");
+      setPriceAlerts(alerts); setVolMonitors(volmon); setTradeJournal(journal);
+      if (v?.status === "active") {
+        startYieldVaultLoop(v, s);
+      } else if (!v) {
+      // No local vault found (cache was cleared). Scan on-chain Jupiter Lend
+      // positions and auto-restore vault state if funds are still there.
+      (async () => {
+        try {
+          const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+          const earnRaw = await earnRes.json();
+          let earnArr = Array.isArray(earnRaw) ? earnRaw
+            : earnRaw?.data || earnRaw?.positions
+            || Object.values(earnRaw).flatMap(x => Array.isArray(x) ? x : []);
+          if (!Array.isArray(earnArr)) earnArr = [];
+          const TRACKED = ["USDC", "SOL", "JLP"];
+          for (const e of earnArr) {
+            const tok = e.token || e.asset || {};
+            const sym = (tok.symbol || e.assetSymbol || "").toUpperCase();
+            if (!TRACKED.includes(sym)) continue;
+            const dec    = tok.decimals ?? 6;
+            const ub     = parseFloat(e.underlyingBalance || 0);
+            const ua     = parseFloat(e.underlyingAssets || e.amount || 0);
+            const amount = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
+            if (amount < 1) continue;
+            // Found a live on-chain position — rebuild vault state
+            const apy = parseFloat(e.apy || e.supplyApy || 0.05);
+            const restored = {
+              depositAmount: amount,
+              depositToken: sym,
+              minEdge: 8, maxBet: 5, category: null,
+              vaultMode: "predict", dcaToken: "SOL", dcaThreshold: 5,
+              depositedAt: Date.now(),
+              earnApy: apy,
+              status: "active",
+              txSig: null,
+              _restored: true,
+            };
+            const restoredStats = { accrued: 0, betsPlaced: 0, winningsRecycled: 0, currentApy: apy, lastScanAt: null };
+            const restoredLog   = [{ ts: Date.now(), type: "restore", detail: `Vault auto-restored: ${amount.toFixed(4)} ${sym} found in Jupiter Lend` }];
+            setYieldVault(restored);
+            setYieldVaultStats(restoredStats);
+            setYieldVaultLog(restoredLog);
+            try {
+              localStorage.setItem(`chatfi-yieldvault-${walletFull}`, JSON.stringify(restored));
+              localStorage.setItem(`chatfi-yieldvault-stats-${walletFull}`, JSON.stringify(restoredStats));
+              localStorage.setItem(`chatfi-yieldvault-log-${walletFull}`, JSON.stringify(restoredLog));
+            } catch {}
+            fsSave(walletFull, { yieldvault: restored, yieldvault_stats: restoredStats, yieldvault_log: restoredLog });
+            startYieldVaultLoop(restored, restoredStats);
+            push("ai", `🔄 **Vault Restored** — Found **${amount.toFixed(4)} ${sym}** in Jupiter Lend from a previous session. Your Yield Vault is active again.\n\nSettings reset to defaults (edge ≥8%, max $5/bet). Tap **Vault Status** to reconfigure.`);
+            break; // restore only the first/primary position
+          }
+        } catch {}
+      })();
+    }
+    })(); // end outer async load IIFE
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletFull]);
 
@@ -3159,6 +3286,7 @@ function JupChatInner() {
     setTradeJournal(prev => {
       const next = [record, ...prev].slice(0, 300);
       try { localStorage.setItem(`chatfi-journal-${walletFull||"anon"}`, JSON.stringify(next)); } catch {}
+      fsSave(walletFull||"anon", { journal: next });
       return next;
     });
   };
@@ -3186,6 +3314,7 @@ function JupChatInner() {
         });
         setPriceAlerts(updated);
         try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+        fsSave(walletFull||"anon", { alerts: updated });
       } catch {}
     }, 30000);
     return () => clearInterval(alertIntervalRef.current);
@@ -3324,6 +3453,7 @@ function JupChatInner() {
         if (changed) {
           setVolMonitors(nextMonitors);
           try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(nextMonitors)); } catch {}
+          fsSave(walletFull||"anon", { volmon: nextMonitors });
         }
       } catch (e) {
         console.warn("[ChatFi] Volatility monitor tick error:", e);
@@ -4896,7 +5026,8 @@ function JupChatInner() {
         }
       });
       setEarnUserPositions(map);
-    } catch {}
+      return map;
+    } catch { return {}; }
   };
 
   // ── Yield-Gated Prediction Vault — helpers & engine ──────────────────────────
@@ -4936,14 +5067,18 @@ function JupChatInner() {
 
   const saveYieldVault = (vaultData, statsData) => {
     const addr = walletFull; if (!addr) return;
+    const fsFields = {};
     try {
-      if (vaultData !== undefined) localStorage.setItem(vaultKey(addr), JSON.stringify(vaultData));
-      if (statsData !== undefined) localStorage.setItem(vaultStatsKey(addr), JSON.stringify(statsData));
+      if (vaultData  !== undefined) { localStorage.setItem(vaultKey(addr), JSON.stringify(vaultData));  fsFields.yieldvault       = vaultData;  }
+      if (statsData  !== undefined) { localStorage.setItem(vaultStatsKey(addr), JSON.stringify(statsData)); fsFields.yieldvault_stats = statsData; }
     } catch {}
+    if (Object.keys(fsFields).length) fsSave(addr, fsFields);
   };
   const saveYieldVaultLog = (log) => {
     const addr = walletFull; if (!addr) return;
-    try { localStorage.setItem(vaultLogKey(addr), JSON.stringify(log.slice(0, 50))); } catch {}
+    const trimmed = log.slice(0, 50);
+    try { localStorage.setItem(vaultLogKey(addr), JSON.stringify(trimmed)); } catch {}
+    fsSave(addr, { yieldvault_log: trimmed });
   };
 
   const estimateAccruedYield = (vault, stats) => {
@@ -5281,6 +5416,7 @@ function JupChatInner() {
     setYieldVaultStats(null);
     setYieldVaultLog([]);
     try { localStorage.removeItem("yieldVault"); localStorage.removeItem("yieldVaultStats"); localStorage.removeItem("yieldVaultLog"); } catch {}
+    if (walletFull) { fsSave(walletFull, { yieldvault: null, yieldvault_stats: null, yieldvault_log: [] }); }
     // 4. Close the panel
     setShowYieldVault(false);
     push("ai", "**Yield Vault cancelled.** Fetching your Earn position so you can withdraw your principal…");
@@ -9220,6 +9356,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const updated = [...priceAlerts, newAlert];
           setPriceAlerts(updated);
           try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+          fsSave(walletFull||"anon", { alerts: updated });
           push("ai", text + `\n\nAlert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**\nI'll notify you in chat when it triggers. You can set multiple alerts.`);
         }
 
@@ -9255,6 +9392,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const updated = [...volMonitors, newMon];
           setVolMonitors(updated);
           try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+          fsSave(walletFull||"anon", { volmon: updated });
           const fmtThreshold = isVol ? `**${threshold}%** rolling std-dev · 10-sample window`
             : triggerType === "mc"          ? `MC ${condition} **$${(thresholdValue/1e9).toFixed(2)}B**`
             : triggerType === "volume"      ? `24h volume ${condition} **$${(thresholdValue/1e6).toFixed(2)}M**`
@@ -10111,6 +10249,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               const updated = [...priceAlerts, newAlert];
               setPriceAlerts(updated);
               try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+              fsSave(walletFull||"anon", { alerts: updated });
               push("ai", `🔔 Alert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**`);
 
             // ── SHOW_TRADE_JOURNAL ──────────────────────────────────────────────
@@ -13049,12 +13188,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               const updated = volMonitors.filter(m => m.id !== id);
               setVolMonitors(updated);
               try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+              fsSave(walletFull||"anon", { volmon: updated });
             };
             const resetMon = (id) => {
               priceHistoryRef.current = { ...priceHistoryRef.current };
               const updated = volMonitors.map(m => m.id === id ? { ...m, triggered: false } : m);
               setVolMonitors(updated);
               try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+              fsSave(walletFull||"anon", { volmon: updated });
             };
             const VolCard = ({ mon }) => {
               const hist   = priceHistoryRef.current[mon.token] || [];
@@ -13190,6 +13331,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         setVolMonitors([]);
                         priceHistoryRef.current = {};
                         try { localStorage.removeItem(`chatfi-volmon-${walletFull||"anon"}`); } catch {}
+                        fsSave(walletFull||"anon", { volmon: [] });
                       }
                     }} className="hov-btn"
                       style={{ fontSize:11, padding:"4px 10px", background:"transparent", border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, cursor:"pointer" }}>
@@ -14398,7 +14540,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             <span style={{ fontSize:12, color:T.text2 }}>
               <strong>{priceAlerts.filter(a=>!a.triggered).length}</strong> active alert{priceAlerts.filter(a=>!a.triggered).length>1?"s":""}: {priceAlerts.filter(a=>!a.triggered).map(a=>`${a.token} ${a.condition} $${a.target.toLocaleString()}`).join(" · ")}
             </span>
-            <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`,JSON.stringify(cleared));}catch{} }}
+            <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`,JSON.stringify(cleared));}catch{} fsSave(walletFull||"anon",{alerts:cleared}); }}
               style={{ background:"none", border:"none", color:T.text3, fontSize:12, cursor:"pointer", flexShrink:0 }}>Clear all</button>
           </div>
         )}
