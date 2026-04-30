@@ -179,9 +179,16 @@ export default function ChatFi() {
       }
       if (action === "AI_CHAT") {
         try {
-          const res  = await fetch("https://api.anthropic.com/v1/messages", {
-            method:"POST", headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:SYSTEM_PROMPT, messages:history }),
+          // ── FIX: Call your Vercel API route instead of Anthropic directly ──
+          const res = await fetch("/api/claude", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "claude-sonnet-4-5",
+              max_tokens: 1000,
+              system: SYSTEM_PROMPT,
+              messages: history,
+            }),
           });
           const data  = await res.json();
           const txt   = data.content?.find(b => b.type==="text")?.text || "";
