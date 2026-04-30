@@ -1991,7 +1991,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
   const usdcVault = earnVaults?.find(v => v.token?.toUpperCase() === "USDC");
   const usdcPos   = earnUserPositions?.["USDC"];
   const ageDays   = vault ? Math.floor((Date.now() - vault.depositedAt) / 86400000) : 0;
-  const apy       = vault?.earnApy ? (vault.earnApy * 100).toFixed(2) : usdcVault?.apy ? (usdcVault.apy * 100).toFixed(2) : "?";
+  const apy       = vault?.earnApy ? vault.earnApy.toFixed(2) : usdcVault?.apy ? usdcVault.apy.toFixed(2) : "?";
   const accruedEst = vault ? Math.max(0, vault.depositAmount * (vault.earnApy||0.05) * ((Date.now()-vault.depositedAt)/(365*24*3600*1000)) - (vaultStats?.betsPlaced||0)*vault.maxBet*0.5) : 0;
 
   // SVG icon components — no emojis
@@ -9218,7 +9218,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         } else {
           const accrued = estimateAccruedYield(yieldVault, yieldVaultStats);
           const stats   = yieldVaultStats || {};
-          const apy     = yieldVault.earnApy ? (yieldVault.earnApy * 100).toFixed(2) : "?";
+          const apy     = yieldVault.earnApy ? yieldVault.earnApy.toFixed(2) : "?";
           const ageDays = Math.floor((Date.now() - yieldVault.depositedAt) / 86400000);
           const isHistoryQuery = /history|activity|log|auto.?bet|what.*done|bets/i.test(input);
           const logEntries = yieldVaultLog || [];
