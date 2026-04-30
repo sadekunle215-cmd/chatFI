@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { T } from "../../constants";
-import { jupFetch } from "../../utils/solana";
-import { SvgClose } from "../icons/Icons";
+import { T } from "../constants";
+import { jupFetch } from "../utils/solana";
+import { SvgClose } from "./Icons";
 
 const ORDER_TYPES = [
   { id: "single", label: "Limit",  desc: "Buy or sell at a specific price" },

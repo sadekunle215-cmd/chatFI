@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { T } from "../../constants";
-import { jupFetch, fmtNum, fmtPrice } from "../../utils/solana";
-import { SvgClose, SvgBarChart } from "../icons/Icons";
+import { T } from "../constants";
+import { jupFetch, fmtNum, fmtPrice } from "../utils/solana";
+import { SvgClose, SvgBarChart } from "./Icons";
 
 // ── PortfolioPanel ─────────────────────────────────────────────────────────────
 // Full portfolio view: token balances, earn positions, open orders, locks.

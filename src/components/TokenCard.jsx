@@ -1,6 +1,6 @@
-import { T } from "../../constants";
-import { fmtNum, fmtPrice } from "../../utils/solana";
-import { SvgClose, SvgTwitterX, SvgDiscord, SvgTelegram, SvgLink } from "../icons/Icons";
+import { T } from "../constants";
+import { fmtNum, fmtPrice } from "../utils/solana";
+import { SvgClose, SvgTwitterX, SvgDiscord, SvgTelegram, SvgLink } from "./Icons";
 
 // ── TokenCard ──────────────────────────────────────────────────────────────────
 // Full token deep-dive card: price, stats, social links, audit info.

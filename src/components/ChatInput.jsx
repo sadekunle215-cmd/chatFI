@@ -1,6 +1,6 @@
 import { useRef } from "react";
-import { T, SUGGESTION_GROUPS } from "../../constants";
-import { SvgSend } from "../icons/Icons";
+import { T, SUGGESTION_GROUPS } from "../constants";
+import { SvgSend } from "./Icons";
 
 // ── ChatInput ─────────────────────────────────────────────────────────────────
 // Bottom input bar with send button and collapsible suggestion chips.

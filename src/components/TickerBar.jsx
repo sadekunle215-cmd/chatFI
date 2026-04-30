@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { jupFetch, fmtPrice } from "../../utils/solana";
-import { JUP_TOKEN_CAT } from "../../constants";
+import { jupFetch, fmtPrice } from "../utils/solana";
+import { JUP_TOKEN_CAT } from "../constants";
 
 // ── TickerBar ─────────────────────────────────────────────────────────────────
 // Scrolling horizontal ticker showing trending token prices.

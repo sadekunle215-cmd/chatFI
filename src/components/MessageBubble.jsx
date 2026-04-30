@@ -1,5 +1,5 @@
-import { T } from "../../constants";
-import { fmt } from "../../utils/solana";
+import { T } from "../constants";
+import { fmt } from "../utils/solana";
 
 // ── MessageBubble ─────────────────────────────────────────────────────────────
 // Renders a single chat message — either user or AI.

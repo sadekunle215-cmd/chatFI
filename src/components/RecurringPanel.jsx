@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { T } from "../../constants";
-import { jupFetch } from "../../utils/solana";
-import { SvgClose } from "../icons/Icons";
+import { T } from "../constants";
+import { jupFetch } from "../utils/solana";
+import { SvgClose } from "./Icons";
 
 const CYCLES = [
   { id: "every_minute", label: "Every Minute (test)" },

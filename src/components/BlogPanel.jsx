@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { T } from "../../constants";
-import { BLOG_POSTS } from "../../constants/blogPosts";
-import { SvgClose, SvgBlog } from "../icons/Icons";
+import { T } from "../constants";
+import { BLOG_POSTS } from "../constants/blogPosts";
+import { SvgClose, SvgBlog } from "./Icons";
 
 // ── BlogPanel ──────────────────────────────────────────────────────────────────
 export default function BlogPanel({ show, onClose }) {

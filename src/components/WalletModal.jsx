@@ -1,5 +1,5 @@
-import { T } from "../../constants";
-import { SvgWallet, SvgClose } from "../icons/Icons";
+import { T } from "../constants";
+import { SvgWallet, SvgClose } from "./Icons";
 
 // ── WalletModal ───────────────────────────────────────────────────────────────
 // Modal showing available wallets to connect. Supports:
