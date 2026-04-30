@@ -10,6 +10,59 @@ import { solana as solanaMainnet } from "@reown/appkit/networks";
 // ── Privy (social / email login with embedded Solana wallet) ─────────────────
 import { PrivyProvider, usePrivy, useWallets, useSolanaWallets } from "@privy-io/react-auth";
 
+// ── Firebase — tool progress persistence (keyed by wallet address, no personal data) ──
+import { initializeApp, getApps } from "firebase/app";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteField } from "firebase/firestore";
+
+const _fbConfig = {
+  apiKey: "AIzaSyDzpj9sEoB04R91F0Qf8JjwADC_5HGaPW8",
+  authDomain: "chatfi-63a83.firebaseapp.com",
+  databaseURL: "https://chatfi-63a83-default-rtdb.firebaseio.com",
+  projectId: "chatfi-63a83",
+  storageBucket: "chatfi-63a83.firebasestorage.app",
+  messagingSenderId: "727945607965",
+  appId: "1:727945607965:web:a510cc96b210ac883c3ff4",
+};
+const _fbApp = getApps().length ? getApps()[0] : initializeApp(_fbConfig);
+const _db    = getFirestore(_fbApp);
+
+// Tool-progress fields stored per wallet doc in "chatfi_users/{walletAddress}"
+// Fields: yieldvault, yieldvault_stats, yieldvault_log, alerts, volmon, journal
+// No emails, no names — wallet address is the only identifier (public on-chain data).
+
+const _userDoc = (wallet) => doc(_db, "chatfi_users", wallet);
+
+/** Read all tool-progress fields for a wallet from Firestore.
+ *  Returns an object with whatever fields exist, or {} on error. */
+async function fsLoad(wallet) {
+  if (!wallet) return {};
+  try {
+    const snap = await getDoc(_userDoc(wallet));
+    return snap.exists() ? snap.data() : {};
+  } catch { return {}; }
+}
+
+/** Write one or more fields to the wallet doc (merge, no overwrite of others).
+ *  fieldMap = { yieldvault: {...}, alerts: [...], ... }  — call fire-and-forget */
+async function fsSave(wallet, fieldMap) {
+  if (!wallet || !fieldMap) {
+    alert("⚠️ fsSave skipped: wallet=" + wallet);
+    return;
+  }
+  try {
+    await setDoc(_userDoc(wallet), fieldMap, { merge: true });
+    alert("✅ Firebase write OK: " + Object.keys(fieldMap).join(", "));
+  } catch(e) {
+    alert("❌ Firebase error: " + e.message);
+  }
+}
+
+/** Delete one field from the wallet doc */
+async function fsDel(wallet, field) {
+  if (!wallet || !field) return;
+  try { await updateDoc(_userDoc(wallet), { [field]: deleteField() }); } catch {}
+}
+
 // ── Plugins (add new feature files here) ─────────────────────────────────────
 // import ExamplePlugin, { suggestionGroup as exampleSuggestions } from "./plugins/ExamplePlugin";
 // To activate: 1) uncomment import above  2) add exampleSuggestions to PLUGIN_SUGGESTION_GROUPS below
@@ -1978,7 +2031,7 @@ function JupChatWithLanding() {
 }
 
 // ─── Yield-Gated Prediction Vault Panel ───────────────────────────────────────
-function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setCfg, onDeposit, onToggle, onWithdraw, onUpdateVault, earnVaults, earnUserPositions, isBetting, walletFull }) {
+function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setCfg, onDeposit, onToggle, onWithdraw, onCancel, onUpdateVault, earnVaults, earnUserPositions, isBetting, walletFull }) {
   if (!open) return null;
   const T = { bg:"#0d1117", surface:"#161e27", border:"#1e2d3d", text1:"#e8f4f0", text2:"#8fa8b8", text3:"#4d6a7a", accent:"#c7f284", accentBg:"#1a2e1a", green:"#c7f284", purple:"#a78bfa", purpleBg:"#1e1a2e", teal:"#38bdf8" };
   const [editingCfg, setEditingCfg] = useState(false);
@@ -2223,6 +2276,12 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                   <IcUpload/> Withdraw All
                 </button>
               </div>
+              {onCancel && (
+                <button onClick={onCancel} style={{ width:"100%", padding:"9px 0", marginBottom:12, borderRadius:10, border:"1px solid #6b21a840", background:"#1c1028", color:"#c084fc", fontSize:12, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                  Cancel Vault &amp; Withdraw Principal
+                </button>
+              )}
               {vaultLog?.length>0&&(
                 <div style={{ marginBottom:12 }}>
                   <div style={{ fontSize:10, fontWeight:700, color:T.text3, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:8 }}>Activity</div>
@@ -2949,17 +3008,79 @@ function JupChatInner() {
       setPriceAlerts([]); setVolMonitors([]); setTradeJournal([]);
       return;
     }
-    const load = (key, fallback) => { try { return JSON.parse(localStorage.getItem(`${key}-${walletFull}`) || fallback); } catch { return JSON.parse(fallback); } };
-    // Yield vault
-    const v  = load("chatfi-yieldvault", "null");
-    const s  = load("chatfi-yieldvault-stats", "null");
-    const lg = load("chatfi-yieldvault-log", "[]");
-    setYieldVault(v); setYieldVaultStats(s); setYieldVaultLog(lg);
-    if (v?.status === "active") startYieldVaultLoop(v, s);
-    // Per-wallet user data
-    setPriceAlerts(load("chatfi-alerts", "[]"));
-    setVolMonitors(load("chatfi-volmon", "[]"));
-    setTradeJournal(load("chatfi-journal", "[]"));
+    const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(`${key}-${walletFull}`) || fallback); } catch { return JSON.parse(fallback); } };
+    // ── Load tool progress: Firestore first, localStorage as fallback ──────────
+    (async () => {
+      const remote = await fsLoad(walletFull);
+      // Helper: prefer Firestore value, fall back to localStorage
+      const pick = (fsField, lsKey, fallback) => {
+        if (remote[fsField] !== undefined) return remote[fsField];
+        return loadLocal(lsKey, fallback);
+      };
+      const v  = pick("yieldvault",       "chatfi-yieldvault",       "null");
+      const s  = pick("yieldvault_stats", "chatfi-yieldvault-stats", "null");
+      const lg = pick("yieldvault_log",   "chatfi-yieldvault-log",   "[]");
+      setYieldVault(v); setYieldVaultStats(s); setYieldVaultLog(lg);
+      // Also load alerts / volmon / journal from remote
+      const alerts  = pick("alerts",  "chatfi-alerts",  "[]");
+      const volmon  = pick("volmon",  "chatfi-volmon",  "[]");
+      const journal = pick("journal", "chatfi-journal", "[]");
+      setPriceAlerts(alerts); setVolMonitors(volmon); setTradeJournal(journal);
+      if (v?.status === "active") {
+        startYieldVaultLoop(v, s);
+      } else if (!v) {
+      // No local vault found (cache was cleared). Scan on-chain Jupiter Lend
+      // positions and auto-restore vault state if funds are still there.
+      (async () => {
+        try {
+          const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+          const earnRaw = await earnRes.json();
+          let earnArr = Array.isArray(earnRaw) ? earnRaw
+            : earnRaw?.data || earnRaw?.positions
+            || Object.values(earnRaw).flatMap(x => Array.isArray(x) ? x : []);
+          if (!Array.isArray(earnArr)) earnArr = [];
+          const TRACKED = ["USDC", "SOL", "JLP"];
+          for (const e of earnArr) {
+            const tok = e.token || e.asset || {};
+            const sym = (tok.symbol || e.assetSymbol || "").toUpperCase();
+            if (!TRACKED.includes(sym)) continue;
+            const dec    = tok.decimals ?? 6;
+            const ub     = parseFloat(e.underlyingBalance || 0);
+            const ua     = parseFloat(e.underlyingAssets || e.amount || 0);
+            const amount = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
+            if (amount < 1) continue;
+            // Found a live on-chain position — rebuild vault state
+            const apy = parseFloat(e.apy || e.supplyApy || 0.05);
+            const restored = {
+              depositAmount: amount,
+              depositToken: sym,
+              minEdge: 8, maxBet: 5, category: null,
+              vaultMode: "predict", dcaToken: "SOL", dcaThreshold: 5,
+              depositedAt: Date.now(),
+              earnApy: apy,
+              status: "active",
+              txSig: null,
+              _restored: true,
+            };
+            const restoredStats = { accrued: 0, betsPlaced: 0, winningsRecycled: 0, currentApy: apy, lastScanAt: null };
+            const restoredLog   = [{ ts: Date.now(), type: "restore", detail: `Vault auto-restored: ${amount.toFixed(4)} ${sym} found in Jupiter Lend` }];
+            setYieldVault(restored);
+            setYieldVaultStats(restoredStats);
+            setYieldVaultLog(restoredLog);
+            try {
+              localStorage.setItem(`chatfi-yieldvault-${walletFull}`, JSON.stringify(restored));
+              localStorage.setItem(`chatfi-yieldvault-stats-${walletFull}`, JSON.stringify(restoredStats));
+              localStorage.setItem(`chatfi-yieldvault-log-${walletFull}`, JSON.stringify(restoredLog));
+            } catch {}
+            fsSave(walletFull, { yieldvault: restored, yieldvault_stats: restoredStats, yieldvault_log: restoredLog });
+            startYieldVaultLoop(restored, restoredStats);
+            push("ai", `🔄 **Vault Restored** — Found **${amount.toFixed(4)} ${sym}** in Jupiter Lend from a previous session. Your Yield Vault is active again.\n\nSettings reset to defaults (edge ≥8%, max $5/bet). Tap **Vault Status** to reconfigure.`);
+            break; // restore only the first/primary position
+          }
+        } catch {}
+      })();
+    }
+    })(); // end outer async load IIFE
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletFull]);
 
@@ -3153,6 +3274,7 @@ function JupChatInner() {
     setTradeJournal(prev => {
       const next = [record, ...prev].slice(0, 300);
       try { localStorage.setItem(`chatfi-journal-${walletFull||"anon"}`, JSON.stringify(next)); } catch {}
+      fsSave(walletFull||"anon", { journal: next });
       return next;
     });
   };
@@ -3180,6 +3302,7 @@ function JupChatInner() {
         });
         setPriceAlerts(updated);
         try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+        fsSave(walletFull||"anon", { alerts: updated });
       } catch {}
     }, 30000);
     return () => clearInterval(alertIntervalRef.current);
@@ -3318,6 +3441,7 @@ function JupChatInner() {
         if (changed) {
           setVolMonitors(nextMonitors);
           try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(nextMonitors)); } catch {}
+          fsSave(walletFull||"anon", { volmon: nextMonitors });
         }
       } catch (e) {
         console.warn("[ChatFi] Volatility monitor tick error:", e);
@@ -4890,7 +5014,8 @@ function JupChatInner() {
         }
       });
       setEarnUserPositions(map);
-    } catch {}
+      return map;
+    } catch { return {}; }
   };
 
   // ── Yield-Gated Prediction Vault — helpers & engine ──────────────────────────
@@ -4930,14 +5055,18 @@ function JupChatInner() {
 
   const saveYieldVault = (vaultData, statsData) => {
     const addr = walletFull; if (!addr) return;
+    const fsFields = {};
     try {
-      if (vaultData !== undefined) localStorage.setItem(vaultKey(addr), JSON.stringify(vaultData));
-      if (statsData !== undefined) localStorage.setItem(vaultStatsKey(addr), JSON.stringify(statsData));
+      if (vaultData  !== undefined) { localStorage.setItem(vaultKey(addr), JSON.stringify(vaultData));  fsFields.yieldvault       = vaultData;  }
+      if (statsData  !== undefined) { localStorage.setItem(vaultStatsKey(addr), JSON.stringify(statsData)); fsFields.yieldvault_stats = statsData; }
     } catch {}
+    if (Object.keys(fsFields).length) fsSave(addr, fsFields);
   };
   const saveYieldVaultLog = (log) => {
     const addr = walletFull; if (!addr) return;
-    try { localStorage.setItem(vaultLogKey(addr), JSON.stringify(log.slice(0, 50))); } catch {}
+    const trimmed = log.slice(0, 50);
+    try { localStorage.setItem(vaultLogKey(addr), JSON.stringify(trimmed)); } catch {}
+    fsSave(addr, { yieldvault_log: trimmed });
   };
 
   const estimateAccruedYield = (vault, stats) => {
@@ -5258,6 +5387,64 @@ function JupChatInner() {
     });
   };
 
+  // ── Cancel Vault — stops everything and clears state ─────────────────────────
+  // Unlike Pause (keeps vault alive), Cancel fully tears down the vault:
+  // stops intervals, clears all vault state, then kicks off the Earn withdraw flow
+  // so the user gets their principal back.
+  const cancelYieldVault = async () => {
+    // 1. Stop the loop and sweep intervals immediately
+    if (yieldVaultIntervalRef.current) { clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null; }
+    if (yieldVaultSweepRef.current)    { clearInterval(yieldVaultSweepRef.current);    yieldVaultSweepRef.current    = null; }
+    // 2. Capture the deposit token before clearing state (needed for earn position lookup)
+    const depositToken = (yieldVault?.depositToken || "USDC").toUpperCase();
+    const KNOWN_MINTS = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
+    const targetMint = KNOWN_MINTS[depositToken] || null;
+    // 3. Clear vault state and persisted storage
+    setYieldVault(null);
+    setYieldVaultStats(null);
+    setYieldVaultLog([]);
+    try { localStorage.removeItem("yieldVault"); localStorage.removeItem("yieldVaultStats"); localStorage.removeItem("yieldVaultLog"); } catch {}
+    if (walletFull) { fsSave(walletFull, { yieldvault: null, yieldvault_stats: null, yieldvault_log: [] }); }
+    // 4. Close the panel
+    setShowYieldVault(false);
+    push("ai", "**Yield Vault cancelled.** Fetching your Earn position so you can withdraw your principal…");
+    // 5. Fetch earn position and open withdraw modal
+    if (!walletFull) { push("ai", "Connect your wallet to withdraw."); return; }
+    try {
+      const posRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+      const posRaw = await posRes.json();
+      let posArr = Array.isArray(posRaw) ? posRaw : [];
+      if (!posArr.length) {
+        const vals = Object.values(posRaw);
+        posArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
+      }
+      if (!posArr.length) posArr = posRaw?.data || posRaw?.positions || posRaw?.items || [];
+      let found = null;
+      for (const entry of posArr) {
+        const underlyingTok = entry.asset || entry.underlyingToken || {};
+        const mint = entry.assetMint || underlyingTok.address || entry.mint || null;
+        const rawSym = underlyingTok.symbol || entry.assetSymbol || "";
+        const sym = rawSym ? rawSym.toUpperCase() : (entry.token?.symbol || "").replace(/^jl/i, "").toUpperCase();
+        const dec = underlyingTok.decimals ?? entry.token?.decimals ?? 6;
+        const rawStr = entry.underlyingAssets || "0";
+        const rawInt = parseFloat(rawStr);
+        const humanBalance = parseFloat(entry.underlyingBalance || 0);
+        if ((!targetMint || mint !== targetMint) && sym !== depositToken) continue;
+        if (!mint || (rawInt <= 0 && parseFloat(entry.shares || 0) <= 0)) continue;
+        const humanAmt = humanBalance > 0 ? humanBalance : (rawInt > 1e6 ? rawInt / Math.pow(10, dec) : rawInt);
+        found = { assetMint: mint, decimals: dec, rawAmount: rawStr, humanAmount: humanAmt, shares: entry.shares || "0", symbol: sym || depositToken, name: underlyingTok.name || `Jupiter Lend ${sym || depositToken}` };
+        break;
+      }
+      if (!found) { push("ai", "No open Earn position found. Funds may already be in your wallet."); return; }
+      setEarnUserPositions(prev => ({ ...prev, [found.symbol]: { amount: found.humanAmount, amountRaw: parseFloat(found.rawAmount), shares: parseFloat(found.shares), decimals: found.decimals } }));
+      setEarnWithdraw({ vault: { name: found.name, token: found.symbol, assetMint: found.assetMint, assetDecimals: found.decimals }, amount: found.humanAmount.toFixed(found.decimals), positionAmount: found.humanAmount, isYieldVaultClose: false });
+      setShowEarnWithdraw(true);
+      push("ai", `Ready to withdraw **${found.humanAmount.toFixed(4)} ${found.symbol}** from Jupiter Earn. Select an amount below.`);
+    } catch (err) {
+      push("ai", `Failed to fetch Earn position: ${err?.message || "Unknown"}. Please withdraw manually at jup.ag/lend.`);
+    }
+  };
+
   const updateYieldVaultCfg = ({ minEdge, maxBet }) => {
     setYieldVault(prev => {
       if (!prev) return prev;
@@ -5269,62 +5456,115 @@ function JupChatInner() {
   };
 
   const withdrawYieldVault = async () => {
-    // ── Ensure vaults are loaded ──────────────────────────────────────────────
-    if (!earnVaults.length) await fetchEarnVaults();
-    const usdcVault = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
-    if (!usdcVault) {
-      push("ai", "Could not find USDC Earn vault. Try refreshing.");
-      return;
-    }
+    if (!walletFull) { push("ai", "Connect your wallet first to withdraw."); return; }
 
-    // ── Fetch positions FRESH directly — don't rely on stale React state ──────
-    // earnUserPositions state may not have updated yet (React setState is async),
-    // so we fetch the positions endpoint directly here and bypass the stale map.
-    let pos = null;
+    push("ai", "Fetching your Jupiter Earn position…");
+
+    // ── Step 1: Fetch the live position directly from the Jupiter Earn API ────
+    // MUST use direct fetch() — jupFetch proxy strips/transforms the earn response.
+    // Use ?wallets= (not ?users=) — that is the correct query param for this endpoint.
+    // Jupiter API shape: [{ token: { address, symbol, decimals }, assetMint, asset: { symbol, decimals },
+    //                        shares, underlyingAssets, underlyingBalance }]
+    // • token.symbol may be "Earn" (jlToken name) — do NOT rely on it for asset matching
+    // • assetMint (top-level) = real underlying mint (preferred)
+    // • asset.symbol = real underlying symbol (e.g. "USDC")
+    // • underlyingAssets = raw integer balance string
+    // • underlyingBalance = human-readable float
+    let livePosition = null;
     try {
-      const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-      const earnRaw = await earnRes.json();
-      let earnArr = Array.isArray(earnRaw) ? earnRaw
-        : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
-        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || null;
-      if (!Array.isArray(earnArr) || earnArr.length === 0) {
-        const vals = Object.values(earnRaw);
-        const flat = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
-        if (flat.length > 0) earnArr = flat;
-        else if (!Array.isArray(earnArr)) earnArr = [];
+      const posRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+      const posRaw = await posRes.json();
+      // Response may be array, wallet-keyed object, or wrapped
+      let posArr = Array.isArray(posRaw) ? posRaw : [];
+      if (!posArr.length) {
+        const vals = Object.values(posRaw);
+        posArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
       }
-      for (const e of (Array.isArray(earnArr) ? earnArr : [])) {
-        const tok = e.token || e.asset || {};
-        const sym = (tok.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
-        if (sym !== "USDC") continue;
-        const dec = tok.decimals ?? e.decimals ?? 6;
-        const ub  = parseFloat(e.underlyingBalance || 0);
-        const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
-        const amount = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
-        const shares = parseFloat(e.shares || 0);
-        if (amount > 0 || shares > 0) {
-          pos = { amount, amountRaw: ua, shares, decimals: dec };
-          break;
-        }
-      }
-      // Sync freshly-fetched position back into state so the UI stays consistent
-      if (pos) setEarnUserPositions(prev => ({ ...prev, USDC: pos }));
-    } catch {}
+      // Also try standard wrapper fields
+      if (!posArr.length) posArr = posRaw?.data || posRaw?.positions || posRaw?.items || [];
 
-    if (!pos || pos.amount <= 0) {
-      push("ai", "No USDC balance found in Earn to withdraw. Your principal may have already been withdrawn.");
+      // Find the vault's deposit token (default USDC). Match by assetMint or asset.symbol.
+      const depositToken = (yieldVault?.depositToken || "USDC").toUpperCase();
+      // Known mints as fallback
+      const KNOWN_MINTS = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
+      const targetMint = KNOWN_MINTS[depositToken] || null;
+
+      for (const entry of posArr) {
+        const tok          = entry.token || {};
+        const underlyingTok = entry.asset || entry.underlyingToken || {};
+        // Real underlying mint — prefer top-level assetMint, then asset.address, never the jlToken mint
+        const mint = entry.assetMint || underlyingTok.address || entry.mint || null;
+        // Real underlying symbol — prefer asset.symbol; strip jl prefix from tok.symbol if needed
+        const rawSym = underlyingTok.symbol || entry.assetSymbol || "";
+        const sym = rawSym
+          ? rawSym.toUpperCase()
+          : (tok.symbol || "").replace(/^jl/i, "").toUpperCase();
+        const dec = underlyingTok.decimals ?? tok.decimals ?? entry.decimals ?? 6;
+        const rawStr = entry.underlyingAssets || entry.underlying_assets || "0";
+        const rawInt = parseFloat(rawStr);
+        const humanBalance = parseFloat(entry.underlyingBalance || 0);
+        const shares = entry.shares || "0";
+
+        // Match by mint address first, then by symbol
+        const mintMatch   = targetMint && mint && (mint === targetMint);
+        const symbolMatch = sym === depositToken;
+        if (!mintMatch && !symbolMatch) continue;
+        if (!mint)    continue;
+        if (rawInt <= 0 && parseFloat(shares) <= 0) continue;
+
+        const humanAmt = humanBalance > 0 ? humanBalance : (rawInt > 1e6 ? rawInt / Math.pow(10, dec) : rawInt);
+        livePosition = {
+          assetMint:   mint,
+          decimals:    dec,
+          rawAmount:   rawStr,
+          humanAmount: humanAmt,
+          shares,
+          symbol:      sym || depositToken,
+          name:        underlyingTok.name || `Jupiter Lend ${sym || depositToken}`,
+        };
+        break;
+      }
+    } catch (err) {
+      push("ai", `Failed to fetch your Earn position: ${err?.message || "Unknown error"}. Please try again.`);
       return;
     }
 
-    // NOTE: vault state is NOT cleared here — it's only cleared after the tx confirms in doEarnWithdraw
+    if (!livePosition) {
+      push("ai", "No open Earn position found for this wallet. If you just deposited, wait 30 seconds for the chain to confirm and try again.");
+      return;
+    }
+
+    // ── Step 2: Sync the live position into React state so the UI is consistent ─
+    setEarnUserPositions(prev => ({
+      ...prev,
+      [livePosition.symbol]: {
+        amount:    livePosition.humanAmount,
+        amountRaw: parseFloat(livePosition.rawAmount),
+        shares:    parseFloat(livePosition.shares),
+        decimals:  livePosition.decimals,
+      },
+    }));
+
+    // ── Step 3: Build the vault object doEarnWithdraw needs ──────────────────
+    // doEarnWithdraw reads vault.assetMint and vault.assetDecimals — both sourced
+    // directly from the live /positions response, no guessing needed.
+    const vaultForWithdraw = {
+      name:          livePosition.name,
+      token:         livePosition.symbol,
+      assetMint:     livePosition.assetMint,   // ← token.address from positions API
+      assetDecimals: livePosition.decimals,
+    };
+
+    // ── Step 4: Open the withdraw modal ──────────────────────────────────────
+    // NOTE: vault state is NOT cleared here — only cleared after tx confirms in doEarnWithdraw
     setEarnWithdraw({
-      vault: usdcVault,
-      amount: pos.amount.toFixed(6),
-      positionAmount: pos.amount,
-      isYieldVaultClose: true, // flag so doEarnWithdraw knows to close the vault on success
+      vault:           vaultForWithdraw,
+      amount:          livePosition.humanAmount.toFixed(livePosition.decimals),
+      positionAmount:  livePosition.humanAmount,
+      isYieldVaultClose: true, // signals doEarnWithdraw to close the Yield Vault on success
     });
     setShowEarnWithdraw(true);
-    push("ai", `Ready to withdraw **${pos.amount.toFixed(4)} USDC** from Jupiter Lend. Choose how much to withdraw below — 25%, 50%, 75%, or MAX. Your vault stays active until the transaction confirms.`);
+    push("ai", `Ready to withdraw **${livePosition.humanAmount.toFixed(4)} ${livePosition.symbol}** from Jupiter Earn. Choose 25%, 50%, 75%, or MAX below. Your vault stays active until the transaction confirms.`);
   };
   const doEarnDeposit = async () => {
     const { vault, amount } = earnDeposit;
@@ -9104,6 +9344,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const updated = [...priceAlerts, newAlert];
           setPriceAlerts(updated);
           try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+          fsSave(walletFull||"anon", { alerts: updated });
           push("ai", text + `\n\nAlert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**\nI'll notify you in chat when it triggers. You can set multiple alerts.`);
         }
 
@@ -9139,6 +9380,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const updated = [...volMonitors, newMon];
           setVolMonitors(updated);
           try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+          fsSave(walletFull||"anon", { volmon: updated });
           const fmtThreshold = isVol ? `**${threshold}%** rolling std-dev · 10-sample window`
             : triggerType === "mc"          ? `MC ${condition} **$${(thresholdValue/1e9).toFixed(2)}B**`
             : triggerType === "volume"      ? `24h volume ${condition} **$${(thresholdValue/1e6).toFixed(2)}M**`
@@ -9995,6 +10237,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               const updated = [...priceAlerts, newAlert];
               setPriceAlerts(updated);
               try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+              fsSave(walletFull||"anon", { alerts: updated });
               push("ai", `🔔 Alert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**`);
 
             // ── SHOW_TRADE_JOURNAL ──────────────────────────────────────────────
@@ -11829,6 +12072,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             onDeposit={doYieldVaultDeposit}
             onToggle={toggleYieldVaultStatus}
             onWithdraw={withdrawYieldVault}
+            onCancel={cancelYieldVault}
             onUpdateVault={updateYieldVaultCfg}
             earnVaults={earnVaults}
             earnUserPositions={earnUserPositions}
@@ -12932,12 +13176,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               const updated = volMonitors.filter(m => m.id !== id);
               setVolMonitors(updated);
               try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+              fsSave(walletFull||"anon", { volmon: updated });
             };
             const resetMon = (id) => {
               priceHistoryRef.current = { ...priceHistoryRef.current };
               const updated = volMonitors.map(m => m.id === id ? { ...m, triggered: false } : m);
               setVolMonitors(updated);
               try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
+              fsSave(walletFull||"anon", { volmon: updated });
             };
             const VolCard = ({ mon }) => {
               const hist   = priceHistoryRef.current[mon.token] || [];
@@ -13073,6 +13319,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         setVolMonitors([]);
                         priceHistoryRef.current = {};
                         try { localStorage.removeItem(`chatfi-volmon-${walletFull||"anon"}`); } catch {}
+                        fsSave(walletFull||"anon", { volmon: [] });
                       }
                     }} className="hov-btn"
                       style={{ fontSize:11, padding:"4px 10px", background:"transparent", border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, cursor:"pointer" }}>
@@ -14281,7 +14528,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             <span style={{ fontSize:12, color:T.text2 }}>
               <strong>{priceAlerts.filter(a=>!a.triggered).length}</strong> active alert{priceAlerts.filter(a=>!a.triggered).length>1?"s":""}: {priceAlerts.filter(a=>!a.triggered).map(a=>`${a.token} ${a.condition} $${a.target.toLocaleString()}`).join(" · ")}
             </span>
-            <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`,JSON.stringify(cleared));}catch{} }}
+            <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`,JSON.stringify(cleared));}catch{} fsSave(walletFull||"anon",{alerts:cleared}); }}
               style={{ background:"none", border:"none", color:T.text3, fontSize:12, cursor:"pointer", flexShrink:0 }}>Clear all</button>
           </div>
         )}
@@ -14421,6 +14668,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
 // ─── Root export ─────────────────────────────────────────────────────────────
 export default function JupChat() {
+  // TEMP DEBUG
+  useEffect(() => { alert("🟢 NEW FILE v3 LOADED"); }, []);
   const appId = import.meta.env.VITE_PRIVY_APP_ID || "";
   if (!appId) {
     console.error(
