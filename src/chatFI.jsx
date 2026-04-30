@@ -7284,6 +7284,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         else if (type === "triggerV2")   { setShowTrigV2(false);      await doTriggerV2(); }
         else if (type === "recurring")   { setShowRecurring(false);   await doRecurring(); }
         else if (type === "borrow")      { setShowBorrow(false);      await doBorrow(); }
+        else if (type === "perps")       { setShowPerps(true); push("ai", "Opening perps panel — collateral and leverage pre-filled. Review and confirm in the panel."); }
         else if (type === "claimLocks") {
           const locks = pendingDirectAction.locks || [];
           push("ai", `Claiming ${locks.length} lock${locks.length > 1 ? "s" : ""}…`);
@@ -7597,7 +7598,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           if (directMode) {
             const { amount: a, from: f, to: t } = swapCfg;
             const amt = actionData?.amount || actionData?.portion || a || "?";
-            push("ai", `⚡ **Direct Mode** — Swap **${amt} ${fromSym} → ${toSym}**\n\nReply **yes** to execute or **no** to cancel.`);
+            push("ai", `⚡ **Direct Mode** — Swap **${amt} ${fromSym} → ${toSym}**`);
             setPendingDirectAction({ type:"swap", label:`${amt} ${fromSym} → ${toSym}` });
           }
         }
@@ -7629,7 +7630,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const trigAmt = trigPortion || actionData?.amount || "";
           if (directMode && walletFull && trigAmt && actionData?.targetPrice) {
             const trigDir = actionData?.direction === "above" ? "above" : "below";
-            push("ai", `⚡ **Direct Mode** — Limit order: **${trigAmt} ${trigSym}** when price is ${trigDir} **$${actionData.targetPrice}**\n\nReply **yes** to execute or **no** to cancel.`);
+            push("ai", `⚡ **Direct Mode** — Limit order: **${trigAmt} ${trigSym}** when price is ${trigDir} **$${actionData.targetPrice}**`);
             setPendingDirectAction({ type:"trigger", label:`${trigAmt} ${trigSym} @ $${actionData.targetPrice}` });
           } else {
             setShowTrig(true);
@@ -7677,7 +7678,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const { searchQuery, outcome, side, amount } = actionData || {};
           const sideLabel = (side || "yes").toUpperCase();
           if (directMode) {
-            push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `⚡ **Direct Mode** — Bet **${sideLabel}** $${amount} on **${outcome}**\n\nReply **yes** to execute or **no** to cancel.`);
+            push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `⚡ **Direct Mode** — Bet **${sideLabel}** $${amount} on **${outcome}**`);
             setPendingDirectAction({ type: "prediction", label: `${sideLabel} $${amount} on ${outcome}`, betData: { searchQuery, outcome, side: side || "yes", amount: amount || "5" } });
           } else {
             push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `Placing **${sideLabel}** $${amount} bet on **${outcome}**…`);
@@ -7694,7 +7695,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         else {
           const summary = bets.slice(0, 10).map(b => `${(b.side||"yes").toUpperCase()} $${b.amount} on **${b.outcome}**`).join(", ");
           if (directMode) {
-            push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `⚡ **Direct Mode** — ${bets.length} prediction bet${bets.length > 1 ? "s" : ""}: ${summary}\n\nReply **yes** to execute all or **no** to cancel.`);
+            push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `⚡ **Direct Mode** — ${bets.length} prediction bet${bets.length > 1 ? "s" : ""}: ${summary}`);
             setPendingDirectAction({ type: "basketPrediction", label: `${bets.length} prediction bets`, bets: bets.slice(0, 10) });
           } else {
             push("ai", (text && text !== "undefined" ? text + "\n\n" : "") + `Placing **${bets.length} prediction bet${bets.length > 1 ? "s" : ""}** in sequence…`);
@@ -7742,7 +7743,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 }
                 setEarnDeposit({ vault: match, amount: autoAmt });
                 if (directMode && autoAmt) {
-                  push("ai", `⚡ **Direct Mode** — Deposit **${autoAmt} ${vaultSym}** into **${match.name}** (${match.apyDisplay} APY)\n\nReply **yes** to execute or **no** to cancel.`);
+                  push("ai", `⚡ **Direct Mode** — Deposit **${autoAmt} ${vaultSym}** into **${match.name}** (${match.apyDisplay} APY)`);
                   setPendingDirectAction({ type:"earnDeposit", label:`${autoAmt} ${vaultSym} into ${match.name}` });
                 } else {
                   setShowEarnDeposit(true);
@@ -7773,7 +7774,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         }));
         push("ai", text);
         if (directMode && walletFull && actionData?.colAmount && actionData?.borrowAmount) {
-          push("ai", `⚡ **Direct Mode** — Borrow: deposit **${actionData.colAmount} ${colSym}**, borrow **${actionData.borrowAmount} ${debtSym}**\n\nReply **yes** to execute or **no** to cancel.`);
+          push("ai", `⚡ **Direct Mode** — Borrow: deposit **${actionData.colAmount} ${colSym}**, borrow **${actionData.borrowAmount} ${debtSym}**`);
           setPendingDirectAction({ type:"borrow", label:`${actionData.colAmount} ${colSym} → borrow ${actionData.borrowAmount} ${debtSym}` });
         } else {
           setShowBorrow(true);
@@ -7831,7 +7832,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           push("ai", text);
           if (directMode && walletFull && resolvedAmt && actionData?.triggerPriceUsd) {
             const cond = actionData?.triggerCondition || "above";
-            push("ai", `⚡ **Direct Mode** — Trigger v2: **${resolvedAmt} ${fromSym} → ${toSym}** when ${fromSym} is ${cond} **$${actionData.triggerPriceUsd}**\n\nReply **yes** to execute or **no** to cancel.`);
+            push("ai", `⚡ **Direct Mode** — Trigger v2: **${resolvedAmt} ${fromSym} → ${toSym}** when ${fromSym} is ${cond} **$${actionData.triggerPriceUsd}**`);
             setPendingDirectAction({ type:"triggerV2", label:`${resolvedAmt} ${fromSym} → ${toSym} @ $${actionData.triggerPriceUsd}` });
           } else {
             setShowTrigV2(true);
@@ -7863,7 +7864,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         if (directMode && walletFull && actionData?.amountPerCycle && actionData?.numberOfOrders) {
           const intSecs = actionData?.intervalSecs || 86400;
           const intLabel = intSecs >= 604800 ? `${Math.round(intSecs/604800)}w` : intSecs >= 86400 ? `${Math.round(intSecs/86400)}d` : `${Math.round(intSecs/3600)}h`;
-          push("ai", `⚡ **Direct Mode** — DCA: **${actionData.amountPerCycle} ${fromSym} → ${toSym}** every ${intLabel} for ${actionData.numberOfOrders} orders\n\nReply **yes** to execute or **no** to cancel.`);
+          push("ai", `⚡ **Direct Mode** — DCA: **${actionData.amountPerCycle} ${fromSym} → ${toSym}** every ${intLabel} for ${actionData.numberOfOrders} orders`);
           setPendingDirectAction({ type:"recurring", label:`${actionData.amountPerCycle} ${fromSym} → ${toSym} ×${actionData.numberOfOrders}` });
         } else {
           setShowRecurring(true);
@@ -7961,7 +7962,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           if (directMode && amount && actionData?.recipient) {
             // Direct mode + known recipient → direct transfer, no panel
             setSendRecipient(actionData.recipient);
-            push("ai", `⚡ **Direct Mode** — Send **${amount} ${upperTok}** to \`${actionData.recipient.slice(0,8)}…\`\n\nReply **yes** to execute or **no** to cancel.`);
+            push("ai", `⚡ **Direct Mode** — Send **${amount} ${upperTok}** to \`${actionData.recipient.slice(0,8)}…\``);
             setPendingDirectAction({ type:"send", label:`${amount} ${upperTok} to ${actionData.recipient.slice(0,8)}…` });
           } else if (directMode && amount) {
             // Direct mode + invite link (no recipient needed) → execute immediately, skip panel
@@ -8016,7 +8017,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         const { market = "SOL-PERP", side = "long", collateral = "", leverage = "10" } = actionData || {};
         push("ai", text);
         setPerpCfg({ market, side, collateral, leverage });
-        setShowPerps(true);
+        if (directMode && walletFull && collateral) {
+          push("ai", `⚡ **Direct Mode** — Open **${side.toUpperCase()}** ${market} · ${collateral} SOL · ${leverage}x leverage`);
+          setPendingDirectAction({ type:"perps", label:`${side} ${market} ${collateral} SOL ${leverage}x` });
+        } else {
+          setShowPerps(true);
+        }
 
       } else if (action === "FETCH_PERPS_POSITIONS") {
         if (!walletFull) {
@@ -8094,7 +8100,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const cliff   = actionData?.cliffDays   || "0";
           const vesting = actionData?.vestingDays || "1";
           const recip   = actionData?.recipient ? `→ \`${actionData.recipient.slice(0,8)}…\`` : "→ your wallet";
-          push("ai", `⚡ **Direct Mode** — Lock **${actionData.amount} ${tokSym}** ${recip}\nCliff: ${cliff}d · Vesting: ${vesting}d\n\nReply **yes** to execute or **no** to cancel.`);
+          push("ai", `⚡ **Direct Mode** — Lock **${actionData.amount} ${tokSym}** ${recip}\nCliff: ${cliff}d · Vesting: ${vesting}d`);
           setPendingDirectAction({ type:"lock", label:`${actionData.amount} ${tokSym}` });
         } else {
           setShowLock(true);
@@ -8110,7 +8116,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             const claimable = current.filter(lk => parseFloat(lk.claimableAmount || 0) > 0 || lk.claimable === true);
             if (claimable.length > 0) {
               const summary = claimable.map(lk => `${lk.claimableAmount || ""} ${lk.symbol || "tokens"}`.trim()).join(", ");
-              push("ai", `Direct Mode — ${claimable.length} lock${claimable.length > 1 ? "s" : ""} ready to claim: **${summary}**\n\nReply **yes** to claim all or **no** to cancel.`);
+              push("ai", `Direct Mode — ${claimable.length} lock${claimable.length > 1 ? "s" : ""} ready to claim: **${summary}**`);
               setPendingDirectAction({ type: "claimLocks", locks: claimable });
             }
             return current;
@@ -9763,6 +9769,18 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     </div>
                   );
                 })() : <div dangerouslySetInnerHTML={{ __html:fmt(m.text) }} />}
+                {pendingDirectAction && m.role === "ai" && m.id === msgs[msgs.length - 1]?.id && (
+                  <div style={{ display:"flex", gap:8, marginTop:14 }}>
+                    <button onClick={() => send("yes")} style={{ flex:1, padding:"10px 0", background:T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:13, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0d1117" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                      Yes, Execute
+                    </button>
+                    <button onClick={() => send("no")} style={{ flex:1, padding:"10px 0", background:"none", border:`1px solid ${T.border}`, borderRadius:10, color:T.text2, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                      Cancel
+                    </button>
+                  </div>
+                )}
                 {m.showConnectBtn && !wallet && (
                   <div style={{ marginTop:12, display:"flex", flexDirection:"column", gap:8 }}>
                     {/* ── Social / email login via Privy ── */}
