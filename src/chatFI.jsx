@@ -521,7 +521,21 @@ FULL FEATURE LIST (use this when asked what you can do — list ALL of these, ne
 - "smart entry X" / "best way to enter X" / "how should I buy X" → Power Command (client-side). Return action:null, text:"Running smart entry analysis for **X** — fetching live price, trending rank, and swap quote…"
 - "exit my X" / "best way to exit X" / "exit strategy X" → Power Command (client-side). Return action:null, text:"Analysing exit strategy for **X** — checking price momentum, balance, and best route…"
 - "deep dive X" / "full analysis X" / "research X" / "analyse X" / "tell me everything about X" → Power Command (client-side). Return action:null, text:"Running full deep dive on **X** — pulling metadata, organic score, safety flags, and liquidity depth…"
-- "morning briefing" / "portfolio pulse" / "how is my portfolio doing" / "daily brief" → Power Command (client-side). Return action:null, text:"Pulling your portfolio pulse — checking balances, earn positions, and open orders in parallel…"`;
+- "morning briefing" / "portfolio pulse" / "how is my portfolio doing" / "daily brief" → Power Command (client-side). Return action:null, text:"Pulling your portfolio pulse — checking balances, earn positions, and open orders in parallel…"
+
+INTENT FLEXIBILITY — always infer what the user means even with typos, abbreviations, slang, or indirect phrasing:
+- "take out my money" / "get my funds back" / "i want out" / "gimme my usdc" / "withdrow" / "pull my money" → withdraw from Earn / Yield Vault
+- "how much am i making" / "what's my yield" / "is my money working" / "earning anything?" → FETCH_YIELD_VAULT or FETCH_PORTFOLIO
+- "buy some sol" / "get me sol" / "put $50 in sol" / "i want sol" → SHOW_SWAP from:USDC to:SOL
+- "megaeth" / single token name or ticker with no other context → FETCH_TOKEN_INFO for that token
+- "start vault" / "yield thing" / "auto earn" / "passive income" / "make my usdc work" → SHOW_YIELD_VAULT
+- "my orders" / "what orders do i have" / "open orders" / "pending orders" → FETCH_TRIGGER_ORDERS
+- "what coins are popping" / "what's hot right now" / "what should i buy" / "trending" → FETCH_TOKEN_CATEGORY toptrending 24h
+- "predict [team]" / "[team] gonna win" / "[team] match" / "[team] game" → SHOW_PREDICTION
+- "swp" / "swop" → SHOW_SWAP; "porftolio" / "portfoio" → FETCH_PORTFOLIO; "tockens" / "tokns" → token lookup
+- Single-word DeFi intents: "earn" → show earn vaults; "borrow" → SHOW_BORROW; "perps" → SHOW_PERPS; "predict" → FETCH_PREDICTIONS; "send" → SHOW_SEND; "lock" → SHOW_LOCK
+- If the user's intent is unclear but DeFi-related, ask ONE short clarifying question — never list all features.
+- NEVER respond with "I don't understand" or "I'm not sure what you mean" — always map the request to the closest available action or ask one focused question.`;
 
 const SUGGESTION_GROUPS = [
   {
@@ -5255,17 +5269,53 @@ function JupChatInner() {
   };
 
   const withdrawYieldVault = async () => {
+    // ── Ensure vaults are loaded ──────────────────────────────────────────────
+    if (!earnVaults.length) await fetchEarnVaults();
     const usdcVault = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
     if (!usdcVault) {
-      if (!earnVaults.length) await fetchEarnVaults();
-      const refreshed = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
-      if (!refreshed) { push("ai", "Could not find USDC Earn vault. Try refreshing."); return; }
+      push("ai", "Could not find USDC Earn vault. Try refreshing.");
+      return;
     }
-    const pos = earnUserPositions["USDC"];
+
+    // ── Fetch positions FRESH directly — don't rely on stale React state ──────
+    // earnUserPositions state may not have updated yet (React setState is async),
+    // so we fetch the positions endpoint directly here and bypass the stale map.
+    let pos = null;
+    try {
+      const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+      const earnRaw = await earnRes.json();
+      let earnArr = Array.isArray(earnRaw) ? earnRaw
+        : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
+        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || null;
+      if (!Array.isArray(earnArr) || earnArr.length === 0) {
+        const vals = Object.values(earnRaw);
+        const flat = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
+        if (flat.length > 0) earnArr = flat;
+        else if (!Array.isArray(earnArr)) earnArr = [];
+      }
+      for (const e of (Array.isArray(earnArr) ? earnArr : [])) {
+        const tok = e.token || e.asset || {};
+        const sym = (tok.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
+        if (sym !== "USDC") continue;
+        const dec = tok.decimals ?? e.decimals ?? 6;
+        const ub  = parseFloat(e.underlyingBalance || 0);
+        const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
+        const amount = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
+        const shares = parseFloat(e.shares || 0);
+        if (amount > 0 || shares > 0) {
+          pos = { amount, amountRaw: ua, shares, decimals: dec };
+          break;
+        }
+      }
+      // Sync freshly-fetched position back into state so the UI stays consistent
+      if (pos) setEarnUserPositions(prev => ({ ...prev, USDC: pos }));
+    } catch {}
+
     if (!pos || pos.amount <= 0) {
       push("ai", "No USDC balance found in Earn to withdraw. Your principal may have already been withdrawn.");
       return;
     }
+
     // NOTE: vault state is NOT cleared here — it's only cleared after the tx confirms in doEarnWithdraw
     setEarnWithdraw({
       vault: usdcVault,
@@ -9162,8 +9212,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             : "You don't have an active Yield Vault yet. Type **start yield vault** to open one — your USDC earns yield while the vault auto-bets prediction markets.");
         } else if (isWithdrawQuery) {
           // Route directly to the withdraw flow
-          if (!earnVaults.length) await fetchEarnVaults();
-          if (walletFull) await fetchEarnUserPositions();
+          // withdrawYieldVault() fetches fresh positions internally — no pre-fetch needed
           setShowYieldVault(true);
           await withdrawYieldVault();
         } else {
