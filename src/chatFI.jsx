@@ -1962,9 +1962,12 @@ function JupChatWithLanding() {
 }
 
 // ─── Yield-Gated Prediction Vault Panel ───────────────────────────────────────
-function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setCfg, onDeposit, onToggle, onWithdraw, earnVaults, earnUserPositions, isBetting, walletFull }) {
+function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setCfg, onDeposit, onToggle, onWithdraw, onUpdateVault, earnVaults, earnUserPositions, isBetting, walletFull }) {
   if (!open) return null;
   const T = { bg:"#0d1117", surface:"#161e27", border:"#1e2d3d", text1:"#e8f4f0", text2:"#8fa8b8", text3:"#4d6a7a", accent:"#c7f284", accentBg:"#1a2e1a", green:"#c7f284", purple:"#a78bfa", purpleBg:"#1e1a2e", teal:"#38bdf8" };
+  const [editingCfg, setEditingCfg] = useState(false);
+  const [liveEdge, setLiveEdge] = useState(vault?.minEdge || "8");
+  const [liveMaxBet, setLiveMaxBet] = useState(vault?.maxBet || "5");
   const usdcVault = earnVaults?.find(v => v.token?.toUpperCase() === "USDC");
   const usdcPos   = earnUserPositions?.["USDC"];
   const ageDays   = vault ? Math.floor((Date.now() - vault.depositedAt) / 86400000) : 0;
@@ -1973,7 +1976,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
 
   // SVG icon components — no emojis
   const IcVault = () => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.purple} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="7" width="20" height="14" rx="2"/>
       <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
       <circle cx="12" cy="14" r="2"/>
@@ -2085,7 +2088,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
     { Icon: IcLock,    txt: "Principal never leaves Lend — only yield is at risk", key:"lock" },
   ];
 
-  const logTypeColor = { deposit:"#68d391", bet:T.purple, win:T.accent, sweep:T.teal, error:"#f28484" };
+  const logTypeColor = { deposit:"#68d391", bet:T.accent, win:T.accent, sweep:T.teal, error:"#f28484" };
   const LogIcon = ({ type }) => {
     const style = { color: logTypeColor[type]||T.text2, flexShrink:0 };
     if (type==="deposit") return <span style={style}><IcDeposit/></span>;
@@ -2103,12 +2106,12 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
         {/* Header */}
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"16px 16px 12px", borderBottom:`1px solid ${T.border}`, position:"sticky", top:0, background:T.bg, zIndex:2 }}>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <div style={{ width:32, height:32, borderRadius:8, background:T.purpleBg, border:`1px solid ${T.purple}30`, display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <div style={{ width:32, height:32, borderRadius:8, background:T.accentBg, border:`1px solid ${T.accent}30`, display:"flex", alignItems:"center", justifyContent:"center" }}>
               <IcVault/>
             </div>
             <div>
               <div style={{ fontSize:14, fontWeight:700, color:T.text1 }}>Yield Vault</div>
-              <div style={{ fontSize:11, color:T.text3 }}>USDC earns yield · auto-bets on edge</div>
+              <div style={{ fontSize:11, color:T.text3 }}>USDC earns yield · auto-bets on edge · <span style={{ color:"#a78bfa" }} title="Phantom users: enable Auto-approve in Phantom Settings → Trusted Apps to silence signing popups">⚡ Phantom? Enable Auto-approve</span></div>
             </div>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", cursor:"pointer", padding:"4px", display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -2129,7 +2132,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                   <span style={{ fontSize:10, color:T.text3 }}>Day {ageDays}</span>
                 </div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:8 }}>
-                  {[{label:"Deposited",value:`$${vault.depositAmount}`,color:T.text1},{label:"Yield APY",value:`${apy}%`,color:T.green},{label:"Accrued",value:`$${accruedEst.toFixed(3)}`,color:T.purple}].map(s=>(
+                  {[{label:"Deposited",value:`$${vault.depositAmount}`,color:T.text1},{label:"Yield APY",value:`${apy}%`,color:T.green},{label:"Accrued",value:`$${accruedEst.toFixed(3)}`,color:T.teal}].map(s=>(
                     <div key={s.label} style={{ background:"rgba(0,0,0,0.25)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
                       <div style={{ fontSize:9, color:T.text3, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:3 }}>{s.label}</div>
                       <div style={{ fontSize:14, fontWeight:800, color:s.color }}>{s.value}</div>
@@ -2137,7 +2140,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                   ))}
                 </div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12 }}>
-                  {[{label:"Auto-bets",value:vaultStats?.betsPlaced||0,color:T.purple},{label:"Recycled",value:`$${(vaultStats?.winningsRecycled||0).toFixed(3)}`,color:T.teal}].map(s=>(
+                  {[{label:"Auto-bets",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Recycled",value:`$${(vaultStats?.winningsRecycled||0).toFixed(3)}`,color:T.teal}].map(s=>(
                     <div key={s.label} style={{ background:"rgba(0,0,0,0.25)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
                       <div style={{ fontSize:9, color:T.text3, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:3 }}>{s.label}</div>
                       <div style={{ fontSize:13, fontWeight:700, color:s.color }}>{s.value}</div>
@@ -2145,9 +2148,51 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                   ))}
                 </div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                  {[`Min edge ${vault.minEdge}%`,`Max $${vault.maxBet}/bet`,vault.category?vault.category.charAt(0).toUpperCase()+vault.category.slice(1):"All markets"].map(tag=>(
-                    <span key={tag} style={{ fontSize:10, color:T.text3, background:T.surface, border:`1px solid ${T.border}`, borderRadius:20, padding:"2px 8px" }}>{tag}</span>
-                  ))}
+                  {!editingCfg ? (
+                    <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                      {[`Min edge ${vault.minEdge}%`,`Max $${vault.maxBet}/bet`,vault.category?vault.category.charAt(0).toUpperCase()+vault.category.slice(1):"All markets"].map(tag=>(
+                        <span key={tag} style={{ fontSize:10, color:T.text3, background:T.surface, border:`1px solid ${T.border}`, borderRadius:20, padding:"2px 8px" }}>{tag}</span>
+                      ))}
+                      <button onClick={()=>{ setLiveEdge(String(vault.minEdge)); setLiveMaxBet(String(vault.maxBet)); setEditingCfg(true); }} style={{ fontSize:10, color:T.accent, background:"transparent", border:`1px solid ${T.accent}40`, borderRadius:20, padding:"2px 8px", cursor:"pointer", fontWeight:600 }}>✎ Adjust</button>
+                    </div>
+                  ) : (
+                    <div style={{ background:T.surface, border:`1px solid ${T.accent}30`, borderRadius:10, padding:"12px 14px", marginTop:4 }}>
+                      <div style={{ fontSize:11, fontWeight:700, color:T.accent, marginBottom:10, textTransform:"uppercase", letterSpacing:"0.06em" }}>Adjust Live Settings</div>
+
+                      {/* Edge slider */}
+                      <div style={{ marginBottom:10 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+                          <span style={{ fontSize:11, color:T.text3, fontWeight:600 }}>Min Edge</span>
+                          <span style={{ fontSize:12, color:T.accent, fontWeight:700 }}>{liveEdge}%</span>
+                        </div>
+                        <input type="range" min="1" max="30" step="1" value={liveEdge} onChange={e=>setLiveEdge(e.target.value)}
+                          style={{ width:"100%", accentColor:T.accent, cursor:"pointer" }}/>
+                        <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, gap:4 }}>
+                          {["3","5","8","12","20"].map(v=>(
+                            <button key={v} onClick={()=>setLiveEdge(v)} style={{ flex:1, padding:"4px 0", border:`1px solid ${liveEdge===v?T.accent:T.border}`, borderRadius:6, background:liveEdge===v?T.accentBg:T.bg, color:liveEdge===v?T.accent:T.text3, fontSize:11, fontWeight:600, cursor:"pointer" }}>{v}%</button>
+                          ))}
+                        </div>
+                        <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Higher = fewer but sharper bets.</div>
+                      </div>
+
+                      {/* Max bet */}
+                      <div style={{ marginBottom:12 }}>
+                        <div style={{ fontSize:11, color:T.text3, fontWeight:600, marginBottom:5 }}>Max Bet Per Market (USDC)</div>
+                        <div style={{ display:"flex", gap:5 }}>
+                          <input type="number" min="1" step="1" value={liveMaxBet} onChange={e=>setLiveMaxBet(e.target.value)}
+                            style={{ flex:1, padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, outline:"none" }}/>
+                          {["2","5","10","25"].map(v=>(
+                            <button key={v} onClick={()=>setLiveMaxBet(v)} style={{ padding:"7px 10px", border:`1px solid ${liveMaxBet===v?T.accent:T.border}`, borderRadius:8, background:liveMaxBet===v?T.accentBg:T.bg, color:liveMaxBet===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={{ display:"flex", gap:6 }}>
+                        <button onClick={()=>setEditingCfg(false)} style={{ flex:1, padding:"8px 0", borderRadius:8, border:`1px solid ${T.border}`, background:T.bg, color:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>Cancel</button>
+                        <button onClick={()=>{ onUpdateVault?.({ minEdge: liveEdge, maxBet: liveMaxBet }); setEditingCfg(false); }} style={{ flex:2, padding:"8px 0", borderRadius:8, border:"none", background:T.accentBg, color:T.accent, fontSize:12, fontWeight:700, cursor:"pointer" }}>✓ Save Changes</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
               <div style={{ display:"flex", gap:8, marginBottom:12 }}>
@@ -2166,7 +2211,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                       <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 10px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8 }}>
                         <LogIcon type={entry.type}/>
                         <span style={{ fontSize:11, color:logTypeColor[entry.type]||T.text2, flex:1, lineHeight:1.4 }}>{entry.detail}</span>
-                        <span style={{ fontSize:9, color:T.text3, flexShrink:0 }}>{new Date(entry.ts).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</span>
+                        <span style={{ fontSize:9, color:T.text3, flexShrink:0 }}>{new Date(entry.ts).toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}</span>
                       </div>
                     ))}
                   </div>
@@ -2176,11 +2221,11 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
           ) : (
             <>
               {/* Setup form */}
-              <div style={{ background:T.purpleBg, border:`1px solid ${T.purple}30`, borderRadius:12, padding:14, marginBottom:14 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:T.purple, marginBottom:8 }}>How it works</div>
+              <div style={{ background:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:12, padding:14, marginBottom:14 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:T.accent, marginBottom:8 }}>How it works</div>
                 {howItWorks.map(({ Icon, txt, key }) => (
                   <div key={key} style={{ display:"flex", gap:8, alignItems:"flex-start", marginBottom:6 }}>
-                    <span style={{ color:T.purple, flexShrink:0, marginTop:1 }}><Icon/></span>
+                    <span style={{ color:T.accent, flexShrink:0, marginTop:1 }}><Icon/></span>
                     <span style={{ fontSize:12, color:T.text2, lineHeight:1.45 }} dangerouslySetInnerHTML={{ __html:txt.replace(/\*\*(.+?)\*\*/g,`<strong style="color:${T.text1}">$1</strong>`) }}/>
                   </div>
                 ))}
@@ -2474,12 +2519,8 @@ function JupChatInner() {
 
   // ── Yield-Gated Prediction Vault ─────────────────────────────────────────────
   const [showYieldVault, setShowYieldVault] = useState(false);
-  const [yieldVault, setYieldVault] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("chatfi-yieldvault") || "null"); } catch { return null; }
-  });
-  const [yieldVaultStats, setYieldVaultStats] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("chatfi-yieldvault-stats") || "null"); } catch { return null; }
-  });
+  const [yieldVault, setYieldVault] = useState(null);
+  const [yieldVaultStats, setYieldVaultStats] = useState(null);
   const [yieldVaultLog, setYieldVaultLog] = useState([]);
   const [yieldVaultBetting, setYieldVaultBetting] = useState(false);
   const [yieldVaultCfg, setYieldVaultCfg] = useState({ depositAmount: "100", minEdge: "8", maxBet: "5", category: null });
@@ -2510,16 +2551,11 @@ function JupChatInner() {
   const [routeLoading, setRouteLoading]     = useState(false);
 
   // ── Price Alerts ──────────────────────────────────────────────────────────────
-  const [priceAlerts, setPriceAlerts] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("chatfi-alerts") || "[]"); } catch { return []; }
-  });
+  const [priceAlerts, setPriceAlerts] = useState([]);
   const alertIntervalRef = useRef(null);
 
   // ── Volatility Monitor ────────────────────────────────────────────────────────
-  // { id, token, thresholdPct, autoOrder, autoOrderCfg: {from, amount}, triggered }
-  const [volMonitors, setVolMonitors] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("chatfi-volmon") || "[]"); } catch { return []; }
-  });
+  const [volMonitors, setVolMonitors] = useState([]);
   const [showVolMonitors, setShowVolMonitors] = useState(false);
   const priceHistoryRef = useRef({}); // { [SYM]: [{ price, ts }] }
   const volIntervalRef  = useRef(null);
@@ -2539,9 +2575,7 @@ function JupChatInner() {
   };
 
   // ── Trade Journal ─────────────────────────────────────────────────────────────
-  const [tradeJournal, setTradeJournal] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("chatfi-journal") || "[]"); } catch { return []; }
-  });
+  const [tradeJournal, setTradeJournal] = useState([]);
 
   // ── Copy Trade ────────────────────────────────────────────────────────────────
   const [copyTradeData, setCopyTradeData] = useState(null);
@@ -2821,6 +2855,28 @@ function JupChatInner() {
     } catch { return {}; }
   }, []);
 
+  // ── Reload ALL per-wallet data when wallet changes ───────────────────────────
+  useEffect(() => {
+    if (yieldVaultIntervalRef.current) { clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null; }
+    if (!walletFull) {
+      setYieldVault(null); setYieldVaultStats(null); setYieldVaultLog([]);
+      setPriceAlerts([]); setVolMonitors([]); setTradeJournal([]);
+      return;
+    }
+    const load = (key, fallback) => { try { return JSON.parse(localStorage.getItem(`${key}-${walletFull}`) || fallback); } catch { return JSON.parse(fallback); } };
+    // Yield vault
+    const v  = load("chatfi-yieldvault", "null");
+    const s  = load("chatfi-yieldvault-stats", "null");
+    const lg = load("chatfi-yieldvault-log", "[]");
+    setYieldVault(v); setYieldVaultStats(s); setYieldVaultLog(lg);
+    if (v?.status === "active") startYieldVaultLoop(v, s);
+    // Per-wallet user data
+    setPriceAlerts(load("chatfi-alerts", "[]"));
+    setVolMonitors(load("chatfi-volmon", "[]"));
+    setTradeJournal(load("chatfi-journal", "[]"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletFull]);
+
   // ── Token info — search by symbol, return rich metadata ────────────────────
   // Token API v2: full schema incl. holderCount, circSupply, totalSupply, fdv, mcap,
   // usdPrice, liquidity, stats24h.{priceChange,buyVolume,sellVolume,numBuys,numSells,numTraders},
@@ -3010,7 +3066,7 @@ function JupChatInner() {
     const record = { ...entry, ts: Date.now() };
     setTradeJournal(prev => {
       const next = [record, ...prev].slice(0, 300);
-      try { localStorage.setItem("chatfi-journal", JSON.stringify(next)); } catch {}
+      try { localStorage.setItem(`chatfi-journal-${walletFull||"anon"}`, JSON.stringify(next)); } catch {}
       return next;
     });
   };
@@ -3037,7 +3093,7 @@ function JupChatInner() {
           return a;
         });
         setPriceAlerts(updated);
-        try { localStorage.setItem("chatfi-alerts", JSON.stringify(updated)); } catch {}
+        try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
       } catch {}
     }, 30000);
     return () => clearInterval(alertIntervalRef.current);
@@ -3175,7 +3231,7 @@ function JupChatInner() {
 
         if (changed) {
           setVolMonitors(nextMonitors);
-          try { localStorage.setItem("chatfi-volmon", JSON.stringify(nextMonitors)); } catch {}
+          try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(nextMonitors)); } catch {}
         }
       } catch (e) {
         console.warn("[ChatFi] Volatility monitor tick error:", e);
@@ -4752,11 +4808,20 @@ function JupChatInner() {
   };
 
   // ── Yield-Gated Prediction Vault — helpers & engine ──────────────────────────
+  const vaultKey      = (addr) => `chatfi-yieldvault-${addr}`;
+  const vaultStatsKey = (addr) => `chatfi-yieldvault-stats-${addr}`;
+  const vaultLogKey   = (addr) => `chatfi-yieldvault-log-${addr}`;
+
   const saveYieldVault = (vaultData, statsData) => {
+    const addr = walletFull; if (!addr) return;
     try {
-      if (vaultData !== undefined) localStorage.setItem("chatfi-yieldvault", JSON.stringify(vaultData));
-      if (statsData !== undefined) localStorage.setItem("chatfi-yieldvault-stats", JSON.stringify(statsData));
+      if (vaultData !== undefined) localStorage.setItem(vaultKey(addr), JSON.stringify(vaultData));
+      if (statsData !== undefined) localStorage.setItem(vaultStatsKey(addr), JSON.stringify(statsData));
     } catch {}
+  };
+  const saveYieldVaultLog = (log) => {
+    const addr = walletFull; if (!addr) return;
+    try { localStorage.setItem(vaultLogKey(addr), JSON.stringify(log.slice(0, 50))); } catch {}
   };
 
   const estimateAccruedYield = (vault, stats) => {
@@ -4843,13 +4908,13 @@ function JupChatInner() {
           saveYieldVault(undefined, newStats);
           const evTitle = best.event.metadata?.title || best.event.title || "market";
           const mkTitle = best.market.metadata?.title || best.market.title || "outcome";
-          setYieldVaultLog(prev => [{ ts: Date.now(), type: "bet", detail: `Auto-bet $${betAmt} ${best.side.toUpperCase()} on "${mkTitle}" (${evTitle}) — edge ${best.edge.toFixed(1)}%` }, ...prev.slice(0, 49)]);
+          setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "bet", detail: `Auto-bet $${betAmt} ${best.side.toUpperCase()} on "${mkTitle}" (${evTitle}) — edge ${best.edge.toFixed(1)}%` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
           push("ai", `**Yield Vault auto-bet** — $${betAmt} ${best.side.toUpperCase()} on **${evTitle}** (${best.edge.toFixed(1)}% edge). Principal stays in Lend earning yield.`);
         } else {
-          setYieldVaultLog(prev => [{ ts: Date.now(), type: "error", detail: `Auto-bet failed: ${betResult?.msg || "Unknown error"}` }, ...prev.slice(0, 49)]);
+          setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "error", detail: `Auto-bet failed: ${betResult?.msg || "Unknown error"}` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
         }
       } catch (err) {
-        setYieldVaultLog(prev => [{ ts: Date.now(), type: "error", detail: `Vault scan error: ${err?.message || "Unknown"}` }, ...prev.slice(0, 49)]);
+        setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "error", detail: `Vault scan error: ${err?.message || "Unknown"}` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
       }
       setYieldVaultBetting(false);
     };
@@ -4887,7 +4952,9 @@ function JupChatInner() {
       const newStats = { accrued: 0, betsPlaced: 0, winningsRecycled: 0, currentApy: usdcVault.apy, lastScanAt: null };
       setYieldVault(newVault);
       setYieldVaultStats(newStats);
-      setYieldVaultLog([{ ts: Date.now(), type: "deposit", detail: `Deposited ${depositAmt} USDC at ${usdcVault.apyDisplay} APY` }]);
+      const initLog = [{ ts: Date.now(), type: "deposit", detail: `Deposited ${depositAmt} USDC at ${usdcVault.apyDisplay} APY` }];
+      setYieldVaultLog(initLog);
+      saveYieldVaultLog(initLog);
       saveYieldVault(newVault, newStats);
       push("ai", `✅ **Yield Vault Active!**\n\n**${depositAmt} USDC** is now earning **${usdcVault.apyDisplay} APY** in Jupiter Lend.\n\nThe vault scans prediction markets every 3 min. When a market with ≥${cfg.minEdge}% edge appears, it auto-bets up to **$${cfg.maxBet}** from accrued yield — principal is always protected.\n\n[View tx →](https://solscan.io/tx/${sig})`);
       startYieldVaultLoop(newVault, newStats);
@@ -4902,6 +4969,16 @@ function JupChatInner() {
       if (next.status === "paused") { clearInterval(yieldVaultIntervalRef.current); }
       else { startYieldVaultLoop(next, yieldVaultStats); }
       push("ai", `Yield Vault ${next.status === "active" ? "▶ resumed" : "⏸ paused"}. USDC stays in Lend earning yield.`);
+      return next;
+    });
+  };
+
+  const updateYieldVaultCfg = ({ minEdge, maxBet }) => {
+    setYieldVault(prev => {
+      if (!prev) return prev;
+      const next = { ...prev, minEdge: parseFloat(minEdge) || prev.minEdge, maxBet: parseFloat(maxBet) || prev.maxBet };
+      saveYieldVault(next, undefined);
+      push("ai", `Yield Vault updated — Min edge: **${next.minEdge}%** · Max bet: **$${next.maxBet}**`);
       return next;
     });
   };
@@ -5063,6 +5140,7 @@ function JupChatInner() {
         setYieldVaultStats(null);
         saveYieldVault(null, null);
         setYieldVaultLog([]);
+        saveYieldVaultLog([]);
         setShowYieldVault(false);
         push("ai", "Yield Vault closed. Your USDC is back in your wallet.");
       }
@@ -8654,7 +8732,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const newAlert = { token: alertToken, condition: alertCond, target: alertPrice, triggered: false, id: Date.now() };
           const updated = [...priceAlerts, newAlert];
           setPriceAlerts(updated);
-          try { localStorage.setItem("chatfi-alerts", JSON.stringify(updated)); } catch {}
+          try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
           push("ai", text + `\n\nAlert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**\nI'll notify you in chat when it triggers. You can set multiple alerts.`);
         }
 
@@ -8689,7 +8767,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           };
           const updated = [...volMonitors, newMon];
           setVolMonitors(updated);
-          try { localStorage.setItem("chatfi-volmon", JSON.stringify(updated)); } catch {}
+          try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
           const fmtThreshold = isVol ? `**${threshold}%** rolling std-dev · 10-sample window`
             : triggerType === "mc"          ? `MC ${condition} **$${(thresholdValue/1e9).toFixed(2)}B**`
             : triggerType === "volume"      ? `24h volume ${condition} **$${(thresholdValue/1e6).toFixed(2)}M**`
@@ -9546,7 +9624,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               const newAlert = { token: alertToken, condition: alertCond, target: alertPrice, triggered: false, id: Date.now() };
               const updated = [...priceAlerts, newAlert];
               setPriceAlerts(updated);
-              try { localStorage.setItem("chatfi-alerts", JSON.stringify(updated)); } catch {}
+              try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
               push("ai", `🔔 Alert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**`);
 
             // ── SHOW_TRADE_JOURNAL ──────────────────────────────────────────────
@@ -11381,6 +11459,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             onDeposit={doYieldVaultDeposit}
             onToggle={toggleYieldVaultStatus}
             onWithdraw={withdrawYieldVault}
+            onUpdateVault={updateYieldVaultCfg}
             earnVaults={earnVaults}
             earnUserPositions={earnUserPositions}
             isBetting={yieldVaultBetting}
@@ -12482,13 +12561,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             const cancelMon = (id) => {
               const updated = volMonitors.filter(m => m.id !== id);
               setVolMonitors(updated);
-              try { localStorage.setItem("chatfi-volmon", JSON.stringify(updated)); } catch {}
+              try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
             };
             const resetMon = (id) => {
               priceHistoryRef.current = { ...priceHistoryRef.current };
               const updated = volMonitors.map(m => m.id === id ? { ...m, triggered: false } : m);
               setVolMonitors(updated);
-              try { localStorage.setItem("chatfi-volmon", JSON.stringify(updated)); } catch {}
+              try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
             };
             const VolCard = ({ mon }) => {
               const hist   = priceHistoryRef.current[mon.token] || [];
@@ -12623,7 +12702,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       if (window.confirm("Clear all volatility monitors?")) {
                         setVolMonitors([]);
                         priceHistoryRef.current = {};
-                        try { localStorage.removeItem("chatfi-volmon"); } catch {}
+                        try { localStorage.removeItem(`chatfi-volmon-${walletFull||"anon"}`); } catch {}
                       }
                     }} className="hov-btn"
                       style={{ fontSize:11, padding:"4px 10px", background:"transparent", border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, cursor:"pointer" }}>
@@ -13828,7 +13907,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             <span style={{ fontSize:12, color:T.text2 }}>
               <strong>{priceAlerts.filter(a=>!a.triggered).length}</strong> active alert{priceAlerts.filter(a=>!a.triggered).length>1?"s":""}: {priceAlerts.filter(a=>!a.triggered).map(a=>`${a.token} ${a.condition} $${a.target.toLocaleString()}`).join(" · ")}
             </span>
-            <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem("chatfi-alerts",JSON.stringify(cleared));}catch{} }}
+            <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`,JSON.stringify(cleared));}catch{} }}
               style={{ background:"none", border:"none", color:T.text3, fontSize:12, cursor:"pointer", flexShrink:0 }}>Clear all</button>
           </div>
         )}
@@ -13993,7 +14072,7 @@ export default function JupChat() {
           // (all-users covers both new signups AND existing accounts migrated from ETH config)
           ethereum: { createOnLogin: "off" },
           solana: { createOnLogin: "all-users" },
-          noPromptOnSignature: false,
+          noPromptOnSignature: true,
           requireUserPasswordOnCreate: false,
         },
         // Solana mainnet RPC
