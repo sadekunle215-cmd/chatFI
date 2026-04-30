@@ -344,7 +344,7 @@ Available actions:
 - "SHOW_ROUTE"      → actionData: { "from": "SOL", "to": "USDC", "amount": "1" } — show full DEX route breakdown for this swap: AMMs used, split percentages, price impact per hop.
 - "FETCH_XSTOCKS"   → actionData: { "limit": 15, "sort": "volume" } — tokenized real-world stocks (xStocks / RWA stocks) on Solana. sort: "volume"|"price_change"|"market_cap". Default limit 15.
 - "SET_PRICE_ALERT" → actionData: { "token": "SOL", "condition": "above"|"below", "price": "200" } — set an in-session price alert; ChatFi notifies in chat when price crosses the threshold.
-- "DETECT_VOLATILITY" → actionData: { "token": "SOL", "thresholdPct": "2", "autoOrder": true, "from": "USDC", "amount": "50" } — monitor a token's rolling price volatility (% std-dev over 10 samples, polled every 30s). When volatility exceeds thresholdPct, fires a chat alert. If autoOrder:true, automatically opens a pre-filled OCO limit order panel with TP=+2σ and SL=-1.5σ from current price. thresholdPct default 2. from/amount configure the auto-order size. Use for: volatility-based entries, auto-bracket orders on volatile tokens.
+- "DETECT_VOLATILITY" → actionData: { "token": "SOL", "triggerType": "volatility"|"price"|"mc"|"volume"|"priceChange"|"liquidity"|"holders", "condition": "above"|"below", "thresholdPct": "2", "thresholdValue": "", "autoOrder": true, "from": "USDC", "amount": "50" } — monitor any token metric, polled every 30s. triggerType defaults to "volatility" (% rolling std-dev, uses thresholdPct). Other types use condition+thresholdValue: price (e.g. above 130), mc (market cap, e.g. above 5000000000 for $5B), volume (24h volume, e.g. above 1000000), priceChange (24h % change, e.g. above 10 for +10%), liquidity (e.g. above 500000), holders (e.g. above 50000). autoOrder:true places an OCO order automatically on trigger (TP=+2σ SL=-1.5σ). from/amount set order size. Use for: vol spike entries, price breakout orders, MC milestones, volume spikes, holder growth.
 - "FETCH_VOL_MONITORS" → actionData: {} — show all active volatility monitors with cancel buttons.
 - "SCAN_PRED_ODDS"    → actionData: { "category": "sports"|"crypto"|"politics"|null, "query": null, "limit": 20, "minEdge": "5", "sortBy": "edge"|"volume"|"probability" } — CLI-style odds scanner: fetches live prediction markets, calculates implied probability, edge score (deviation from 50/50 or from user-supplied fair value), and ranks by sharpest opportunities. minEdge = minimum % edge to show (default 5). sortBy: "edge" (sharpest mispricing first), "volume" (most liquid), "probability" (most lopsided). Shows a terminal-style table with event, outcome, YES%, NO%, edge, volume. Opens the pred CLI dashboard panel.
 - "AUTO_PRED_BET"     → actionData: { "category": "sports"|"crypto"|"politics"|null, "query": null, "minEdge": "10", "maxAmount": "20", "side": "yes"|"no"|"best", "limit": 5, "dryRun": false } — automatically scan odds and place bets on markets where edge exceeds minEdge%. maxAmount = max USDC per bet (default 20, min $5). side: "yes" = only take YES positions, "no" = only NO, "best" = take whichever side has edge. dryRun:true = show what it WOULD bet without placing. limit = max number of bets to place. ALWAYS confirm with text summary of what was bet and why.
@@ -397,7 +397,7 @@ Rules:
 - "my locks" / "vested tokens" / "claim vested" / "locked tokens" / "view locks" / "my vesting" → FETCH_LOCKS
 - "show route" / "how is swap routed" / "which DEX" / "route breakdown" / "swap path" / "which AMM" → SHOW_ROUTE
 - "alert me when" / "notify me when" / "price alert" / "tell me when X hits $Y" / "alert when X above/below" → SET_PRICE_ALERT — extract token, condition (above/below), price
-- "volatility monitor" / "watch volatility" / "detect volatility" / "auto-order when volatile" / "set limit if volatile" / "trade volatility" / "monitor X for volatility" / "auto-bracket X" / "auto OCO on volatility" → DETECT_VOLATILITY — extract token, thresholdPct (default 2), autoOrder (true if user says auto/automatic/set order), from (default USDC), amount
+- "volatility monitor" / "watch volatility" / "detect volatility" / "auto-order when volatile" / "monitor X for volatility" / "auto OCO on volatility" → DETECT_VOLATILITY triggerType:"volatility" — "alert when SOL hits $150" / "notify me if MC exceeds $5B" / "watch volume spike" → DETECT_VOLATILITY with triggerType:"price"|"mc"|"volume"|"priceChange"|"liquidity"|"holders" + condition + thresholdValue — extract autoOrder (true if user says auto/automatic/place order), from (default USDC), amount
 - "VOLATILITY CHAINING: "monitor SOL volatility and auto-set OCO" → DETECT_VOLATILITY with autoOrder:true. "watch BONK volatility then show my monitors" → CHAINED_ACTIONS [DETECT_VOLATILITY, FETCH_VOL_MONITORS]
 - "my volatility monitors" / "show vol monitors" / "active volatility watches" / "cancel vol monitor" → FETCH_VOL_MONITORS
 - "scan odds" / "find value bets" / "best prediction odds" / "odds scanner" / "edge scanner" / "which prediction has best odds" / "show me mispriced markets" / "find underpriced bets" → SCAN_PRED_ODDS — extract category, minEdge (default 5), sortBy (default "edge")
@@ -2755,55 +2755,91 @@ function JupChatInner() {
           priceHistoryRef.current[sym] = hist.slice(-WINDOW);
         }
 
+        // ── Fetch token info for non-volatility monitors ─────────────────────
+        const nonVolSyms = [...new Set(
+          volMonitorsRef.current.filter(m => !m.triggered && m.triggerType && m.triggerType !== "volatility").map(m => m.token)
+        )];
+        const tokenInfoMap = {};
+        for (const sym of nonVolSyms) {
+          try {
+            const info = await fetchTokenInfo(sym);
+            if (info) tokenInfoMap[sym] = info;
+          } catch {}
+        }
+
         // ── Evaluate each active monitor ──────────────────────────────────────
         let changed = false;
         const nextMonitors = volMonitorsRef.current.map(mon => {
           if (mon.triggered) return mon;
-          const hist = priceHistoryRef.current[mon.token];
-          if (!hist || hist.length < 3) return mon;
+          const triggerType = mon.triggerType || "volatility";
 
-          const prices  = hist.map(h => h.price);
-          const mean    = prices.reduce((a, b) => a + b, 0) / prices.length;
-          const variance= prices.reduce((a, b) => a + (b - mean) ** 2, 0) / prices.length;
-          const stdDev  = Math.sqrt(variance);
-          const volPct  = (stdDev / mean) * 100;
+          // ── Helper: fire alert + optional auto-order ───────────────────────
+          const fireAlert = (headline, details, currentPrice, stdDev) => {
+            const tpPrice = stdDev ? (currentPrice + stdDev * 2).toFixed(6) : (currentPrice * 1.05).toFixed(6);
+            const slPrice = stdDev ? Math.max(0, currentPrice - stdDev * 1.5).toFixed(6) : (currentPrice * 0.95).toFixed(6);
+            push("ai",
+              `**⚡ ${headline}**\n\n${details}\n\n` +
+              (mon.autoOrder
+                ? `Auto-placing OCO order — TP: **$${tpPrice}** · SL: **$${slPrice}** · signing wallet now…`
+                : `Tip: *"Set OCO on ${mon.token} TP $${tpPrice} SL $${slPrice}"* to trade this move.`)
+            );
+            if (mon.autoOrder) {
+              const autoCfg  = mon.autoOrderCfg || {};
+              const from     = (autoCfg.from || "USDC").toUpperCase();
+              const amount   = autoCfg.amount || "50";
+              const toMint   = tokenCacheRef.current[mon.token] || TOKEN_MINTS[mon.token] || "";
+              const fromMint = tokenCacheRef.current[from] || TOKEN_MINTS[from] || TOKEN_MINTS.USDC;
+              doTriggerV2({
+                orderType: "oco",
+                from, fromMint, fromDecimals: from === "SOL" ? 9 : 6,
+                to: mon.token, toMint, toDecimals: 9,
+                amount, triggerCondition: "below", triggerPriceUsd: "",
+                tpPriceUsd: tpPrice, slPriceUsd: slPrice, slippageBps: "100", expiryDays: "7",
+              });
+            }
+          };
 
-          if (volPct < mon.thresholdPct) return mon;
+          if (triggerType === "volatility") {
+            // ── Volatility: rolling std-dev ──────────────────────────────────
+            const hist = priceHistoryRef.current[mon.token];
+            if (!hist || hist.length < 3) return mon;
+            const prices   = hist.map(h => h.price);
+            const mean     = prices.reduce((a, b) => a + b, 0) / prices.length;
+            const variance = prices.reduce((a, b) => a + (b - mean) ** 2, 0) / prices.length;
+            const stdDev   = Math.sqrt(variance);
+            const volPct   = (stdDev / mean) * 100;
+            if (volPct < mon.thresholdPct) return mon;
+            const currentPrice = prices[prices.length - 1];
+            fireAlert(
+              `Volatility Alert — ${mon.token}`,
+              `Rolling volatility: **${volPct.toFixed(2)}%** (threshold: ${mon.thresholdPct}%, window: ${hist.length} samples)\nCurrent price: **$${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}** · 1σ spread: **±$${stdDev.toFixed(6)}**`,
+              currentPrice, stdDev
+            );
+          } else {
+            // ── Metric-based triggers ────────────────────────────────────────
+            const info = tokenInfoMap[mon.token];
+            if (!info) return mon;
+            const condition = mon.condition || "above";
+            const target    = mon.thresholdValue;
+            const price     = parseFloat(info.usdPrice) || 0;
 
-          // ── Threshold crossed ─────────────────────────────────────────────
-          const currentPrice = prices[prices.length - 1];
-          const tpPrice = (currentPrice + stdDev * 2).toFixed(6);
-          const slPrice = Math.max(0, currentPrice - stdDev * 1.5).toFixed(6);
-
-          push("ai",
-            `**⚡ Volatility Alert — ${mon.token}**\n\n` +
-            `Rolling volatility: **${volPct.toFixed(2)}%** (threshold: ${mon.thresholdPct}%, window: ${hist.length} samples)\n` +
-            `Current price: **$${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}**\n` +
-            `1σ spread: **±$${stdDev.toFixed(6)}**\n\n` +
-            (mon.autoOrder
-              ? `Auto-placing OCO order — TP: **$${tpPrice}** · SL: **$${slPrice}** · signing wallet now…`
-              : `Tip: *"Set OCO on ${mon.token} TP $${tpPrice} SL $${slPrice}"* to trade this move.`)
-          );
-
-          if (mon.autoOrder) {
-            const autoCfg  = mon.autoOrderCfg || {};
-            const from     = (autoCfg.from || "USDC").toUpperCase();
-            const amount   = autoCfg.amount || "50";
-            const toMint   = tokenCacheRef.current[mon.token] || TOKEN_MINTS[mon.token] || "";
-            const fromMint = tokenCacheRef.current[from] || TOKEN_MINTS[from] || TOKEN_MINTS.USDC;
-            // Place OCO order headlessly — no panel, fully automatic
-            doTriggerV2({
-              orderType: "oco",
-              from, fromMint, fromDecimals: from === "SOL" ? 9 : 6,
-              to: mon.token, toMint, toDecimals: 9,
-              amount,
-              triggerCondition: "below",
-              triggerPriceUsd: "",
-              tpPriceUsd: tpPrice,
-              slPriceUsd: slPrice,
-              slippageBps: "100",
-              expiryDays: "7",
-            });
+            const metricMap = {
+              price:       { value: price,                    label: `Price`,       fmt: v => `$${Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:6})}` },
+              mc:          { value: parseFloat(info.market_cap)||0, label: `Market Cap`, fmt: v => `$${(v/1e9).toFixed(3)}B` },
+              volume:      { value: parseFloat(info.daily_volume)||0, label: `24h Volume`, fmt: v => `$${(v/1e6).toFixed(2)}M` },
+              priceChange: { value: parseFloat(info.priceChange24h)||0, label: `24h Change`, fmt: v => `${v > 0 ? "+" : ""}${v.toFixed(2)}%` },
+              liquidity:   { value: parseFloat(info.liquidity)||0,    label: `Liquidity`,  fmt: v => `$${(v/1e6).toFixed(2)}M` },
+              holders:     { value: parseFloat(info.holderCount)||0,  label: `Holders`,    fmt: v => Number(v).toLocaleString() },
+            };
+            const m = metricMap[triggerType];
+            if (!m) return mon;
+            const hit = condition === "above" ? m.value >= target : m.value <= target;
+            if (!hit) return mon;
+            fireAlert(
+              `${m.label} Alert — ${mon.token}`,
+              `**${m.label}** is now **${m.fmt(m.value)}** (trigger: ${condition} ${m.fmt(target)})\nCurrent price: **$${price.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:6})}**`,
+              price, null
+            );
           }
 
           changed = true;
@@ -6460,7 +6496,9 @@ function JupChatInner() {
   // 1. Get vault  2. Craft deposit tx  3. Sign  4. POST /orders/price
   // Pass an explicit `overrideCfg` to run headlessly (e.g. from volatility auto-order).
   const doTriggerV2 = async (overrideCfg) => {
-    const cfg = overrideCfg || trigV2Cfg;
+    // Guard: if called via onClick, overrideCfg will be a React SyntheticEvent — ignore it
+    const cfg = (overrideCfg && typeof overrideCfg === "object" && !overrideCfg.nativeEvent && !overrideCfg.type)
+      ? overrideCfg : trigV2Cfg;
     // OCO orders don't need triggerPriceUsd — only single/otoco do
     if (!cfg.amount) return;
     if (cfg.orderType === "single" && !cfg.triggerPriceUsd) return;
@@ -8103,21 +8141,29 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
       // ── DETECT_VOLATILITY ──────────────────────────────────────────────────
       } else if (action === "DETECT_VOLATILITY") {
-        const monToken    = (actionData?.token || "SOL").toUpperCase();
-        const threshold   = parseFloat(actionData?.thresholdPct ?? actionData?.threshold ?? "2");
-        const autoOrder   = actionData?.autoOrder === true || actionData?.autoOrder === "true";
-        const autoFrom    = (actionData?.from   || "USDC").toUpperCase();
-        const autoAmount  = actionData?.amount  || "50";
+        const monToken      = (actionData?.token || "SOL").toUpperCase();
+        const triggerType   = actionData?.triggerType || "volatility";
+        const condition     = actionData?.condition || "above";
+        const threshold     = parseFloat(actionData?.thresholdPct ?? actionData?.threshold ?? "2");
+        const thresholdValue= actionData?.thresholdValue ? parseFloat(actionData.thresholdValue) : null;
+        const autoOrder     = actionData?.autoOrder === true || actionData?.autoOrder === "true";
+        const autoFrom      = (actionData?.from   || "USDC").toUpperCase();
+        const autoAmount    = actionData?.amount  || "50";
+        const isVol         = triggerType === "volatility";
 
-        if (!threshold || isNaN(threshold)) {
+        if (isVol && (!threshold || isNaN(threshold))) {
           push("ai", "Please specify a volatility threshold, e.g. *monitor SOL volatility above 2%*.");
+        } else if (!isVol && !thresholdValue) {
+          push("ai", `Please specify a value for ${triggerType}, e.g. *alert me when SOL MC exceeds $5B*.`);
         } else {
-          // Clear stale price history so rolling window starts fresh for this token
           priceHistoryRef.current[monToken] = [];
           const newMon = {
             id: Date.now(),
             token: monToken,
-            thresholdPct: threshold,
+            triggerType,
+            condition,
+            thresholdPct: isVol ? threshold : null,
+            thresholdValue: !isVol ? thresholdValue : null,
             autoOrder,
             autoOrderCfg: autoOrder ? { from: autoFrom, amount: autoAmount } : null,
             triggered: false,
@@ -8125,13 +8171,20 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const updated = [...volMonitors, newMon];
           setVolMonitors(updated);
           try { localStorage.setItem("chatfi-volmon", JSON.stringify(updated)); } catch {}
+          const fmtThreshold = isVol ? `**${threshold}%** rolling std-dev · 10-sample window`
+            : triggerType === "mc"          ? `MC ${condition} **$${(thresholdValue/1e9).toFixed(2)}B**`
+            : triggerType === "volume"      ? `24h volume ${condition} **$${(thresholdValue/1e6).toFixed(2)}M**`
+            : triggerType === "liquidity"   ? `liquidity ${condition} **$${(thresholdValue/1e6).toFixed(2)}M**`
+            : triggerType === "priceChange" ? `24h change ${condition} **${thresholdValue}%**`
+            : triggerType === "holders"     ? `holders ${condition} **${Number(thresholdValue).toLocaleString()}**`
+            : `price ${condition} **$${Number(thresholdValue).toLocaleString()}**`;
           push("ai",
             text + `\n\n` +
-            `**Volatility monitor active — ${monToken}**\n` +
-            `Threshold: **${threshold}%** rolling std-dev · 10-sample window · polled every 30s\n` +
+            `**Monitor active — ${monToken}**\n` +
+            `Trigger: ${fmtThreshold} · polled every 30s\n` +
             (autoOrder
-              ? `Auto-order: when threshold hits, an **OCO** panel opens pre-filled with σ-based TP/SL. Amount: **${autoAmount} ${autoFrom}**`
-              : `I'll notify you in chat when ${monToken} volatility spikes above ${threshold}%.`)
+              ? `Auto-order: OCO places automatically on trigger. Amount: **${autoAmount} ${autoFrom}**`
+              : `I'll notify you in chat when the condition is met.`)
           );
         }
 
@@ -10208,7 +10261,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               </div>
 
               <div style={{ display:"flex", gap:8 }}>
-                <button onClick={doTriggerV2}
+                <button onClick={() => doTriggerV2()}
                   disabled={!trigV2Cfg.amount || trigV2Status === "authing" || trigV2Status === "signing"}
                   className="hov-btn"
                   style={{ flex:1, padding:"10px", background: trigV2Status ? T.border : T.purple, border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:600, cursor:"pointer" }}>
@@ -11872,40 +11925,61 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   </div>
 
                   {/* Stats grid */}
-                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:12 }}>
-                    {[
-                      ["Threshold", `${mon.thresholdPct}%`],
-                      ["Live Vol", volPct !== null ? `${volPct.toFixed(2)}%` : `${hist.length} pts`],
-                      ["Samples", `${hist.length} / 10`],
-                    ].map(([label, val]) => (
-                      <div key={label} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, padding:"8px 10px" }}>
-                        <div style={{ fontSize:9, color:T.text3, marginBottom:3, textTransform:"uppercase", letterSpacing:"0.06em" }}>{label}</div>
-                        <div style={{ fontSize:13, fontWeight:700, color: label==="Live Vol" && volPct !== null && volPct >= mon.thresholdPct ? T.green : T.text1 }}>{val}</div>
-                      </div>
-                    ))}
-                  </div>
+                  {(() => {
+                    const tt = mon.triggerType || "volatility";
+                    const isVol = tt === "volatility";
+                    const fmtTarget = !isVol && mon.thresholdValue
+                      ? tt === "mc"          ? `$${(mon.thresholdValue/1e9).toFixed(2)}B`
+                      : tt === "volume"      ? `$${(mon.thresholdValue/1e6).toFixed(2)}M`
+                      : tt === "liquidity"   ? `$${(mon.thresholdValue/1e6).toFixed(2)}M`
+                      : tt === "priceChange" ? `${mon.thresholdValue}%`
+                      : tt === "holders"     ? Number(mon.thresholdValue).toLocaleString()
+                      : `$${Number(mon.thresholdValue).toLocaleString()}`
+                      : null;
+                    const typeIcon = { volatility:"📈", price:"💲", mc:"🏦", volume:"📊", priceChange:"🔄", liquidity:"💧", holders:"👥" }[tt] || "⚡";
+                    return (
+                      <>
+                        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:12 }}>
+                          {isVol ? [
+                            ["Threshold", `${mon.thresholdPct}%`],
+                            ["Live Vol", volPct !== null ? `${volPct.toFixed(2)}%` : `${hist.length} pts`],
+                            ["Samples", `${hist.length} / 10`],
+                          ] : [
+                            ["Type", `${typeIcon} ${tt}`],
+                            ["Condition", mon.condition || "above"],
+                            ["Target", fmtTarget || "—"],
+                          ].map(([label, val]) => (
+                            <div key={label} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, padding:"8px 10px" }}>
+                              <div style={{ fontSize:9, color:T.text3, marginBottom:3, textTransform:"uppercase", letterSpacing:"0.06em" }}>{label}</div>
+                              <div style={{ fontSize:13, fontWeight:700, color: label==="Live Vol" && volPct !== null && volPct >= mon.thresholdPct ? T.green : T.text1 }}>{val}</div>
+                            </div>
+                          ))}
+                        </div>
 
-                  {/* Vol progress bar */}
-                  {volPct !== null && (
-                    <div style={{ marginBottom:12 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-                        <span style={{ fontSize:11, color:T.text3 }}>Volatility vs threshold</span>
-                        <span style={{ fontSize:11, color: volPct >= mon.thresholdPct ? T.green : T.text2 }}>
-                          {Math.min(100, (volPct / mon.thresholdPct) * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                      <div style={{ height:4, background:T.border, borderRadius:4, overflow:"hidden" }}>
-                        <div style={{
-                          width:`${Math.min(100, (volPct / mon.thresholdPct) * 100)}%`,
-                          height:"100%",
-                          background: volPct >= mon.thresholdPct
-                            ? `linear-gradient(90deg, ${T.green}, #7fff00)`
-                            : `linear-gradient(90deg, ${T.teal}, ${T.accent})`,
-                          borderRadius:4, transition:"width 0.5s ease",
-                        }} />
-                      </div>
-                    </div>
-                  )}
+                        {/* Progress bar — volatility only */}
+                        {isVol && volPct !== null && (
+                          <div style={{ marginBottom:12 }}>
+                            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                              <span style={{ fontSize:11, color:T.text3 }}>Volatility vs threshold</span>
+                              <span style={{ fontSize:11, color: volPct >= mon.thresholdPct ? T.green : T.text2 }}>
+                                {Math.min(100, (volPct / mon.thresholdPct) * 100).toFixed(0)}%
+                              </span>
+                            </div>
+                            <div style={{ height:4, background:T.border, borderRadius:4, overflow:"hidden" }}>
+                              <div style={{
+                                width:`${Math.min(100, (volPct / mon.thresholdPct) * 100)}%`,
+                                height:"100%",
+                                background: volPct >= mon.thresholdPct
+                                  ? `linear-gradient(90deg, ${T.green}, #7fff00)`
+                                  : `linear-gradient(90deg, ${T.teal}, ${T.accent})`,
+                                borderRadius:4, transition:"width 0.5s ease",
+                              }} />
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
 
                   {/* Config badge row */}
                   <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:12 }}>
@@ -11913,7 +11987,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       {mon.autoOrder ? `🤖 Auto-OCO · ${mon.autoOrderCfg?.amount || "50"} ${mon.autoOrderCfg?.from || "USDC"}` : "👁 Alert only"}
                     </span>
                     <span style={{ fontSize:11, padding:"3px 9px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, color:T.text3 }}>
-                      30s poll · 10-sample window
+                      30s poll{(mon.triggerType || "volatility") === "volatility" ? " · 10-sample window" : ""}
                     </span>
                   </div>
 
