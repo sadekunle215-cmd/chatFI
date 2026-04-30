@@ -90,14 +90,14 @@ export default function PortfolioPanel({ show, onClose, walletFull, portfolio, o
           {/* Earn tab */}
           {!loading && section === "earn" && (
             earnData.length === 0
-              ? <NoData label="No earn positions." sub="Try \"show earn vaults\" to deposit." />
+              ? <NoData label="No earn positions." sub='Try "show earn vaults" to deposit.' />
               : earnData.map((p, i) => <EarnRow key={i} pos={p} />)
           )}
 
           {/* Orders tab */}
           {!loading && section === "orders" && (
             orderData.length === 0
-              ? <NoData label="No open orders." sub="Try \"limit order: buy SOL below $140\"." />
+              ? <NoData label="No open orders." sub='Try "limit order: buy SOL below $140".' />
               : orderData.map((o, i) => <OrderRow key={i} order={o} />)
           )}
         </div>
