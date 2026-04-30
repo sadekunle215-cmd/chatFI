@@ -1,12 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import AppProviders from "./providers/AppProviders";
-import ChatFi from "./chatFi";
+import JupChat from "./JupChat";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <AppProviders>
-      <ChatFi />
-    </AppProviders>
+    <JupChat />
   </React.StrictMode>
 );
