@@ -437,7 +437,7 @@ Rules:
 - DELAYED/TIMED SELL: "after 4 seconds sell X to USDC" / "sell back in 2 minutes" → include a second BASKET_SWAP step in CHAINED_ACTIONS with the sell trades. The UI executes steps in sequence — the user will see the sell panel open immediately after buys complete. Mention the timing in your text but do not skip the action.
 - "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
 - "yield vault" / "yield-gated vault" / "prediction vault" / "auto bet with yield" / "earn while betting" / "bet yield not principal" / "capital always working" / "start vault" → SHOW_YIELD_VAULT — pre-fill depositAmount/minEdge/maxBet/category from user message if mentioned
-- "vault status" / "my yield vault" / "how is my vault doing" / "vault stats" / "check vault" → FETCH_YIELD_VAULT
+- "vault status" / "my yield vault" / "how is my vault doing" / "vault stats" / "check vault" / "vault history" / "my vault history" / "yield vault history" / "vault activity" / "vault log" / "what has my vault done" / "vault bets" / "vault auto-bets" → FETCH_YIELD_VAULT
 - YIELD VAULT CHAINING: "deposit USDC and start yield vault" / "earn yield and auto-bet predictions" → CHAINED_ACTIONS steps: [SHOW_SWAP (if no USDC), SHOW_YIELD_VAULT]. "check my vault then scan odds" → CHAINED_ACTIONS [FETCH_YIELD_VAULT, SCAN_PRED_ODDS]
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
@@ -1969,23 +1969,149 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
   const ageDays   = vault ? Math.floor((Date.now() - vault.depositedAt) / 86400000) : 0;
   const apy       = vault?.earnApy ? (vault.earnApy * 100).toFixed(2) : usdcVault?.apy ? (usdcVault.apy * 100).toFixed(2) : "?";
   const accruedEst = vault ? Math.max(0, vault.depositAmount * (vault.earnApy||0.05) * ((Date.now()-vault.depositedAt)/(365*24*3600*1000)) - (vaultStats?.betsPlaced||0)*vault.maxBet*0.5) : 0;
-  const categories = [{ label:"All", value:null },{ label:"⚽ Sports", value:"sports" },{ label:"₿ Crypto", value:"crypto" },{ label:"🗳 Politics", value:"politics" }];
-  const logTypeColor = { deposit:"#68d391", bet:"#a78bfa", win:"#c7f284", sweep:"#38bdf8" };
-  const logTypeIcon  = { deposit:"↓", bet:"⚡", win:"🏆", sweep:"♻️" };
+
+  // SVG icon components — no emojis
+  const IcVault = () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.purple} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="7" width="20" height="14" rx="2"/>
+      <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+      <circle cx="12" cy="14" r="2"/>
+      <line x1="12" y1="12" x2="12" y2="12"/>
+    </svg>
+  );
+  const IcClose = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.text3} strokeWidth="2" strokeLinecap="round">
+      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+    </svg>
+  );
+  const IcDeposit = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>
+    </svg>
+  );
+  const IcBolt = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+    </svg>
+  );
+  const IcTarget = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
+    </svg>
+  );
+  const IcRecycle = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+    </svg>
+  );
+  const IcLock = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="11" width="14" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </svg>
+  );
+  const IcChart = () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>
+    </svg>
+  );
+  const IcTrophy = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>
+      <path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/>
+      <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/>
+      <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>
+    </svg>
+  );
+  const IcPause = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>
+    </svg>
+  );
+  const IcPlay = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+  );
+  const IcUpload = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>
+    </svg>
+  );
+  const IcSports = () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+      <path d="M2 12h20"/>
+    </svg>
+  );
+  const IcCrypto = () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11.767 19.089c4.924.868 6.14-6.025 1.216-6.894m-1.216 6.894L5.86 18.047m5.908 1.042-.347 1.97m1.563-8.864c4.924.869 6.14-6.025 1.215-6.893m-1.215 6.893-3.94-.694m5.155-6.2L8.29 5.4m5.908 1.042.348-1.97M7.48 20.364l3.126-17.727"/>
+    </svg>
+  );
+  const IcPolitics = () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+      <polyline points="9 22 9 12 15 12 15 22"/>
+    </svg>
+  );
+  const IcDot = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+    </svg>
+  );
+
+  // Jupiter logo SVG (official mark)
+  const JupLogo = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z" fill={T.accent} fillOpacity="0.15"/>
+      <path d="M7 8.5C7 7.119 8.119 6 9.5 6h5C15.881 6 17 7.119 17 8.5v1C17 10.881 15.881 12 14.5 12H12v2.5A2.5 2.5 0 0 1 9.5 17h-1a.5.5 0 0 1 0-1h1A1.5 1.5 0 0 0 11 14.5V12H9.5C8.119 12 7 10.881 7 9.5v-1zm2.5-1.5A1.5 1.5 0 0 0 8 8.5v1A1.5 1.5 0 0 0 9.5 11H14.5A1.5 1.5 0 0 0 16 9.5v-1A1.5 1.5 0 0 0 14.5 7h-5z" fill={T.accent}/>
+    </svg>
+  );
+
+  const categories = [
+    { label:"All", value:null, Icon: null },
+    { label:"Sports", value:"sports", Icon: IcSports },
+    { label:"Crypto", value:"crypto", Icon: IcCrypto },
+    { label:"Politics", value:"politics", Icon: IcPolitics },
+  ];
+
+  const howItWorks = [
+    { Icon: IcDeposit, txt: `Deposit USDC → earns **${usdcVault?.apyDisplay||"~5–10%"}** APY in Jupiter Lend`, key:"deposit" },
+    { Icon: IcBolt,    txt: "Auto-scans prediction markets every 3 min for edge", key:"bolt" },
+    { Icon: IcTarget,  txt: "Bets accrued yield only when edge ≥ your threshold", key:"target" },
+    { Icon: IcRecycle, txt: "Winnings auto-sweep back to Lend to compound", key:"recycle" },
+    { Icon: IcLock,    txt: "Principal never leaves Lend — only yield is at risk", key:"lock" },
+  ];
+
+  const logTypeColor = { deposit:"#68d391", bet:T.purple, win:T.accent, sweep:T.teal };
+  const LogIcon = ({ type }) => {
+    const style = { color: logTypeColor[type]||T.text2, flexShrink:0 };
+    if (type==="deposit") return <span style={style}><IcDeposit/></span>;
+    if (type==="bet")     return <span style={style}><IcBolt/></span>;
+    if (type==="win")     return <span style={style}><IcTrophy/></span>;
+    if (type==="sweep")   return <span style={style}><IcRecycle/></span>;
+    return <span style={style}><IcDot/></span>;
+  };
 
   return (
     <div style={{ position:"fixed", inset:0, zIndex:300, display:"flex", alignItems:"flex-end", justifyContent:"center", background:"rgba(0,0,0,0.6)", backdropFilter:"blur(4px)" }} onClick={e => e.target===e.currentTarget && onClose()}>
       <div style={{ width:"100%", maxWidth:480, background:T.bg, borderRadius:"18px 18px 0 0", border:`1px solid ${T.border}`, borderBottom:"none", maxHeight:"88vh", overflowY:"auto", padding:"0 0 32px" }}>
+
         {/* Header */}
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"16px 16px 12px", borderBottom:`1px solid ${T.border}`, position:"sticky", top:0, background:T.bg, zIndex:2 }}>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <div style={{ width:32, height:32, borderRadius:8, background:T.purpleBg, border:`1px solid ${T.purple}30`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>🏦</div>
+            <div style={{ width:32, height:32, borderRadius:8, background:T.purpleBg, border:`1px solid ${T.purple}30`, display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <IcVault/>
+            </div>
             <div>
               <div style={{ fontSize:14, fontWeight:700, color:T.text1 }}>Yield Vault</div>
               <div style={{ fontSize:11, color:T.text3 }}>USDC earns yield · auto-bets on edge</div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background:"none", border:"none", color:T.text3, fontSize:20, cursor:"pointer", padding:"2px 6px" }}>✕</button>
+          <button onClick={onClose} style={{ background:"none", border:"none", cursor:"pointer", padding:"4px", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <IcClose/>
+          </button>
         </div>
 
         <div style={{ padding:"16px 16px 0" }}>
@@ -2023,8 +2149,12 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                 </div>
               </div>
               <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-                <button onClick={onToggle} style={{ flex:1, padding:"10px 0", borderRadius:10, border:`1px solid ${T.border}`, background:vault.status==="active"?"#1e1e1e":T.accentBg, color:vault.status==="active"?T.text2:T.accent, fontSize:13, fontWeight:600, cursor:"pointer" }}>{vault.status==="active"?"⏸ Pause":"▶ Resume"}</button>
-                <button onClick={onWithdraw} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"1px solid #f2848440", background:"#2e1a1a", color:"#f28484", fontSize:13, fontWeight:600, cursor:"pointer" }}>↑ Withdraw All</button>
+                <button onClick={onToggle} style={{ flex:1, padding:"10px 0", borderRadius:10, border:`1px solid ${T.border}`, background:vault.status==="active"?"#1e1e1e":T.accentBg, color:vault.status==="active"?T.text2:T.accent, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                  {vault.status==="active" ? <><IcPause/> Pause</> : <><IcPlay/> Resume</>}
+                </button>
+                <button onClick={onWithdraw} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"1px solid #f2848440", background:"#2e1a1a", color:"#f28484", fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                  <IcUpload/> Withdraw All
+                </button>
               </div>
               {vaultLog?.length>0&&(
                 <div style={{ marginBottom:12 }}>
@@ -2032,7 +2162,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                   <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                     {vaultLog.slice(0,10).map((entry,i)=>(
                       <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 10px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8 }}>
-                        <span style={{ fontSize:12, flexShrink:0 }}>{logTypeIcon[entry.type]||"•"}</span>
+                        <LogIcon type={entry.type}/>
                         <span style={{ fontSize:11, color:logTypeColor[entry.type]||T.text2, flex:1, lineHeight:1.4 }}>{entry.detail}</span>
                         <span style={{ fontSize:9, color:T.text3, flexShrink:0 }}>{new Date(entry.ts).toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"})}</span>
                       </div>
@@ -2045,14 +2175,15 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
             <>
               {/* Setup form */}
               <div style={{ background:T.purpleBg, border:`1px solid ${T.purple}30`, borderRadius:12, padding:14, marginBottom:14 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:T.purple, marginBottom:6 }}>How it works</div>
-                {[["↓",`Deposit USDC → earns **${usdcVault?.apyDisplay||"~5–10%"}** APY in Jupiter Lend`],["⚡","Auto-scans prediction markets every 3 min for edge"],["🎯","Bets accrued yield only when edge ≥ your threshold"],["♻️","Winnings auto-sweep back to Lend to compound"],["🔒","Principal never leaves Lend — only yield is at risk"]].map(([icon,txt])=>(
-                  <div key={icon} style={{ display:"flex", gap:8, alignItems:"flex-start", marginBottom:5 }}>
-                    <span style={{ fontSize:12, flexShrink:0 }}>{icon}</span>
-                    <span style={{ fontSize:12, color:T.text2, lineHeight:1.4 }} dangerouslySetInnerHTML={{ __html:txt.replace(/\*\*(.+?)\*\*/g,`<strong style="color:${T.text1}">$1</strong>`) }}/>
+                <div style={{ fontSize:12, fontWeight:700, color:T.purple, marginBottom:8 }}>How it works</div>
+                {howItWorks.map(({ Icon, txt, key }) => (
+                  <div key={key} style={{ display:"flex", gap:8, alignItems:"flex-start", marginBottom:6 }}>
+                    <span style={{ color:T.purple, flexShrink:0, marginTop:1 }}><Icon/></span>
+                    <span style={{ fontSize:12, color:T.text2, lineHeight:1.45 }} dangerouslySetInnerHTML={{ __html:txt.replace(/\*\*(.+?)\*\*/g,`<strong style="color:${T.text1}">$1</strong>`) }}/>
                   </div>
                 ))}
               </div>
+
               {/* Deposit amount */}
               <div style={{ marginBottom:10 }}>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Deposit Amount (USDC)</div>
@@ -2062,6 +2193,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                 </div>
                 {usdcPos?.amount>0&&<div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Current Earn balance: {usdcPos.amount.toFixed(4)} USDC</div>}
               </div>
+
               {/* Min edge */}
               <div style={{ marginBottom:10 }}>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Min Edge to Auto-bet (%)</div>
@@ -2071,6 +2203,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                 </div>
                 <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Higher = fewer but sharper bets. 8% is a good starting point.</div>
               </div>
+
               {/* Max bet */}
               <div style={{ marginBottom:10 }}>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Max Bet Per Market (USDC)</div>
@@ -2080,24 +2213,41 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                 </div>
                 <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Capped to accrued yield — never touches principal.</div>
               </div>
+
               {/* Category */}
               <div style={{ marginBottom:14 }}>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Market Category</div>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                  {categories.map(cat=><button key={String(cat.value)} onClick={()=>setCfg(c=>({...c,category:cat.value}))} style={{ padding:"7px 12px", border:`1px solid ${cfg.category===cat.value?T.accent:T.border}`, borderRadius:8, background:cfg.category===cat.value?T.accentBg:T.surface, color:cfg.category===cat.value?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>{cat.label}</button>)}
+                  {categories.map(cat => {
+                    const active = cfg.category === cat.value;
+                    return (
+                      <button key={String(cat.value)} onClick={()=>setCfg(c=>({...c,category:cat.value}))} style={{ padding:"7px 12px", border:`1px solid ${active?T.accent:T.border}`, borderRadius:8, background:active?T.accentBg:T.surface, color:active?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", gap:5 }}>
+                        {cat.Icon && <cat.Icon/>}
+                        {cat.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
+
               {/* APY preview */}
-              {usdcVault&&<div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", background:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:10, marginBottom:14 }}>
-                <span style={{ fontSize:18 }}>📈</span>
-                <div>
-                  <div style={{ fontSize:12, fontWeight:700, color:T.accent }}>Current Earn APY: {usdcVault.apyDisplay}</div>
-                  <div style={{ fontSize:10, color:T.text3 }}>Your ${cfg.depositAmount||"100"} USDC earns ~${((parseFloat(cfg.depositAmount||"100")*(usdcVault.apy||0.05))/12).toFixed(3)}/mo before bets</div>
+              {usdcVault && (
+                <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", background:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:10, marginBottom:14 }}>
+                  <div style={{ flexShrink:0 }}><IcChart/></div>
+                  <div>
+                    <div style={{ fontSize:12, fontWeight:700, color:T.accent, display:"flex", alignItems:"center", gap:5 }}>
+                      <JupLogo/> Current Earn APY: {usdcVault.apyDisplay}
+                    </div>
+                    <div style={{ fontSize:10, color:T.text3 }}>Your ${cfg.depositAmount||"100"} USDC earns ~${((parseFloat(cfg.depositAmount||"100")*(usdcVault.apy||0.05))/12).toFixed(3)}/mo before bets</div>
+                  </div>
                 </div>
-              </div>}
+              )}
+
               {!walletFull
                 ? <div style={{ padding:"12px 0", textAlign:"center", fontSize:13, color:T.text3 }}>Connect your wallet to start the Yield Vault</div>
-                : <button onClick={()=>onDeposit(cfg)} style={{ width:"100%", padding:"13px 0", borderRadius:12, border:"none", background:T.accent, color:"#0d1117", fontSize:14, fontWeight:800, cursor:"pointer" }}>Start Yield Vault — Deposit ${cfg.depositAmount||"100"} USDC</button>
+                : <button onClick={()=>onDeposit(cfg)} style={{ width:"100%", padding:"13px 0", borderRadius:12, border:"none", background:T.accent, color:"#0d1117", fontSize:14, fontWeight:800, cursor:"pointer" }}>
+                    Start Yield Vault — Deposit ${cfg.depositAmount||"100"} USDC
+                  </button>
               }
               <div style={{ fontSize:10, color:T.text3, textAlign:"center", marginTop:8, lineHeight:1.5 }}>Bets use accrued yield only. Principal stays in Jupiter Lend at all times.</div>
             </>
@@ -4651,7 +4801,7 @@ function JupChatInner() {
           const evTitle = best.event.metadata?.title || best.event.title || "market";
           const mkTitle = best.market.metadata?.title || best.market.title || "outcome";
           setYieldVaultLog(prev => [{ ts: Date.now(), type: "bet", detail: `Auto-bet $${betAmt} ${best.side.toUpperCase()} on "${mkTitle}" (${evTitle}) — edge ${best.edge.toFixed(1)}%` }, ...prev.slice(0, 49)]);
-          push("ai", `⚡ **Yield Vault auto-bet** — $${betAmt} ${best.side.toUpperCase()} on **${evTitle}** (${best.edge.toFixed(1)}% edge). Principal stays in Lend earning yield.`);
+          push("ai", `**Yield Vault auto-bet** — $${betAmt} ${best.side.toUpperCase()} on **${evTitle}** (${best.edge.toFixed(1)}% edge). Principal stays in Lend earning yield.`);
         }
       } catch {}
       setYieldVaultBetting(false);
@@ -8538,7 +8688,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         if (!earnVaults.length) fetchEarnVaults();
         if (walletFull) fetchEarnUserPositions();
 
-      // ── FETCH_YIELD_VAULT — show vault status in chat ─────────────────────────
+      // ── FETCH_YIELD_VAULT — show vault status + history in chat ──────────────
       } else if (action === "FETCH_YIELD_VAULT") {
         if (!yieldVault) {
           push("ai", "You don't have an active Yield Vault yet. Type **start yield vault** to open one — your USDC earns yield while the vault auto-bets prediction markets.");
@@ -8547,7 +8697,23 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const stats   = yieldVaultStats || {};
           const apy     = yieldVault.earnApy ? (yieldVault.earnApy * 100).toFixed(2) : "?";
           const ageDays = Math.floor((Date.now() - yieldVault.depositedAt) / 86400000);
-          push("ai", `**Yield Vault Status**\n\nDeposited: **$${yieldVault.depositAmount} USDC**\nStatus: ${yieldVault.status === "active" ? "🟢 Active" : "⏸ Paused"}\nEarn APY: **${apy}%**\nAge: **${ageDays} day${ageDays !== 1 ? "s" : ""}**\nAccrued yield (est.): **$${accrued.toFixed(4)} USDC**\nAuto-bets placed: **${stats.betsPlaced || 0}**\nWinnings recycled: **$${(stats.winningsRecycled || 0).toFixed(4)} USDC**\nMin edge: **${yieldVault.minEdge}%** · Max bet: **$${yieldVault.maxBet}**\nCategory: **${yieldVault.category || "All markets"}**`);
+          const isHistoryQuery = /history|activity|log|auto.?bet|what.*done|bets/i.test(input);
+          const logEntries = yieldVaultLog || [];
+          let statusMsg = `**Yield Vault Status**\n\nDeposited: **$${yieldVault.depositAmount} USDC**\nStatus: ${yieldVault.status === "active" ? "Active" : "Paused"}\nEarn APY: **${apy}%**\nAge: **${ageDays} day${ageDays !== 1 ? "s" : ""}**\nAccrued yield (est.): **$${accrued.toFixed(4)} USDC**\nAuto-bets placed: **${stats.betsPlaced || 0}**\nWinnings recycled: **$${(stats.winningsRecycled || 0).toFixed(4)} USDC**\nMin edge: **${yieldVault.minEdge}%** · Max bet: **$${yieldVault.maxBet}**\nCategory: **${yieldVault.category || "All markets"}**`;
+          if (isHistoryQuery || logEntries.length > 0) {
+            if (logEntries.length === 0) {
+              statusMsg += "\n\n**Activity Log**\nNo activity recorded yet — the vault scans every 3 minutes for qualifying markets.";
+            } else {
+              const logLines = logEntries.slice(0, 15).map((entry, i) => {
+                const time = new Date(entry.ts).toLocaleString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
+                const typeLabel = entry.type === "deposit" ? "Deposit" : entry.type === "bet" ? "Auto-bet" : entry.type === "win" ? "Win" : entry.type === "sweep" ? "Sweep" : "Event";
+                return `${i + 1}. **${typeLabel}** · ${entry.detail} · _${time}_`;
+              }).join("\n");
+              statusMsg += `\n\n**Activity Log** (${logEntries.length} event${logEntries.length !== 1 ? "s" : ""})\n${logLines}`;
+              if (logEntries.length > 15) statusMsg += `\n_...and ${logEntries.length - 15} more. Open the vault panel to see all._`;
+            }
+          }
+          push("ai", statusMsg);
           setShowYieldVault(true);
         }
 
