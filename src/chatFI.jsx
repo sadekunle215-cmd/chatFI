@@ -2111,7 +2111,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
             </div>
             <div>
               <div style={{ fontSize:14, fontWeight:700, color:T.text1 }}>Yield Vault</div>
-              <div style={{ fontSize:11, color:T.text3 }}>USDC earns yield · auto-bets on edge · <span style={{ color:"#a78bfa" }} title="Phantom users: enable Auto-approve in Phantom Settings → Trusted Apps to silence signing popups">⚡ Phantom? Enable Auto-approve</span></div>
+              <div style={{ fontSize:11, color:T.text3 }}>USDC earns yield · auto-bets on edge · <span style={{ color:T.text3 }} title="External wallets (Phantom, Jupiter, Backpack, etc.) — enable Auto-approve in wallet settings to silence signing popups">External wallet (Phantom, Jupiter, etc.)</span></div>
             </div>
           </div>
           <button onClick={onClose} style={{ background:"none", border:"none", cursor:"pointer", padding:"4px", display:"flex", alignItems:"center", justifyContent:"center" }}>
@@ -4928,6 +4928,11 @@ function JupChatInner() {
     if (!provider) { push("ai", "Wallet provider not found."); return; }
     const depositAmt = parseFloat(cfg.depositAmount || "100");
     if (depositAmt < 1) { push("ai", "Minimum deposit is $1 USDC."); return; }
+    const usdcBalance = portfolio?.USDC ?? 0;
+    if (usdcBalance < depositAmt) {
+      push("ai", `Insufficient USDC balance. You have **${usdcBalance.toFixed(2)} USDC** but this deposit requires **${depositAmt} USDC**. Swap some tokens to USDC first, then try again.`);
+      return;
+    }
     let usdcVault = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
     if (!usdcVault) { await fetchEarnVaults(); usdcVault = earnVaults.find(v => v.token?.toUpperCase() === "USDC"); }
     if (!usdcVault) { push("ai", "USDC Earn vault not found. Try again in a moment."); return; }
