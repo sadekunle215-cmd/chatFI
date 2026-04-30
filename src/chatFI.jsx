@@ -6032,49 +6032,24 @@ function JupChatInner() {
   };
 
   // ── Unwind (close) a Lend position ───────────────────────────────────────────
-  const doUnwind = async (pos, partial = false, partialColAmount = null) => {
-    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
-    const provider = getActiveProvider();
-    if (!provider?.signTransaction) { push("ai", "Wallet does not support signing."); return; }
-
+  // Jupiter's Borrow close/repay API is not yet public ("Borrow API — Soon" in their docs).
+  // Attempting it programmatically causes on-chain assertion errors due to undocumented
+  // parameter requirements. We redirect to Jupiter's own UI which handles it correctly.
+  const doUnwind = (pos) => {
     const vaultMeta = MULTIPLY_VAULTS.find(v => v.vaultId === pos.vaultId);
-    const colSym    = vaultMeta?.collateral || "collateral";
+    const colSym    = vaultMeta?.collateral || "your collateral";
     const debtSym   = vaultMeta?.debt       || "debt";
-
-    setUnwindStatus(pos.positionId);
+    push("ai",
+      `**Repay & Close — Jupiter UI required**\n\n` +
+      `Jupiter's borrow close API is not yet publicly available, so closing position #${pos.positionId} ` +
+      `(${colSym}/${debtSym}) needs to be done directly on Jupiter.\n\n` +
+      `**Steps:**\n` +
+      `1. Go to [jup.ag/lend/borrow](https://jup.ag/lend/borrow)\n` +
+      `2. Find your position and tap **Repay & Withdraw**\n` +
+      `3. Repay your ${debtSym} debt, then withdraw your ${colSym} collateral\n\n` +
+      `_ChatFi will support closing borrow positions directly once Jupiter opens their API._`
+    );
     setShowLendPos(false);
-    push("ai", `${partial ? "Partially closing" : "Closing"} position #${pos.positionId} (${colSym}/${debtSym}, vault ${pos.vaultId}) via flashloan…`);
-
-    try {
-      const body = {
-        action:     "unwind",
-        vaultId:    pos.vaultId,
-        positionId: pos.positionId,
-        signer:     walletFull,
-      };
-      if (partial && partialColAmount) body.withdrawAmount = partialColAmount;
-
-      const { data } = await safeApiFetch("/api/multiply", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
-      if (data.error) throw new Error(data.error);
-      if (!data.transaction) throw new Error("No transaction returned.");
-
-      const bytes    = b64ToBytes(data.transaction);
-      const tx       = VersionedTransaction.deserialize(bytes);
-      const signedTx = await provider.signTransaction(tx);
-      const rpcRes   = await jupFetch(SOLANA_RPC, {
-        method:"POST",
-        body:{ jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
-      });
-      const signature = rpcRes?.result;
-      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed.");
-
-      setUnwindStatus("done");
-      push("ai", `Position #${pos.positionId} ${partial ? "partially closed" : "fully closed"} ✓\n\nThe flashloan was repaid atomically — your ${colSym || "collateral"} is back in your wallet.\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
-      // Refresh positions
-      await fetchLendPositions();
-    } catch (err) {
-      push("ai", `Unwind failed: ${err?.message}\n\nCheck your position at [jup.ag/lend](https://jup.ag/lend).`);
-    } finally { setUnwindStatus(null); }
   };
 
   // ── Claim prediction payouts — POST /prediction/v1/positions/{pubkey}/claim ─
@@ -13062,10 +13037,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         </div>
                         {!pos.isLiquidated && (
                           <div style={{ display:"flex", gap:8 }}>
-                            <button onClick={() => doUnwind(pos, false)} disabled={!!unwindStatus} className="hov-btn"
-                              style={{ flex:1, padding:"8px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                              {isUnwinding ? <><span className="spinner" style={{ borderTopColor:T.red }}/> Closing…</> : "Close Full Position"}
+                            <button onClick={() => doUnwind(pos)} className="hov-btn"
+                              style={{ flex:1, padding:"8px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                              Repay & Close
                             </button>
+                            <a href="https://jup.ag/lend/borrow" target="_blank" rel="noopener noreferrer"
+                              style={{ padding:"8px 12px", background:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:8, color:T.accent, fontSize:12, fontWeight:700, cursor:"pointer", textDecoration:"none", display:"flex", alignItems:"center" }}>
+                              jup.ag
+                            </a>
                             <button onClick={() => { setMultiplyPos({ vault: MULTIPLY_VAULTS.find(v=>v.vaultId===pos.vaultId)||{vaultId:pos.vaultId}, colAmount:"", leverage:"2" }); setShowMultiplyForm(true); setShowLendPos(false); }} className="hov-btn"
                               style={{ padding:"8px 12px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>
                               Add
