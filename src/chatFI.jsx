@@ -2781,17 +2781,18 @@ function JupChatInner() {
             `Current price: **$${currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}**\n` +
             `1σ spread: **±$${stdDev.toFixed(6)}**\n\n` +
             (mon.autoOrder
-              ? `Auto-opening OCO order — TP: **$${tpPrice}** · SL: **$${slPrice}**`
+              ? `Auto-placing OCO order — TP: **$${tpPrice}** · SL: **$${slPrice}** · signing wallet now…`
               : `Tip: *"Set OCO on ${mon.token} TP $${tpPrice} SL $${slPrice}"* to trade this move.`)
           );
 
           if (mon.autoOrder) {
-            const cfg      = mon.autoOrderCfg || {};
-            const from     = (cfg.from || "USDC").toUpperCase();
-            const amount   = cfg.amount || "50";
+            const autoCfg  = mon.autoOrderCfg || {};
+            const from     = (autoCfg.from || "USDC").toUpperCase();
+            const amount   = autoCfg.amount || "50";
             const toMint   = tokenCacheRef.current[mon.token] || TOKEN_MINTS[mon.token] || "";
             const fromMint = tokenCacheRef.current[from] || TOKEN_MINTS[from] || TOKEN_MINTS.USDC;
-            setTrigV2Cfg({
+            // Place OCO order headlessly — no panel, fully automatic
+            doTriggerV2({
               orderType: "oco",
               from, fromMint, fromDecimals: from === "SOL" ? 9 : 6,
               to: mon.token, toMint, toDecimals: 9,
@@ -2803,8 +2804,6 @@ function JupChatInner() {
               slippageBps: "100",
               expiryDays: "7",
             });
-            setTrigV2Status(null);
-            setShowTrigV2(true);
           }
 
           changed = true;
@@ -6459,9 +6458,12 @@ function JupChatInner() {
 
   // ── Trigger v2: full create flow ─────────────────────────────────────────────
   // 1. Get vault  2. Craft deposit tx  3. Sign  4. POST /orders/price
-  const doTriggerV2 = async () => {
-    const cfg = trigV2Cfg;
-    if (!cfg.amount || !cfg.triggerPriceUsd) return;
+  // Pass an explicit `overrideCfg` to run headlessly (e.g. from volatility auto-order).
+  const doTriggerV2 = async (overrideCfg) => {
+    const cfg = overrideCfg || trigV2Cfg;
+    // OCO orders don't need triggerPriceUsd — only single/otoco do
+    if (!cfg.amount) return;
+    if (cfg.orderType === "single" && !cfg.triggerPriceUsd) return;
     if (!walletFull) { push("ai", "Connect your wallet first to place a trigger order."); return; }
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found."); return; }
