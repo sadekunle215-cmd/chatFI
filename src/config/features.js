@@ -39,7 +39,8 @@ const FEATURES = {
   jupiterStudio:   true,   // Create tokens (DBC)
   lockTokens:      true,   // Lock / vesting
   claimVested:     true,   // Claim vested tokens
-
+  rebalancer: true,
+  
   // ── Send
   sendInvite:      true,   // Send via invite link
   sendHistory:     true,   // View send history
