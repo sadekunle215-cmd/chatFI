@@ -1,9 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import JupChat from "./JupChat";
+import ChatFi from "./chatFi";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <JupChat />
+    <ChatFi />
   </React.StrictMode>
 );
