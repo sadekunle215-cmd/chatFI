@@ -2524,7 +2524,8 @@ function JupChatInner() {
   const [yieldVaultLog, setYieldVaultLog] = useState([]);
   const [yieldVaultBetting, setYieldVaultBetting] = useState(false);
   const [yieldVaultCfg, setYieldVaultCfg] = useState({ depositAmount: "100", minEdge: "8", maxBet: "5", category: null });
-  const yieldVaultIntervalRef = useRef(null);
+  const yieldVaultIntervalRef  = useRef(null);
+  const yieldVaultSweepRef     = useRef(null); // separate 15-min sweep interval
 
   // ── Jupiter Studio state ─────────────────────────────────────────────────────
   const [showStudio, setShowStudio]         = useState(false);
@@ -2858,6 +2859,7 @@ function JupChatInner() {
   // ── Reload ALL per-wallet data when wallet changes ───────────────────────────
   useEffect(() => {
     if (yieldVaultIntervalRef.current) { clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null; }
+    if (yieldVaultSweepRef.current)    { clearInterval(yieldVaultSweepRef.current);    yieldVaultSweepRef.current    = null; }
     if (!walletFull) {
       setYieldVault(null); setYieldVaultStats(null); setYieldVaultLog([]);
       setPriceAlerts([]); setVolMonitors([]); setTradeJournal([]);
@@ -4902,6 +4904,109 @@ function JupChatInner() {
     }
   };
 
+  // ── Sweep prediction winnings back into Jupiter Lend Earn ──────────────────
+  // Called every 15 min (5× the scan interval). Claims any resolved prediction
+  // positions and immediately re-deposits the USDC into the earn vault so
+  // winnings compound rather than sitting idle in the wallet.
+  const sweepWinningsToEarn = async () => {
+    const provider = getActiveProvider();
+    if (!provider || !walletFull) return;
+    try {
+      const res = await predFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletFull}`);
+      const positions = Array.isArray(res) ? res : (res?.data || []);
+      const claimable = positions.filter(p => p.claimable === true && p.claimed === false);
+      if (!claimable.length) return;
+
+      let totalClaimed = 0;
+      let claimedCount = 0;
+
+      // Claim each winning position silently
+      for (const pos of claimable) {
+        try {
+          const claimRes = await predFetch(`${JUP_PRED_API}/positions/${pos.pubkey}/claim`, {
+            method: "POST",
+            body: { ownerPubkey: walletFull },
+          });
+          if (!claimRes.transaction) continue;
+          const binaryStr = atob(claimRes.transaction);
+          const txBytes = new Uint8Array(binaryStr.length);
+          for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
+          const tx = VersionedTransaction.deserialize(txBytes);
+          const signed = await provider.signTransaction(tx);
+          const rpcRes = await jupFetch(SOLANA_RPC, {
+            method: "POST",
+            body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signed.serialize()), { encoding: "base64", skipPreflight: true }] },
+          });
+          const sig = rpcRes?.result;
+          if (!sig) continue;
+          await confirmTxLanded(sig);
+          const payoutUsd = parseInt(pos.payoutUsd || 0) / 1_000_000;
+          totalClaimed += payoutUsd;
+          claimedCount++;
+          const title = pos.marketMetadata?.title || pos.marketId || "market";
+          setYieldVaultLog(prev => {
+            const next = [{ ts: Date.now(), type: "win", detail: `Won $${payoutUsd.toFixed(2)} from "${title.slice(0, 40)}"` }, ...prev.slice(0, 49)];
+            saveYieldVaultLog(next);
+            return next;
+          });
+        } catch { /* skip individual claim failures — non-fatal */ }
+      }
+
+      if (totalClaimed < 0.01) return; // nothing worth sweeping
+
+      // Re-deposit winnings back into Jupiter Lend Earn
+      let usdcVault = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
+      if (!usdcVault) {
+        await fetchEarnVaults();
+        usdcVault = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
+      }
+      if (usdcVault?.assetMint) {
+        try {
+          const decimals  = usdcVault.assetDecimals || 6;
+          const amountRaw = Math.floor(totalClaimed * Math.pow(10, decimals)).toString();
+          const depositRes = await jupFetch(`${JUP_EARN_API}/deposit`, {
+            method: "POST",
+            body: { asset: usdcVault.assetMint, amount: amountRaw, signer: walletFull },
+          });
+          if (depositRes.transaction) {
+            const bStr2 = atob(depositRes.transaction);
+            const txB2  = new Uint8Array(bStr2.length);
+            for (let i = 0; i < bStr2.length; i++) txB2[i] = bStr2.charCodeAt(i);
+            const tx2     = VersionedTransaction.deserialize(txB2);
+            const signed2 = await provider.signTransaction(tx2);
+            const rpc2    = await jupFetch(SOLANA_RPC, {
+              method: "POST",
+              body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signed2.serialize()), { encoding: "base64", skipPreflight: true }] },
+            });
+            const sig2 = rpc2?.result;
+            if (sig2) {
+              await confirmTxLanded(sig2);
+              // Update winningsRecycled stat
+              setYieldVaultStats(prev => {
+                const next = { ...(prev || {}), winningsRecycled: ((prev?.winningsRecycled) || 0) + totalClaimed };
+                saveYieldVault(undefined, next);
+                return next;
+              });
+              setYieldVaultLog(prev => {
+                const next = [{ ts: Date.now(), type: "sweep", detail: `Swept $${totalClaimed.toFixed(2)} USDC back into Lend (${claimedCount} win${claimedCount > 1 ? "s" : ""})` }, ...prev.slice(0, 49)];
+                saveYieldVaultLog(next);
+                return next;
+              });
+              push("ai", `**Yield Vault** — $${totalClaimed.toFixed(2)} USDC from ${claimedCount} winning bet${claimedCount > 1 ? "s" : ""} swept back into Jupiter Lend. Compounding.`);
+              return;
+            }
+          }
+        } catch { /* deposit failed — winnings stay in wallet, log it */ }
+      }
+      // Earn deposit failed but claims succeeded — at least log the wins
+      setYieldVaultLog(prev => {
+        const next = [{ ts: Date.now(), type: "sweep", detail: `Claimed $${totalClaimed.toFixed(2)} USDC — re-deposit to Lend failed, funds in wallet` }, ...prev.slice(0, 49)];
+        saveYieldVaultLog(next);
+        return next;
+      });
+    } catch { /* sweep check is fully non-fatal */ }
+  };
+
   const startYieldVaultLoop = (vaultInit, statsInit) => {
     if (yieldVaultIntervalRef.current) clearInterval(yieldVaultIntervalRef.current);
     const tick = async () => {
@@ -4950,6 +5055,10 @@ function JupChatInner() {
     };
     tick();
     yieldVaultIntervalRef.current = setInterval(tick, 3 * 60 * 1000);
+    // Sweep winnings back to earn every 15 min (independent of bet scan)
+    if (yieldVaultSweepRef.current) clearInterval(yieldVaultSweepRef.current);
+    sweepWinningsToEarn(); // run once immediately on vault start
+    yieldVaultSweepRef.current = setInterval(sweepWinningsToEarn, 15 * 60 * 1000);
   };
 
   const doYieldVaultDeposit = async (cfg) => {
@@ -5004,7 +5113,7 @@ function JupChatInner() {
       if (!prev) return prev;
       const next = { ...prev, status: prev.status === "active" ? "paused" : "active" };
       saveYieldVault(next, undefined);
-      if (next.status === "paused") { clearInterval(yieldVaultIntervalRef.current); }
+      if (next.status === "paused") { clearInterval(yieldVaultIntervalRef.current); clearInterval(yieldVaultSweepRef.current); }
       else { startYieldVaultLoop(next, yieldVaultStats); }
       push("ai", `Yield Vault ${next.status === "active" ? "▶ resumed" : "⏸ paused"}. USDC stays in Lend earning yield.`);
       return next;
@@ -5183,6 +5292,7 @@ function JupChatInner() {
       // If this withdrawal was triggered from the Yield Vault, close the vault now that tx confirmed
       if (earnWithdraw.isYieldVaultClose) {
         clearInterval(yieldVaultIntervalRef.current);
+        clearInterval(yieldVaultSweepRef.current);
         setYieldVault(null);
         setYieldVaultStats(null);
         saveYieldVault(null, null);
