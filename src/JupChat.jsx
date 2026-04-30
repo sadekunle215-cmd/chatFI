@@ -1978,7 +1978,7 @@ function JupChatWithLanding() {
 }
 
 // ─── Yield-Gated Prediction Vault Panel ───────────────────────────────────────
-function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setCfg, onDeposit, onToggle, onWithdraw, onUpdateVault, earnVaults, earnUserPositions, isBetting, walletFull }) {
+function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setCfg, onDeposit, onToggle, onWithdraw, onCancel, onUpdateVault, earnVaults, earnUserPositions, isBetting, walletFull }) {
   if (!open) return null;
   const T = { bg:"#0d1117", surface:"#161e27", border:"#1e2d3d", text1:"#e8f4f0", text2:"#8fa8b8", text3:"#4d6a7a", accent:"#c7f284", accentBg:"#1a2e1a", green:"#c7f284", purple:"#a78bfa", purpleBg:"#1e1a2e", teal:"#38bdf8" };
   const [editingCfg, setEditingCfg] = useState(false);
@@ -2223,6 +2223,12 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                   <IcUpload/> Withdraw All
                 </button>
               </div>
+              {onCancel && (
+                <button onClick={onCancel} style={{ width:"100%", padding:"9px 0", marginBottom:12, borderRadius:10, border:"1px solid #6b21a840", background:"#1c1028", color:"#c084fc", fontSize:12, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                  Cancel Vault &amp; Withdraw Principal
+                </button>
+              )}
               {vaultLog?.length>0&&(
                 <div style={{ marginBottom:12 }}>
                   <div style={{ fontSize:10, fontWeight:700, color:T.text3, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:8 }}>Activity</div>
@@ -5258,6 +5264,63 @@ function JupChatInner() {
     });
   };
 
+  // ── Cancel Vault — stops everything and clears state ─────────────────────────
+  // Unlike Pause (keeps vault alive), Cancel fully tears down the vault:
+  // stops intervals, clears all vault state, then kicks off the Earn withdraw flow
+  // so the user gets their principal back.
+  const cancelYieldVault = async () => {
+    // 1. Stop the loop and sweep intervals immediately
+    if (yieldVaultIntervalRef.current) { clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null; }
+    if (yieldVaultSweepRef.current)    { clearInterval(yieldVaultSweepRef.current);    yieldVaultSweepRef.current    = null; }
+    // 2. Capture the deposit token before clearing state (needed for earn position lookup)
+    const depositToken = (yieldVault?.depositToken || "USDC").toUpperCase();
+    const KNOWN_MINTS = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
+    const targetMint = KNOWN_MINTS[depositToken] || null;
+    // 3. Clear vault state and persisted storage
+    setYieldVault(null);
+    setYieldVaultStats(null);
+    setYieldVaultLog([]);
+    try { localStorage.removeItem("yieldVault"); localStorage.removeItem("yieldVaultStats"); localStorage.removeItem("yieldVaultLog"); } catch {}
+    // 4. Close the panel
+    setShowYieldVault(false);
+    push("ai", "**Yield Vault cancelled.** Fetching your Earn position so you can withdraw your principal…");
+    // 5. Fetch earn position and open withdraw modal
+    if (!walletFull) { push("ai", "Connect your wallet to withdraw."); return; }
+    try {
+      const posRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+      const posRaw = await posRes.json();
+      let posArr = Array.isArray(posRaw) ? posRaw : [];
+      if (!posArr.length) {
+        const vals = Object.values(posRaw);
+        posArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
+      }
+      if (!posArr.length) posArr = posRaw?.data || posRaw?.positions || posRaw?.items || [];
+      let found = null;
+      for (const entry of posArr) {
+        const underlyingTok = entry.asset || entry.underlyingToken || {};
+        const mint = entry.assetMint || underlyingTok.address || entry.mint || null;
+        const rawSym = underlyingTok.symbol || entry.assetSymbol || "";
+        const sym = rawSym ? rawSym.toUpperCase() : (entry.token?.symbol || "").replace(/^jl/i, "").toUpperCase();
+        const dec = underlyingTok.decimals ?? entry.token?.decimals ?? 6;
+        const rawStr = entry.underlyingAssets || "0";
+        const rawInt = parseFloat(rawStr);
+        const humanBalance = parseFloat(entry.underlyingBalance || 0);
+        if ((!targetMint || mint !== targetMint) && sym !== depositToken) continue;
+        if (!mint || (rawInt <= 0 && parseFloat(entry.shares || 0) <= 0)) continue;
+        const humanAmt = humanBalance > 0 ? humanBalance : (rawInt > 1e6 ? rawInt / Math.pow(10, dec) : rawInt);
+        found = { assetMint: mint, decimals: dec, rawAmount: rawStr, humanAmount: humanAmt, shares: entry.shares || "0", symbol: sym || depositToken, name: underlyingTok.name || `Jupiter Lend ${sym || depositToken}` };
+        break;
+      }
+      if (!found) { push("ai", "No open Earn position found. Funds may already be in your wallet."); return; }
+      setEarnUserPositions(prev => ({ ...prev, [found.symbol]: { amount: found.humanAmount, amountRaw: parseFloat(found.rawAmount), shares: parseFloat(found.shares), decimals: found.decimals } }));
+      setEarnWithdraw({ vault: { name: found.name, token: found.symbol, assetMint: found.assetMint, assetDecimals: found.decimals }, amount: found.humanAmount.toFixed(found.decimals), positionAmount: found.humanAmount, isYieldVaultClose: false });
+      setShowEarnWithdraw(true);
+      push("ai", `Ready to withdraw **${found.humanAmount.toFixed(4)} ${found.symbol}** from Jupiter Earn. Select an amount below.`);
+    } catch (err) {
+      push("ai", `Failed to fetch Earn position: ${err?.message || "Unknown"}. Please withdraw manually at jup.ag/lend.`);
+    }
+  };
+
   const updateYieldVaultCfg = ({ minEdge, maxBet }) => {
     setYieldVault(prev => {
       if (!prev) return prev;
@@ -5274,41 +5337,66 @@ function JupChatInner() {
     push("ai", "Fetching your Jupiter Earn position…");
 
     // ── Step 1: Fetch the live position directly from the Jupiter Earn API ────
-    // GET /lend/v1/earn/positions?users=<wallet>
-    // Response schema per Jupiter docs:
-    //   [{ token: { address, symbol, decimals }, shares, underlyingAssets, underlyingBalance, allowance }]
-    // • token.address  → the asset mint we pass to /withdraw
-    // • underlyingAssets → raw integer balance (base units, same decimals as the token)
-    // • underlyingBalance → human-readable float (used for display only)
+    // MUST use direct fetch() — jupFetch proxy strips/transforms the earn response.
+    // Use ?wallets= (not ?users=) — that is the correct query param for this endpoint.
+    // Jupiter API shape: [{ token: { address, symbol, decimals }, assetMint, asset: { symbol, decimals },
+    //                        shares, underlyingAssets, underlyingBalance }]
+    // • token.symbol may be "Earn" (jlToken name) — do NOT rely on it for asset matching
+    // • assetMint (top-level) = real underlying mint (preferred)
+    // • asset.symbol = real underlying symbol (e.g. "USDC")
+    // • underlyingAssets = raw integer balance string
+    // • underlyingBalance = human-readable float
     let livePosition = null;
     try {
-      const posRes = await jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`);
-      // posRes is the parsed JSON — jupFetch returns the object directly
-      const posArr = Array.isArray(posRes) ? posRes : [];
+      const posRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+      const posRaw = await posRes.json();
+      // Response may be array, wallet-keyed object, or wrapped
+      let posArr = Array.isArray(posRaw) ? posRaw : [];
+      if (!posArr.length) {
+        const vals = Object.values(posRaw);
+        posArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
+      }
+      // Also try standard wrapper fields
+      if (!posArr.length) posArr = posRaw?.data || posRaw?.positions || posRaw?.items || [];
+
+      // Find the vault's deposit token (default USDC). Match by assetMint or asset.symbol.
+      const depositToken = (yieldVault?.depositToken || "USDC").toUpperCase();
+      // Known mints as fallback
+      const KNOWN_MINTS = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
+      const targetMint = KNOWN_MINTS[depositToken] || null;
+
       for (const entry of posArr) {
-        const tok     = entry.token || {};
-        const sym     = (tok.symbol || "").toUpperCase();
-        const mint    = tok.address || tok.id || null;
-        const dec     = tok.decimals ?? 6;
-        // underlyingAssets is the raw integer string (e.g. "10500000" = 10.5 USDC at 6 decimals)
-        const rawStr  = entry.underlyingAssets || "0";
-        const rawInt  = parseFloat(rawStr);
-        // underlyingBalance is the pre-formatted human readable float from Jupiter ("10.5")
+        const tok          = entry.token || {};
+        const underlyingTok = entry.asset || entry.underlyingToken || {};
+        // Real underlying mint — prefer top-level assetMint, then asset.address, never the jlToken mint
+        const mint = entry.assetMint || underlyingTok.address || entry.mint || null;
+        // Real underlying symbol — prefer asset.symbol; strip jl prefix from tok.symbol if needed
+        const rawSym = underlyingTok.symbol || entry.assetSymbol || "";
+        const sym = rawSym
+          ? rawSym.toUpperCase()
+          : (tok.symbol || "").replace(/^jl/i, "").toUpperCase();
+        const dec = underlyingTok.decimals ?? tok.decimals ?? entry.decimals ?? 6;
+        const rawStr = entry.underlyingAssets || entry.underlying_assets || "0";
+        const rawInt = parseFloat(rawStr);
         const humanBalance = parseFloat(entry.underlyingBalance || 0);
-        const shares  = entry.shares || "0";
+        const shares = entry.shares || "0";
 
-        if (sym !== "USDC") continue;
-        if (!mint)           continue;
-        if (rawInt <= 0)     continue;
+        // Match by mint address first, then by symbol
+        const mintMatch   = targetMint && mint && (mint === targetMint);
+        const symbolMatch = sym === depositToken;
+        if (!mintMatch && !symbolMatch) continue;
+        if (!mint)    continue;
+        if (rawInt <= 0 && parseFloat(shares) <= 0) continue;
 
+        const humanAmt = humanBalance > 0 ? humanBalance : (rawInt > 1e6 ? rawInt / Math.pow(10, dec) : rawInt);
         livePosition = {
-          assetMint:    mint,           // token.address — goes straight to /withdraw as `asset`
-          decimals:     dec,
-          rawAmount:    rawStr,         // underlyingAssets raw string — goes straight to /withdraw as `amount`
-          humanAmount:  humanBalance > 0 ? humanBalance : rawInt / Math.pow(10, dec),
+          assetMint:   mint,
+          decimals:    dec,
+          rawAmount:   rawStr,
+          humanAmount: humanAmt,
           shares,
-          symbol:       tok.symbol || "USDC",
-          name:         tok.name  || "Jupiter Earn USDC",
+          symbol:      sym || depositToken,
+          name:        underlyingTok.name || `Jupiter Lend ${sym || depositToken}`,
         };
         break;
       }
@@ -5318,7 +5406,7 @@ function JupChatInner() {
     }
 
     if (!livePosition) {
-      push("ai", "No open Earn position found for this wallet. If you just deposited, wait a moment and try again.");
+      push("ai", "No open Earn position found for this wallet. If you just deposited, wait 30 seconds for the chain to confirm and try again.");
       return;
     }
 
@@ -11857,6 +11945,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             onDeposit={doYieldVaultDeposit}
             onToggle={toggleYieldVaultStatus}
             onWithdraw={withdrawYieldVault}
+            onCancel={cancelYieldVault}
             onUpdateVault={updateYieldVaultCfg}
             earnVaults={earnVaults}
             earnUserPositions={earnUserPositions}
