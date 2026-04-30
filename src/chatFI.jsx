@@ -4808,6 +4808,36 @@ function JupChatInner() {
   };
 
   // ── Yield-Gated Prediction Vault — helpers & engine ──────────────────────────
+
+  // ── Shared tx helpers ─────────────────────────────────────────────────────
+  // Poll Solana RPC until tx is confirmed or fails. Throws on failure/timeout.
+  const confirmTxLanded = async (sig, timeoutMs = 30000) => {
+    const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+    const conn = new Connection(_rpc, "confirmed");
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const res = await conn.getSignatureStatuses([sig], { searchTransactionHistory: true });
+      const st  = res?.value?.[0];
+      if (st?.err) throw new Error("Transaction failed on-chain: " + JSON.stringify(st.err));
+      if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") return;
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    throw new Error("Transaction not confirmed within 30 s. Check Solscan — funds were NOT moved until confirmed.");
+  };
+
+  // Check wallet portfolio has enough of a token before proceeding.
+  const checkBalance = (token, needed, action) => {
+    const sym = (token || "").toUpperCase();
+    const bal = portfolio?.[sym] ?? portfolio?.[token] ?? 0;
+    if (bal < needed) {
+      const balFmt  = Number(bal).toFixed(4);
+      const needFmt = Number(needed).toFixed(4);
+      push("ai", `Insufficient **${sym}** balance. You have **${balFmt} ${sym}** but need **${needFmt} ${sym}**${action ? " for " + action : ""}. Swap or deposit more ${sym} first, then try again.`);
+      return false;
+    }
+    return true;
+  };
+
   const vaultKey      = (addr) => `chatfi-yieldvault-${addr}`;
   const vaultStatsKey = (addr) => `chatfi-yieldvault-stats-${addr}`;
   const vaultLogKey   = (addr) => `chatfi-yieldvault-log-${addr}`;
@@ -4953,6 +4983,9 @@ function JupChatInner() {
       const connection = new Connection(import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com", "confirmed");
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
       await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+      // Verify tx actually succeeded (confirmed ≠ no error)
+      const txResult = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+      if (txResult?.meta?.err) throw new Error("Transaction landed but failed on-chain: " + JSON.stringify(txResult.meta.err));
       const newVault = { depositAmount: depositAmt, minEdge: parseFloat(cfg.minEdge || "8"), maxBet: parseFloat(cfg.maxBet || "5"), category: cfg.category || null, depositedAt: Date.now(), earnApy: usdcVault.apy, status: "active", txSig: sig };
       const newStats = { accrued: 0, betsPlaced: 0, winningsRecycled: 0, currentApy: usdcVault.apy, lastScanAt: null };
       setYieldVault(newVault);
@@ -5016,6 +5049,7 @@ function JupChatInner() {
     if (!walletFull) { push("ai", "Connect your wallet first to deposit."); return; }
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+    if (!checkBalance(vault.token || "USDC", parseFloat(amount), "this Earn deposit")) return;
 
     // Get the asset mint from the vault object
     let assetMint = vault.assetMint;
@@ -5087,12 +5121,18 @@ function JupChatInner() {
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
+      push("ai", `Deposit sent — confirming on-chain…`);
+      await confirmTxLanded(signature);
       setShowEarn(false);
-      push("ai", `Deposit submitted ✓\n\n**${amount} ${vault.token}** deposited into **${vault.name}**\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      push("ai", `Deposit confirmed ✓\n\n**${amount} ${vault.token}** is live in **${vault.name}** earning yield.\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
-      push("ai", `Deposit failed: ${err?.message || "Unknown error"}. Please check your balance and try again.`);
+      const msg = err?.message || "Unknown error";
+      const hint = msg.toLowerCase().includes("insufficient") || msg.toLowerCase().includes("balance")
+        ? " Make sure you have enough " + (earnDeposit?.vault?.token || "tokens") + " in your wallet."
+        : "";
+      push("ai", `Earn deposit failed: ${msg}.${hint}`);
     }
   };
 
@@ -5137,7 +5177,9 @@ function JupChatInner() {
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
-      push("ai", `Withdrawal submitted ✓\n\n**${amount} ${vault.token}** withdrawn from **${vault.name}**\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      push("ai", `Withdrawal sent — confirming on-chain…`);
+      await confirmTxLanded(signature);
+      push("ai", `Withdrawal confirmed ✓\n\n**${amount} ${vault.token}** is back in your wallet from **${vault.name}**.\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
       // If this withdrawal was triggered from the Yield Vault, close the vault now that tx confirmed
       if (earnWithdraw.isYieldVaultClose) {
         clearInterval(yieldVaultIntervalRef.current);
@@ -5186,6 +5228,7 @@ function JupChatInner() {
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
     if (!mint) { push("ai", `Could not resolve mint for **${token}**. Try searching the token first.`); return; }
+    if (!checkBalance(token, parseFloat(amount), "this send")) return;
 
     const decimals  = token === "SOL" ? 9 : (tokenDecimalsRef.current[token.toUpperCase()] ?? 6);
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
@@ -5224,11 +5267,13 @@ function JupChatInner() {
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
+      push("ai", `Send sent — confirming on-chain…`);
+      await confirmTxLanded(signature);
       const inviteLink = `https://jup.ag/send?code=${inviteCode}`;
       setSendLink(inviteLink);
       setSendStatus("done");
       push("ai",
-        `Send submitted ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n` +
+        `Send confirmed ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n` +
         `**Invite link:**\n\`${inviteLink}\`\n\n` +
         `Share this link — recipient claims via **Jupiter Mobile** (no wallet needed upfront). ` +
         `Tokens auto-return to you on expiry if unclaimed.\n\n` +
@@ -5259,6 +5304,7 @@ function JupChatInner() {
     const amtNum = parseFloat(amount);
     if (!amtNum || amtNum <= 0) { push("ai", "Enter a valid amount greater than 0."); return; }
 
+    if (!checkBalance(token, amtNum, "this transfer")) return;
     setSendStatus("signing");
     setSendTxSig("");
     push("ai", `Preparing to send **${amount} ${token}** to \`${recipient.slice(0,6)}…${recipient.slice(-4)}\`…`);
@@ -5605,6 +5651,7 @@ function JupChatInner() {
     // debtAmount is NOT pre-calculated here — the server uses targetLeverage to derive it via getOperateIx
     const targetLeverageBps = Math.round(parseFloat(leverage) * 100); // e.g. 200 for 2x
 
+    if (!checkBalance(vault.collateral, parseFloat(colAmount), "collateral")) return;
     setMultiplyStatus("signing");
     setShowMultiplyForm(false);
     push("ai", `Opening **${leverage}x ${vault.collateral}/${vault.debt}** Multiply position with **${colAmount} ${vault.collateral}**…`);
@@ -5907,6 +5954,7 @@ function JupChatInner() {
     const colRaw  = Math.floor(parseFloat(colAmount)    * Math.pow(10, colDecimals  ?? 9)).toString();
     const debtRaw = Math.floor(parseFloat(borrowAmount) * Math.pow(10, debtDecimals ?? 6)).toString();
 
+    if (!checkBalance(collateral, parseFloat(colAmount), "collateral")) return;
     setBorrowStatus("signing");
     push("ai", `Depositing **${colAmount} ${collateral}** as collateral and borrowing **${borrowAmount} ${debt}**…`);
 
@@ -5946,11 +5994,12 @@ function JupChatInner() {
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
-      await new Promise(r => setTimeout(r, 2500));
+      push("ai", "Borrow transaction sent — confirming on-chain…");
+      await confirmTxLanded(signature);
       setBorrowStatus("done");
       setShowBorrow(false);
       push("ai",
-        "Borrow successful\n\n" +
+        "Borrow confirmed ✓\n\n" +
         "Deposited: **" + colAmount + " " + collateral + "** deposited as collateral\n" +
         "Borrowed: **" + borrowAmount + " " + debt + "** borrowed to your wallet\n\n" +
         "Position NFT is in your wallet.\nTx: `" + signature.slice(0,20) + "…`\n" +
@@ -7107,6 +7156,7 @@ function JupChatInner() {
     if (cfg.orderType === "otoco" && (!cfg.tpPriceUsd || !cfg.slPriceUsd)) {
       push("ai", "OTOCO orders require trigger, take-profit, and stop-loss prices."); return;
     }
+    if (!checkBalance(cfg.from || "USDC", parseFloat(cfg.amount), "trigger order deposit")) return;
     setTrigV2Status("authing");
     try {
       // Step 1: vault
@@ -7262,6 +7312,8 @@ function JupChatInner() {
       return;
     }
 
+    const _recurTotalNeeded = parseFloat(amountPerCycle) * parseInt(numberOfOrders || 1);
+    if (!checkBalance(recurringCfg.from || "USDC", _recurTotalNeeded, "total recurring deposit")) return;
     setRecurringStatus("signing");
     try {
       // Jupiter's inAmount = TOTAL deposit. It divides by numberOfOrders internally for per-cycle amount.
