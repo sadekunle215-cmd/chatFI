@@ -46,26 +46,14 @@ async function fsLoad(wallet) {
  *  fieldMap = { yieldvault: {...}, alerts: [...], ... }  — call fire-and-forget */
 async function fsSave(wallet, fieldMap) {
   if (!wallet || !fieldMap) {
-    const d = document.createElement("div");
-    d.style = "position:fixed;bottom:20px;left:20px;background:#f59e0b;color:#000;padding:8px 14px;border-radius:8px;z-index:99999;font-size:13px;";
-    d.textContent = "⚠️ fsSave skipped: wallet=" + wallet;
-    document.body.appendChild(d);
-    setTimeout(() => d.remove(), 5000);
+    alert("⚠️ fsSave skipped: wallet=" + wallet);
     return;
   }
   try {
     await setDoc(_userDoc(wallet), fieldMap, { merge: true });
-    const d = document.createElement("div");
-    d.style = "position:fixed;bottom:20px;left:20px;background:#10b981;color:#fff;padding:8px 14px;border-radius:8px;z-index:99999;font-size:13px;";
-    d.textContent = "✅ Firebase write OK: " + Object.keys(fieldMap).join(", ");
-    document.body.appendChild(d);
-    setTimeout(() => d.remove(), 4000);
+    alert("✅ Firebase write OK: " + Object.keys(fieldMap).join(", "));
   } catch(e) {
-    const d = document.createElement("div");
-    d.style = "position:fixed;bottom:20px;left:20px;background:#ef4444;color:#fff;padding:8px 14px;border-radius:8px;z-index:99999;font-size:13px;";
-    d.textContent = "❌ Firebase error: " + e.message;
-    document.body.appendChild(d);
-    setTimeout(() => d.remove(), 8000);
+    alert("❌ Firebase error: " + e.message);
   }
 }
 
