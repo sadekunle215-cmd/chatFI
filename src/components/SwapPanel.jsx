@@ -1,4 +1,4 @@
-import { T } from "../../constants";
+import { T } from "../constants";
 
 // ── TokenPicker (inline) ──────────────────────────────────────────────────────
 // Simple dropdown for selecting a token by symbol.
