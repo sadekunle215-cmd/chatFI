@@ -438,6 +438,7 @@ Rules:
 - "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
 - "yield vault" / "yield-gated vault" / "prediction vault" / "auto bet with yield" / "earn while betting" / "bet yield not principal" / "capital always working" / "start vault" → SHOW_YIELD_VAULT — pre-fill depositAmount/minEdge/maxBet/category from user message if mentioned
 - "vault status" / "my yield vault" / "how is my vault doing" / "vault stats" / "check vault" / "vault history" / "my vault history" / "yield vault history" / "vault activity" / "vault log" / "what has my vault done" / "vault bets" / "vault auto-bets" → FETCH_YIELD_VAULT
+- "withdraw from vault" / "close vault" / "stop vault" / "exit vault" / "get my USDC back" / "withdraw yield vault" / "pull out my vault" / "close my yield vault" / "end vault" → trigger onWithdraw (open the Yield Vault panel and the withdraw modal via FETCH_YIELD_VAULT then note the user should tap Withdraw All)
 - YIELD VAULT CHAINING: "deposit USDC and start yield vault" / "earn yield and auto-bet predictions" → CHAINED_ACTIONS steps: [SHOW_SWAP (if no USDC), SHOW_YIELD_VAULT]. "check my vault then scan odds" → CHAINED_ACTIONS [FETCH_YIELD_VAULT, SCAN_PRED_ODDS]
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
@@ -2084,13 +2085,14 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
     { Icon: IcLock,    txt: "Principal never leaves Lend — only yield is at risk", key:"lock" },
   ];
 
-  const logTypeColor = { deposit:"#68d391", bet:T.purple, win:T.accent, sweep:T.teal };
+  const logTypeColor = { deposit:"#68d391", bet:T.purple, win:T.accent, sweep:T.teal, error:"#f28484" };
   const LogIcon = ({ type }) => {
     const style = { color: logTypeColor[type]||T.text2, flexShrink:0 };
     if (type==="deposit") return <span style={style}><IcDeposit/></span>;
     if (type==="bet")     return <span style={style}><IcBolt/></span>;
     if (type==="win")     return <span style={style}><IcTrophy/></span>;
     if (type==="sweep")   return <span style={style}><IcRecycle/></span>;
+    if (type==="error")   return <span style={style}><IcClose/></span>;
     return <span style={style}><IcDot/></span>;
   };
 
@@ -4764,6 +4766,47 @@ function JupChatInner() {
     return Math.max(0, raw - (stats?.betsPlaced || 0) * (vault.maxBet || 5) * 0.5);
   };
 
+  // ── placePredBet — used by Yield Vault auto-bet loop ────────────────────────
+  // Takes an already-resolved market object (no extra search needed) + side + amount string.
+  // Signs via the active wallet provider and submits on-chain.
+  const placePredBet = async (market, side, amountStr) => {
+    const provider = getActiveProvider();
+    if (!provider) return { success: false, msg: "Wallet provider not found." };
+    if (!walletFull)  return { success: false, msg: "Wallet not connected." };
+    const amtNum = parseFloat(amountStr);
+    if (!amtNum || amtNum < 1) return { success: false, msg: `Amount too small: $${amountStr}` };
+    const marketId = market.marketId || market.id;
+    if (!marketId) return { success: false, msg: "Market ID missing." };
+    const isYes = side === "yes";
+    const depositAmount = Math.floor(amtNum * 1_000_000);
+    const tryMints = [USDC_MINT, JUPUSD_MINT];
+    try {
+      let orderRes = null;
+      for (const mint of tryMints) {
+        const res = await predFetch(`${JUP_PRED_API}/orders`, {
+          method: "POST",
+          body: { ownerPubkey: walletFull, marketId, isYes, isBuy: true, depositAmount, depositMint: mint },
+        });
+        if (res?.transaction) { orderRes = res; break; }
+        orderRes = res;
+      }
+      if (!orderRes?.transaction) throw new Error(`API error: ${JSON.stringify(orderRes).slice(0, 150)}`);
+      const txBytes = b64ToBytes(orderRes.transaction);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      if (!provider.signTransaction) throw new Error("Wallet does not support signing.");
+      const signedTx = await provider.signTransaction(tx);
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
+      });
+      const sig = rpcRes?.result;
+      if (!sig) throw new Error(rpcRes?.error?.message || "Send failed.");
+      return { success: true, sig };
+    } catch (err) {
+      return { success: false, msg: err?.message || "Unknown error" };
+    }
+  };
+
   const startYieldVaultLoop = (vaultInit, statsInit) => {
     if (yieldVaultIntervalRef.current) clearInterval(yieldVaultIntervalRef.current);
     const tick = async () => {
@@ -4802,8 +4845,12 @@ function JupChatInner() {
           const mkTitle = best.market.metadata?.title || best.market.title || "outcome";
           setYieldVaultLog(prev => [{ ts: Date.now(), type: "bet", detail: `Auto-bet $${betAmt} ${best.side.toUpperCase()} on "${mkTitle}" (${evTitle}) — edge ${best.edge.toFixed(1)}%` }, ...prev.slice(0, 49)]);
           push("ai", `**Yield Vault auto-bet** — $${betAmt} ${best.side.toUpperCase()} on **${evTitle}** (${best.edge.toFixed(1)}% edge). Principal stays in Lend earning yield.`);
+        } else {
+          setYieldVaultLog(prev => [{ ts: Date.now(), type: "error", detail: `Auto-bet failed: ${betResult?.msg || "Unknown error"}` }, ...prev.slice(0, 49)]);
         }
-      } catch {}
+      } catch (err) {
+        setYieldVaultLog(prev => [{ ts: Date.now(), type: "error", detail: `Vault scan error: ${err?.message || "Unknown"}` }, ...prev.slice(0, 49)]);
+      }
       setYieldVaultBetting(false);
     };
     tick();
@@ -4861,16 +4908,25 @@ function JupChatInner() {
 
   const withdrawYieldVault = async () => {
     const usdcVault = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
-    if (!usdcVault) { push("ai", "Could not find USDC Earn vault. Try refreshing."); return; }
+    if (!usdcVault) {
+      if (!earnVaults.length) await fetchEarnVaults();
+      const refreshed = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
+      if (!refreshed) { push("ai", "Could not find USDC Earn vault. Try refreshing."); return; }
+    }
     const pos = earnUserPositions["USDC"];
-    if (!pos || pos.amount <= 0) { push("ai", "No USDC balance found in Earn to withdraw."); return; }
-    clearInterval(yieldVaultIntervalRef.current);
-    setEarnWithdraw({ vault: usdcVault, amount: pos.amount.toFixed(6), positionAmount: pos.amount });
+    if (!pos || pos.amount <= 0) {
+      push("ai", "No USDC balance found in Earn to withdraw. Your principal may have already been withdrawn.");
+      return;
+    }
+    // NOTE: vault state is NOT cleared here — it's only cleared after the tx confirms in doEarnWithdraw
+    setEarnWithdraw({
+      vault: usdcVault,
+      amount: pos.amount.toFixed(6),
+      positionAmount: pos.amount,
+      isYieldVaultClose: true, // flag so doEarnWithdraw knows to close the vault on success
+    });
     setShowEarnWithdraw(true);
-    setYieldVault(null); setYieldVaultStats(null);
-    saveYieldVault(null, null);
-    setYieldVaultLog([]);
-    push("ai", `Opening withdrawal for **${pos.amount.toFixed(4)} USDC** from Earn. Yield Vault closed.`);
+    push("ai", `Ready to withdraw **${pos.amount.toFixed(4)} USDC** from Jupiter Lend. Choose how much to withdraw below — 25%, 50%, 75%, or MAX. Your vault stays active until the transaction confirms.`);
   };
   const doEarnDeposit = async () => {
     const { vault, amount } = earnDeposit;
@@ -5000,6 +5056,16 @@ function JupChatInner() {
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
       push("ai", `Withdrawal submitted ✓\n\n**${amount} ${vault.token}** withdrawn from **${vault.name}**\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      // If this withdrawal was triggered from the Yield Vault, close the vault now that tx confirmed
+      if (earnWithdraw.isYieldVaultClose) {
+        clearInterval(yieldVaultIntervalRef.current);
+        setYieldVault(null);
+        setYieldVaultStats(null);
+        saveYieldVault(null, null);
+        setYieldVaultLog([]);
+        setShowYieldVault(false);
+        push("ai", "Yield Vault closed. Your USDC is back in your wallet.");
+      }
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
@@ -8690,8 +8756,17 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
       // ── FETCH_YIELD_VAULT — show vault status + history in chat ──────────────
       } else if (action === "FETCH_YIELD_VAULT") {
+        const isWithdrawQuery = /withdraw|close vault|stop vault|exit vault|get.*usdc back|pull out|end vault/i.test(input);
         if (!yieldVault) {
-          push("ai", "You don't have an active Yield Vault yet. Type **start yield vault** to open one — your USDC earns yield while the vault auto-bets prediction markets.");
+          push("ai", isWithdrawQuery
+            ? "You don't have an active Yield Vault to withdraw from."
+            : "You don't have an active Yield Vault yet. Type **start yield vault** to open one — your USDC earns yield while the vault auto-bets prediction markets.");
+        } else if (isWithdrawQuery) {
+          // Route directly to the withdraw flow
+          if (!earnVaults.length) await fetchEarnVaults();
+          if (walletFull) await fetchEarnUserPositions();
+          setShowYieldVault(true);
+          await withdrawYieldVault();
         } else {
           const accrued = estimateAccruedYield(yieldVault, yieldVaultStats);
           const stats   = yieldVaultStats || {};
@@ -8706,7 +8781,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             } else {
               const logLines = logEntries.slice(0, 15).map((entry, i) => {
                 const time = new Date(entry.ts).toLocaleString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
-                const typeLabel = entry.type === "deposit" ? "Deposit" : entry.type === "bet" ? "Auto-bet" : entry.type === "win" ? "Win" : entry.type === "sweep" ? "Sweep" : "Event";
+                const typeLabel = entry.type === "deposit" ? "Deposit" : entry.type === "bet" ? "Auto-bet" : entry.type === "win" ? "Win" : entry.type === "sweep" ? "Sweep" : entry.type === "error" ? "Error" : "Event";
                 return `${i + 1}. **${typeLabel}** · ${entry.detail} · _${time}_`;
               }).join("\n");
               statusMsg += `\n\n**Activity Log** (${logEntries.length} event${logEntries.length !== 1 ? "s" : ""})\n${logLines}`;
