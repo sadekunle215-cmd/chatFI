@@ -1989,7 +1989,7 @@ function formatAPY(apy) {
   if (isNaN(n)) return null;
   // Jupiter returns totalRate/supplyRate in basis points (e.g. 41500 = 4.15%)
   // Divide by 10000 to convert to display percentage
-  return `${(n / 10000).toFixed(2)}%`;
+  return `${(n / 100).toFixed(2)}%`;
 }
 function formatEarned(earned, sym) {
   if (earned === null || earned === undefined) return null;
@@ -2150,7 +2150,7 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onRefresh, earnPos
                       <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: "rgba(77,106,122,0.15)", color: T.text3, border: `1px solid ${T.border}` }}>NO VAULT</span>
                     </div>
                     {p.apy != null && (
-                      <div style={{ fontSize: 11, color: T.teal, marginBottom: 8 }}>APY: {(p.apy / 10000).toFixed(2)}%</div>
+                      <div style={{ fontSize: 11, color: T.teal, marginBottom: 8 }}>APY: {(p.apy / 100).toFixed(2)}%</div>
                     )}
                     <button onClick={() => onSetVault && onSetVault(p)} style={{ width: "100%", padding: "8px 0", background: T.accent, border: "none", borderRadius: 8, color: "#0d1117", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⚡ Set Yield Vault</button>
                   </div>
@@ -4846,16 +4846,14 @@ function JupChatInner() {
         // If fallback looks like a raw int (>= 1000 and no decimal part typical of human amounts), divide it
         const fallback = rawFallback >= 1000 && Number.isInteger(rawFallback) ? rawFallback / divisor : rawFallback;
         const amount = ubHuman > 0 ? ubHuman : uaHuman > 0 ? uaHuman : fallback;
-        const shares = parseFloat(p.shares || 0);
-        // currentBalance uses only on-chain fields — p.depositedAmount can be stale after unstaking
-        const currentBalance = ubHuman > 0 ? ubHuman : uaHuman > 0 ? uaHuman : 0;
-        // Only treat shares as meaningful if there is also an on-chain balance —
-        // Jupiter can return leftover share dust on fully exited positions
-        const hasActivePosition = currentBalance > 0;
+        // shares is the most reliable signal — Jupiter zeroes this on full withdrawal.
+        // Use a dust threshold of 1000 raw share units to ignore leftover rounding dust.
+        const shares = parseFloat(p.shares || p.sharesAmount || p.shareAmount || 0);
+        const hasActivePosition = shares > 1000;
         const apy = jlTok.totalRate ?? jlTok.supplyRate ?? p.apy ?? p.supplyApy ?? p.currentApy ?? null;
         const earned = p.earnedAmount ?? p.yieldEarned ?? p.interestEarned ?? p.accruedInterest ?? null;
         const logo = underlying.logo_url || underlying.logoURI || jlTok.logoURI || `https://img.jup.ag/tokens/${mint}`;
-        return { sym, mint, jlMint, dec, amount, shares, currentBalance, hasActivePosition, apy, earned, logo, name: underlying.name || jlTok.name || `Jupiter Earn ${sym}`, raw: p };
+        return { sym, mint, jlMint, dec, amount, shares, hasActivePosition, apy, earned, logo, name: underlying.name || jlTok.name || `Jupiter Earn ${sym}`, raw: p };
       }).filter((p) => p.mint && p.hasActivePosition);
       setYieldVaultPositions(normalised);
     } catch (e) { console.error("[YieldVault] fetchEarnPositionsForVault:", e.message); }
