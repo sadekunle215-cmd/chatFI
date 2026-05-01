@@ -5218,9 +5218,9 @@ function JupChatInner() {
     try {
       const data = await jupFetch(`${JUP_EARN_API}/deposit`, {
         method: "POST",
-        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 },
+        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw },
       });
-      if (!data?.transaction) throw new Error(data?.error?.message || data?.error || "No transaction returned from earn deposit API.");
+      if (!data?.transaction) throw new Error(data?.error?.message || data?.error || `Earn deposit API returned: ${JSON.stringify(data).slice(0, 200)}`);
 
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
       try {
@@ -5267,9 +5267,9 @@ function JupChatInner() {
     try {
       const data = await jupFetch(`${JUP_EARN_API}/withdraw`, {
         method: "POST",
-        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 },
+        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw },
       });
-      if (!data?.transaction) throw new Error(data?.error?.message || data?.error || "No transaction returned from earn withdraw API.");
+      if (!data?.transaction) throw new Error(data?.error?.message || data?.error || `Earn withdraw API returned: ${JSON.stringify(data).slice(0, 200)}`);
 
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
       try {
