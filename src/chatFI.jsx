@@ -4844,17 +4844,21 @@ function JupChatInner() {
     // Generate invite code HERE (client-side) so the link we share is guaranteed
     // to match the keypair the server derives — no mismatch / "fake code" errors.
     const inviteCode = generateInviteCode();
+    // Derive the invite keypair client-side and pass the pubkey explicitly to the server
+    // so there is zero chance of a derivation mismatch with Jupiter's craft-send call.
+    const inviteKeypair = await inviteCodeToKeypair(inviteCode);
+    const inviteSignerPubkey = inviteKeypair.publicKey.toBase58();
 
     setSendStatus("signing");
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
-      // Server receives our inviteCode, derives Keypair.fromSeed(SHA-256("invite:"+code)),
-      // calls Jupiter /send/v1/craft-send with that signer pubkey, partially signs,
-      // and returns the partially-signed tx. We already hold the code so no round-trip mismatch.
+      // Server receives our inviteCode + inviteSignerPubkey, uses the pubkey directly
+      // to call Jupiter /send/v1/craft-send, partially signs with the derived keypair,
+      // and returns the partially-signed tx. No derivation mismatch possible.
       const serverRes = await fetch("/api/send", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint, inviteCode }),
+        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint, inviteCode, inviteSignerPubkey }),
       });
       const serverData = await serverRes.json();
       if (serverData.error) throw new Error(serverData.error);
@@ -4879,7 +4883,8 @@ function JupChatInner() {
       const inviteLink = `https://jup.ag/send?code=${inviteCode}`;
       setSendLink(inviteLink);
       setSendStatus("done");
-      setShowSend(false);
+      // NOTE: intentionally NOT closing the panel here so the user can see
+      // the invite link + copy button in the UI before dismissing manually.
       push("ai",
         `Send confirmed ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n` +
         `**Invite link:**\n\`${inviteLink}\`\n\n` +
