@@ -5189,6 +5189,99 @@ function JupChatInner() {
     return realVaultMap[key] ?? vault.vaultId; // prefer real, fall back to hardcoded
   };
 
+  // ── Jupiter Earn — Deposit ────────────────────────────────────────────────────
+  const doEarnDeposit = async () => {
+    const { vault, amount } = earnDeposit;
+    if (!vault || !amount || parseFloat(amount) <= 0) return;
+    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+    if (!provider.signTransaction) { push("ai", "Your wallet does not support transaction signing."); return; }
+
+    const decimals = vault.assetDecimals ?? 6;
+    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
+
+    setShowEarnDeposit(false);
+    push("ai", `Depositing **${amount} ${vault.token}** into ${vault.name}…`);
+
+    try {
+      const res = await fetch(`${JUP_EARN_API}/deposit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 }),
+      });
+      if (!res.ok) throw new Error(`Earn deposit API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      const data = await res.json();
+      if (!data?.transaction) throw new Error("No transaction returned from earn deposit API.");
+
+      const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
+      const signedTx = await provider.signTransaction(tx);
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      push("ai",
+        `✅ **Deposited ${amount} ${vault.token}** into ${vault.name}\n\n` +
+        `You are now earning **${vault.apyDisplay} APY**.\n\n` +
+        `[View on Solscan →](https://solscan.io/tx/${signature})`
+      );
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+      if (walletFull) fetchEarnUserPositions();
+    } catch (err) {
+      push("ai", `Earn deposit failed: ${err?.message || "Unknown error"}. Please try again.`);
+    }
+  };
+
+  // ── Jupiter Earn — Withdraw ───────────────────────────────────────────────────
+  const doEarnWithdraw = async () => {
+    const { vault, amount } = earnWithdraw;
+    if (!vault || !amount || parseFloat(amount) <= 0) return;
+    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+    if (!provider.signTransaction) { push("ai", "Your wallet does not support transaction signing."); return; }
+
+    const decimals = vault.assetDecimals ?? 6;
+    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
+
+    setShowEarnWithdraw(false);
+    push("ai", `Withdrawing **${amount} ${vault.token}** from ${vault.name}…`);
+
+    try {
+      const res = await fetch(`${JUP_EARN_API}/withdraw`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 }),
+      });
+      if (!res.ok) throw new Error(`Earn withdraw API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      const data = await res.json();
+      if (!data?.transaction) throw new Error("No transaction returned from earn withdraw API.");
+
+      const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
+      const signedTx = await provider.signTransaction(tx);
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      push("ai",
+        `✅ **Withdrew ${amount} ${vault.token}** from ${vault.name}\n\n` +
+        `[View on Solscan →](https://solscan.io/tx/${signature})`
+      );
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+      if (walletFull) fetchEarnUserPositions();
+    } catch (err) {
+      push("ai", `Earn withdraw failed: ${err?.message || "Unknown error"}. Please try again.`);
+    }
+  };
+
   // ── Jupiter Multiply — calls /api/multiply serverless → signs → sends ────────
   const doMultiply = async () => {
     const { vault, colAmount, leverage } = multiplyPos;
@@ -6063,18 +6156,17 @@ function JupChatInner() {
         signTransaction: async (tx) => {
           const raw = tx.serialize();
           const base64 = bytesToB64(raw);
-          // Start the WC request FIRST so it is pending on the relay,
-          // then deep-link into the wallet app so it can respond to it.
-          const requestPromise = client.request({
-            topic: session.topic,
-            chainId: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-            request: { method: "solana_signTransaction", params: { transaction: base64 } },
-          });
+          // For sign requests on mobile: use location.href with custom scheme.
+          // This opens the wallet app without unloading the page (OS intercepts custom scheme).
           if (isMobile && preferredWallet) {
             const signDeepLink = getMobileWcDeepLink(preferredWallet, uri);
             window.location.href = signDeepLink;
           }
-          const result = await requestPromise;
+          const result = await client.request({
+            topic: session.topic,
+            chainId: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            request: { method: "solana_signTransaction", params: { transaction: base64 } },
+          });
           if (!result?.transaction) throw new Error("No signed transaction returned from wallet");
           const signed = b64ToBytes(result.transaction);
           return VersionedTransaction.deserialize(signed);
