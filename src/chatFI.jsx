@@ -4895,15 +4895,19 @@ function JupChatInner() {
         const res = await fetch("/api/yield-vault", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ wallet: walletFull, earnPositionId: earnMint, earnSymbol: pos.sym, earnMint, earnJlMint: pos.jlMint, depositedAmount: pos.amount, depositedValueUSD: pos.amount * priceUSD, thresholdUSD: parseFloat(thresholdUSD), targetTokenSymbol, targetTokenMint, targetTokenDecimals }),
+          // Fix 3: targetTokenDecimals fallback to 6 (USDC default) instead of undefined
+          body: JSON.stringify({ wallet: walletFull, earnPositionId: earnMint, earnSymbol: pos.sym, earnMint, earnJlMint: pos.jlMint, depositedAmount: pos.amount, depositedValueUSD: pos.amount * priceUSD, thresholdUSD: parseFloat(thresholdUSD), targetTokenSymbol, targetTokenMint, targetTokenDecimals: targetTokenDecimals ?? 6 }),
         });
         const data = await res.json();
+        // Fix 1: log API errors so failures are visible in console
         if (data.success) saved++;
+        else console.error("[YieldVault] API error:", data.error, data);
       } catch (e) { console.error("[YieldVault] save error:", e.message); }
     }
     setYieldVaultStatus("done");
-    setShowYieldVault(false);
+    // Fix 2: only close panel on success — keep open on failure so user can retry
     if (saved > 0) {
+      setShowYieldVault(false);
       push("ai", `✅ **Yield Vault active** on ${saved} position${saved > 1 ? "s" : ""}!\n\nWhenever your ${selectedPositions.length > 1 ? "selected earn positions" : yieldVaultPositions.find((p) => p.mint === selectedPositions[0])?.sym + " Earn position"} accumulate **$${thresholdUSD}+ in yield**, it will automatically be withdrawn and swapped into **${targetTokenSymbol}**.\n\nNo further action needed. Type *"show my yield vault"* to track your positions.`);
       fetchSavedVaults();
     } else { push("ai", "Failed to save Yield Vault. Please try again."); }
