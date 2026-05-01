@@ -337,7 +337,7 @@ JUPITER LOCK KNOWLEDGE:
 • Vested tokens can be claimed progressively — no need to wait for full vest.
 
 YIELD-GATED PREDICTION VAULT KNOWLEDGE:
-• The Yield Vault lets users deposit USDC, SOL, or JLP which earns live APY via Jupiter Lend (Earn) while idle between bets. JLP earns ~10-15% APY vs USDC's ~4-5%.
+• The Yield Vault lets users deposit USDC only, which earns live APY via Jupiter Lend (Earn) while idle between bets.
 • Two vault modes: **Predict** (auto-bet on prediction markets using accrued yield) and **Auto-DCA** (when accrued yield hits a user-set threshold, it auto-buys a chosen token like SOL/JUP via Jupiter swap — great for users who don't trust predictions).
 • Auto-scans prediction markets every 3 min. When a market with edge ≥ minEdge% is found, it auto-bets using accrued yield — principal is never touched.
 • Winnings sweep back into Lend to compound. Capital is always working, never sitting idle.
@@ -5396,18 +5396,17 @@ function JupChatInner() {
   };
 
   const doYieldVaultDeposit = async (cfg) => {
-    if (!walletFull) { push("ai", "Connect your wallet first to start the Yield Vault."); setShowYieldVault(false); return; }
+    if (!walletFull) { push("ai", "Connect your wallet first to start the Yield Vault."); return; }
     const provider = getActiveProvider();
-    if (!provider) { push("ai", "Wallet provider not found."); setShowYieldVault(false); return; }
+    if (!provider) { push("ai", "Wallet provider not found."); return; }
     const depositAmt = parseFloat(cfg.depositAmount || "100");
-    if (depositAmt < 1) { push("ai", "Minimum deposit is $1."); setShowYieldVault(false); return; }
+    if (depositAmt < 1) { push("ai", "Minimum deposit is $1."); return; }
 
     // Determine which token to deposit — USDC (default), SOL, or JLP
-    const depositToken = (cfg.depositToken || "USDC").toUpperCase();
+    const depositToken = "USDC"; // USDC only
     const depositBalance = portfolio?.[depositToken] ?? 0;
     if (depositBalance < depositAmt) {
       push("ai", `Insufficient ${depositToken} balance. You have **${depositBalance.toFixed(4)} ${depositToken}** but this deposit requires **${depositAmt} ${depositToken}**.`);
-      setShowYieldVault(false);
       return;
     }
 
@@ -5416,11 +5415,10 @@ function JupChatInner() {
     if (!targetVault) { await fetchEarnVaults(); targetVault = earnVaults.find(v => v.token?.toUpperCase() === depositToken); }
     if (!targetVault) {
       push("ai", `${depositToken} Earn vault not found. Try USDC, SOL, or JLP instead.`);
-      setShowYieldVault(false);
       return;
     }
     const assetMint = targetVault.assetMint || TOKEN_MINTS[depositToken];
-    if (!assetMint) { push("ai", `Could not resolve mint for ${depositToken} vault.`); setShowYieldVault(false); return; }
+    if (!assetMint) { push("ai", `Could not resolve mint for ${depositToken} vault.`); return; }
     const decimals  = targetVault.assetDecimals || (depositToken === "SOL" ? 9 : 6);
     const amountRaw = Math.floor(depositAmt * Math.pow(10, decimals)).toString();
     push("ai", `Depositing **${depositAmt} ${depositToken}** into Jupiter Lend Earn (${targetVault.apyDisplay} APY) for your Yield Vault…`);
@@ -5452,7 +5450,10 @@ function JupChatInner() {
       saveYieldVault(newVault, newStats);
       push("ai", `✅ **Yield Vault Active${cfg.vaultMode==="dca"?" (Auto-DCA)":""}!**\n\n**${depositAmt} ${depositToken}** is now earning **${targetVault.apyDisplay} APY** in Jupiter Lend.\n\n${cfg.vaultMode==="dca"?`When accrued yield hits **$${cfg.dcaThreshold||"5"}**, it auto-buys **${cfg.dcaToken||"SOL"}** via Jupiter swap — principal stays in Lend.`:`The vault scans prediction markets every 3 min. When a market with ≥${cfg.minEdge}% edge appears, it auto-bets up to **$${cfg.maxBet}** from accrued yield — principal is always protected.`}\n\n[View tx →](https://solscan.io/tx/${sig})`);
       startYieldVaultLoop(newVault, newStats);
-    } catch (err) { push("ai", `Yield Vault deposit failed: ${err?.message}`); }
+    } catch (err) {
+      push("ai", `Yield Vault deposit failed: ${err?.message}`);
+      // Panel stays open so user can retry or adjust settings
+    }
   };
 
   const toggleYieldVaultStatus = () => {
