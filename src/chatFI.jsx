@@ -7407,16 +7407,35 @@ Order: \`${orderKey.slice(0,20)}…\`
         if (justConnected) {
           walletWasConnectedThisSessionRef.current = true;
           try { sessionStorage.setItem(sessionKey, "1"); } catch {}
-          fetchPrices().then(live => {
-            const solUSD = balances.SOL && live.SOL
-              ? ` (~$${(balances.SOL * live.SOL).toFixed(2)})`
-              : "";
-            push("ai",
-              `Wallet connected ✓\n\nBalance: **${(balances.SOL||0).toFixed(4)} SOL**${solUSD}` +
-              Object.entries(balances).filter(([k])=>k!=="SOL")
-                .map(([k,v])=>`\n${k}: ${v<1?v.toFixed(6):v.toFixed(2)}`).join("") +
-              "\n\nAlways remember these 2 commands:\n\n**Refresh** — to refresh\n**Delete messages** — to delete messages"
-            );
+          fetchPrices().then(async live => {
+            const solUSD = balances.SOL && live.SOL ? (balances.SOL * live.SOL).toFixed(2) : null;
+            const display = reownAddress.slice(0,4) + "…" + reownAddress.slice(-4);
+            // Build token list with Jupiter logos
+            const rawTokens = Object.entries(balances).filter(([k]) => k !== "SOL");
+            const tokens = await Promise.all(rawTokens.map(async ([sym, amt]) => {
+              const mint = tokenCacheRef.current[sym] || TOKEN_MINTS[sym] || null;
+              let logo = TOKEN_LOGO_URLS[sym] || (logoMapRef.current && logoMapRef.current[sym]) || null;
+              let name = sym;
+              if (!logo && mint) {
+                try {
+                  const meta = await fetch(`https://tokens.jup.ag/token/${mint}`).then(r => r.json()).catch(() => null);
+                  logo = meta?.logoURI || `https://img.jup.ag/tokens/${mint}`;
+                  name = meta?.name || sym;
+                } catch { logo = mint ? `https://img.jup.ag/tokens/${mint}` : null; }
+              }
+              return { symbol: sym, name, amount: amt < 1 ? amt.toFixed(6) : amt.toFixed(2), logo, mint };
+            }));
+            push("ai", "", {
+              walletCard: {
+                emailLabel: reownWalletInfo?.name || connectedWalletName || "Wallet",
+                address: reownAddress,
+                display,
+                provider: "wallet",
+                solBalance: (balances.SOL||0).toFixed(4),
+                solUSD,
+                tokens,
+              }
+            });
             // ── Idle wallet / earn detection ───────────────────────────────
             setTimeout(async () => {
               try {
@@ -7495,11 +7514,25 @@ Order: \`${orderKey.slice(0,20)}…\`
         setPortfolio(balances);
         if (justConnected) {
           walletWasConnectedThisSessionRef.current = true;
-          fetchPrices().then(live => {
+          fetchPrices().then(async live => {
             const solUSD = balances.SOL && live.SOL ? (balances.SOL * live.SOL).toFixed(2) : null;
             const emailLabel = privyUser?.email?.address || privyUser?.google?.email || privyUser?.twitter?.username || "your account";
             const provider = privyUser?.google?.email ? "google" : privyUser?.twitter?.username ? "twitter" : privyUser?.discord?.username ? "discord" : "email";
-            const tokens = Object.entries(balances).filter(([k])=>k!=="SOL").map(([k,v])=>({ symbol:k, amount: v<1?v.toFixed(6):v.toFixed(2) }));
+            // Build token list with Jupiter logos + names
+            const rawTokens = Object.entries(balances).filter(([k]) => k !== "SOL");
+            const tokens = await Promise.all(rawTokens.map(async ([sym, amt]) => {
+              const mint = tokenCacheRef.current[sym] || TOKEN_MINTS[sym] || null;
+              let logo = TOKEN_LOGO_URLS[sym] || (logoMapRef.current && logoMapRef.current[sym]) || null;
+              let name = sym;
+              if (!logo && mint) {
+                try {
+                  const meta = await fetch(`https://tokens.jup.ag/token/${mint}`).then(r => r.json()).catch(() => null);
+                  logo = meta?.logoURI || `https://img.jup.ag/tokens/${mint}`;
+                  name = meta?.name || sym;
+                } catch { logo = mint ? `https://img.jup.ag/tokens/${mint}` : null; }
+              }
+              return { symbol: sym, name, amount: amt < 1 ? amt.toFixed(6) : amt.toFixed(2), logo, mint };
+            }));
             push("ai", "", {
               walletCard: {
                 emailLabel,
@@ -10345,7 +10378,9 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6, wordBreak:"break-word", overflowWrap:"anywhere", minWidth:0 }}>
                 {m.walletCard ? (() => {
                   const wc = m.walletCard;
-                  const providerIcon = wc.provider === "google"
+                  const providerIcon = wc.provider === "wallet"
+                    ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M16 12h2"/><path d="M2 10h20"/></svg>
+                    : wc.provider === "google"
                     ? <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
                     : wc.provider === "twitter"
                     ? <svg width="13" height="13" viewBox="0 0 24 24" fill={T.text1}><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.743l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
@@ -10353,17 +10388,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     ? <svg width="13" height="13" viewBox="0 0 24 24" fill="#5865F2"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
                     : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={T.text2} strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>;
 
-                  // Token logo map for common tokens
-                  const TOKEN_LOGOS_WC = {
-                    SOL:  "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
-                    USDC: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png",
-                    USDT: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png",
-                    JUP:  "https://static.jup.ag/jup/icon.png",
-                    BONK: "https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q89kGzNb39cE",
-                    WIF:  "https://bafkreibk3covs5ltyqxa272uodhkulxv5vdrdebf7m5b6vc6qoibkqhzm.ipfs.nftstorage.link",
-                  };
                   const addrShort = wc.address ? wc.address.slice(0,6) + "…" + wc.address.slice(-6) : "";
-                  const providerLabel = wc.provider ? wc.provider.charAt(0).toUpperCase() + wc.provider.slice(1) : "Social";
+                  const providerLabel = wc.provider === "wallet" ? (wc.emailLabel || "Wallet") : wc.provider ? wc.provider.charAt(0).toUpperCase() + wc.provider.slice(1) : "Social";
 
                   return (
                     <div style={{ width:"100%" }}>
@@ -10400,7 +10426,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         <div style={{ padding:"14px 16px 12px" }}>
                           {/* SOL logo + balance */}
                           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
-                            <img src={TOKEN_LOGOS_WC.SOL} alt="SOL"
+                            <img src={TOKEN_LOGO_URLS.SOL} alt="SOL"
                               style={{ width:32, height:32, borderRadius:"50%", border:`2px solid ${T.accent}33`, flexShrink:0 }}
                               onError={e => e.currentTarget.style.display="none"} />
                             <div>
@@ -10425,7 +10451,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         {/* Wallet address row */}
                         <div style={{ padding:"10px 16px", display:"flex", alignItems:"center", gap:8 }}>
                           <div style={{ flex:1 }}>
-                            <div style={{ fontSize:9, color:T.text3, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:3 }}>Embedded Solana Wallet</div>
+                            <div style={{ fontSize:9, color:T.text3, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:3 }}>{wc.provider === "wallet" ? "Solana Wallet" : "Embedded Solana Wallet"}</div>
                             <div style={{ fontFamily:"monospace", fontSize:11, color:T.text2, letterSpacing:"0.02em" }}>{addrShort}</div>
                           </div>
                           <button onClick={() => navigator.clipboard.writeText(wc.address).catch(()=>{})}
@@ -10445,17 +10471,25 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         {wc.tokens?.length > 0 && (<>
                           <div style={{ height:1, background:`linear-gradient(90deg, transparent, ${T.border}, transparent)` }}/>
                           <div style={{ padding:"10px 16px", display:"flex", flexWrap:"wrap", gap:6 }}>
-                            {wc.tokens.map(t => (
-                              <div key={t.symbol} style={{ display:"flex", alignItems:"center", gap:5, background:"rgba(0,0,0,0.3)", border:`1px solid ${T.border}`, borderRadius:8, padding:"4px 10px" }}>
-                                {TOKEN_LOGOS_WC[t.symbol] && (
-                                  <img src={TOKEN_LOGOS_WC[t.symbol]} alt={t.symbol}
-                                    style={{ width:14, height:14, borderRadius:"50%", flexShrink:0 }}
-                                    onError={e => e.currentTarget.style.display="none"} />
-                                )}
-                                <span style={{ fontSize:11, fontWeight:700, color:T.text1 }}>{t.amount}</span>
-                                <span style={{ fontSize:10, color:T.text3 }}>{t.symbol}</span>
-                              </div>
-                            ))}
+                            {wc.tokens.map(t => {
+                              const logoSrc = t.logo || TOKEN_LOGO_URLS[t.symbol] || (t.mint ? `https://img.jup.ag/tokens/${t.mint}` : null);
+                              const displayName = t.name && t.name !== t.symbol ? t.name : t.symbol;
+                              return (
+                                <div key={t.symbol} style={{ display:"flex", alignItems:"center", gap:6, background:"rgba(0,0,0,0.3)", border:`1px solid ${T.border}`, borderRadius:10, padding:"5px 10px" }}>
+                                  {logoSrc ? (
+                                    <img src={logoSrc} alt={t.symbol}
+                                      style={{ width:16, height:16, borderRadius:"50%", flexShrink:0 }}
+                                      onError={e => { e.currentTarget.style.display="none"; }} />
+                                  ) : (
+                                    <div style={{ width:16, height:16, borderRadius:"50%", background:T.surface, border:`1px solid ${T.border}`, flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center", fontSize:8, color:T.text3, fontWeight:700 }}>{t.symbol.slice(0,1)}</div>
+                                  )}
+                                  <div>
+                                    <div style={{ fontSize:11, fontWeight:700, color:T.text1, lineHeight:1.2 }}>{t.amount} <span style={{ fontWeight:500, color:T.text3 }}>{t.symbol}</span></div>
+                                    {displayName !== t.symbol && <div style={{ fontSize:9, color:T.text3, lineHeight:1.1 }}>{displayName}</div>}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         </>)}
                       </div>
