@@ -4775,6 +4775,17 @@ function JupChatInner() {
     return Keypair.fromSeed(new Uint8Array(hashBuffer));
   };
 
+  const checkBalance = (token, amount, label) => {
+    if (!portfolio || !walletFull) return true;
+    const sym = token?.toUpperCase();
+    const bal = portfolio[sym] ?? 0;
+    if (amount > 0 && bal < amount) {
+      push("ai", `Insufficient balance for ${label}. You have **${bal.toFixed(4)} ${sym}** but need **${amount} ${sym}**.`);
+      return false;
+    }
+    return true;
+  };
+
   const doSend = async (cfgOverride) => {
     const { token, amount, mint } = cfgOverride || sendCfg;
     if (!amount || parseFloat(amount) <= 0) return;
@@ -5187,6 +5198,103 @@ function JupChatInner() {
     const debtMint = TOKEN_MINTS[vault.debt.toUpperCase()] || "";
     const key = colMint + "/" + debtMint;
     return realVaultMap[key] ?? vault.vaultId; // prefer real, fall back to hardcoded
+  };
+
+  // ── Jupiter Earn — Deposit ────────────────────────────────────────────────────
+  const doEarnDeposit = async () => {
+    const { vault, amount } = earnDeposit;
+    if (!vault || !amount || parseFloat(amount) <= 0) return;
+    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+    if (!provider.signTransaction) { push("ai", "Your wallet does not support transaction signing."); return; }
+
+    const decimals = vault.assetDecimals ?? 6;
+    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
+
+    setShowEarnDeposit(false);
+    push("ai", `Depositing **${amount} ${vault.token}** into ${vault.name}…`);
+
+    try {
+      const data = await jupFetch(`${JUP_EARN_API}/deposit`, {
+        method: "POST",
+        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 },
+      });
+      if (!data?.transaction) throw new Error(data?.error?.message || data?.error || "No transaction returned from earn deposit API.");
+
+      const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
+      try {
+        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
+        tx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal */ }
+      const signedTx = await provider.signTransaction(tx);
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      push("ai",
+        `✅ **Deposited ${amount} ${vault.token}** into ${vault.name}\n\n` +
+        `You are now earning **${vault.apyDisplay} APY**.\n\n` +
+        `[View on Solscan →](https://solscan.io/tx/${signature})`
+      );
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+      if (walletFull) fetchEarnUserPositions();
+    } catch (err) {
+      push("ai", `Earn deposit failed: ${err?.message || "Unknown error"}. Please try again.`);
+    }
+  };
+
+  // ── Jupiter Earn — Withdraw ───────────────────────────────────────────────────
+  const doEarnWithdraw = async () => {
+    const { vault, amount } = earnWithdraw;
+    if (!vault || !amount || parseFloat(amount) <= 0) return;
+    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+    const provider = getActiveProvider();
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+    if (!provider.signTransaction) { push("ai", "Your wallet does not support transaction signing."); return; }
+
+    const decimals = vault.assetDecimals ?? 6;
+    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
+
+    setShowEarnWithdraw(false);
+    push("ai", `Withdrawing **${amount} ${vault.token}** from ${vault.name}…`);
+
+    try {
+      const data = await jupFetch(`${JUP_EARN_API}/withdraw`, {
+        method: "POST",
+        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 },
+      });
+      if (!data?.transaction) throw new Error(data?.error?.message || data?.error || "No transaction returned from earn withdraw API.");
+
+      const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
+      try {
+        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
+        tx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal */ }
+      const signedTx = await provider.signTransaction(tx);
+      const rpcRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
+      });
+      const signature = rpcRes?.result;
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      push("ai",
+        `✅ **Withdrew ${amount} ${vault.token}** from ${vault.name}\n\n` +
+        `[View on Solscan →](https://solscan.io/tx/${signature})`
+      );
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+      if (walletFull) fetchEarnUserPositions();
+    } catch (err) {
+      push("ai", `Earn withdraw failed: ${err?.message || "Unknown error"}. Please try again.`);
+    }
   };
 
   // ── Jupiter Multiply — calls /api/multiply serverless → signs → sends ────────
