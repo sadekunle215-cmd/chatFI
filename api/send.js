@@ -1,6 +1,8 @@
 // api/send.js — Vercel serverless function (ESM)
-// Signs with invite keypair using tweetnacl directly — avoids both
-// Web Crypto Ed25519 (unsupported usage) and tx.sign() (resets all sigs)
+// Per Jupiter Send API docs (https://developers.jup.ag/docs/send/invite-code):
+//   - Server's only job is to call Jupiter's craft-send and return the raw UNSIGNED tx
+//   - ALL signing happens client-side: invite keypair first, then sender wallet
+//   - Server never touches private keys or signs for the send flow
 
 import { Keypair, VersionedTransaction } from "@solana/web3.js";
 import nacl from "tweetnacl";
@@ -14,19 +16,22 @@ function bytesToB64(bytes) {
   return Buffer.from(bytes).toString("base64");
 }
 
-function generateInviteCode() {
-  const chars = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-  const arr = new Uint8Array(12);
-  crypto.getRandomValues(arr);
-  return Array.from(arr).map(b => chars[b % chars.length]).join("");
-}
+// ── Clawback-only: server re-derives keypair and partially signs ──────────────
+// Clawback still needs server-side signing because the client won't have stored
+// the ephemeral invite keypair after the session ended.
+async function inviteCodeToKeypairForClawback(code) {
+  const data      = new TextEncoder().encode("invite:" + code);
+  const hashBuf   = await crypto.subtle.digest("SHA-256", data);
+  const privKey32 = new Uint8Array(hashBuf);
 
-async function inviteCodeToKeypair(code) {
-  // Jupiter spec: keypair seed = SHA-256("invite:" + code)
-  // Must match client-side derivation exactly
-  const data = new TextEncoder().encode("invite:" + code);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  return Keypair.fromSeed(new Uint8Array(hashBuffer));
+  // Build full 64-byte Solana secret key: [32-byte privkey | 32-byte pubkey]
+  const tempKeypair = Keypair.fromSeed(privKey32);
+  const pubKey32    = tempKeypair.publicKey.toBytes();
+  const secretKey64 = new Uint8Array(64);
+  secretKey64.set(privKey32, 0);
+  secretKey64.set(pubKey32, 32);
+
+  return Keypair.fromSecretKey(secretKey64);
 }
 
 function partialSignWithInviteKeypair(tx, inviteKeypair) {
@@ -34,14 +39,8 @@ function partialSignWithInviteKeypair(tx, inviteKeypair) {
     key => key.equals(inviteKeypair.publicKey)
   );
   if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
-
-  // Serialize just the message bytes to sign
   const msgBytes = tx.message.serialize();
-
-  // Sign using tweetnacl directly — secretKey is 64 bytes (seed + pubkey)
   const sig = nacl.sign.detached(msgBytes, inviteKeypair.secretKey);
-
-  // Write signature into the correct slot without touching other slots
   tx.signatures[inviteIdx] = sig;
 }
 
@@ -56,7 +55,7 @@ export default async function handler(req, res) {
   }
   body = body || {};
 
-  const { action = "send", sender, amount, mint, inviteCode } = body;
+  const { action = "send", sender, amount, mint, inviteCode, inviteSignerPubkey } = body;
   const jupHeaders = {
     "Content-Type": "application/json",
     ...(process.env.JUPITER_API_KEY ? { "x-api-key": process.env.JUPITER_API_KEY } : {}),
@@ -68,7 +67,7 @@ export default async function handler(req, res) {
       if (!inviteCode || !sender) {
         return res.status(400).json({ error: "Missing required fields: inviteCode, sender" });
       }
-      const inviteKeypair = await inviteCodeToKeypair(inviteCode);
+      const inviteKeypair = await inviteCodeToKeypairForClawback(inviteCode);
       const inviteSigner  = inviteKeypair.publicKey.toBase58();
 
       const craftRes  = await fetch(`${JUP_SEND_API}/craft-clawback`, {
@@ -86,20 +85,20 @@ export default async function handler(req, res) {
       return res.status(200).json({ partiallySignedTx: bytesToB64(tx.serialize()) });
     }
 
-    // ── SEND (default) ────────────────────────────────────────────────────────
+    // ── SEND ──────────────────────────────────────────────────────────────────
+    // Client derives invite keypair and passes inviteSignerPubkey.
+    // Server calls craft-send and returns the raw UNSIGNED tx.
+    // Client then signs with: 1) invite keypair, 2) sender wallet — then broadcasts.
     if (!sender || !amount || !mint) {
       return res.status(400).json({ error: "Missing required fields: sender, amount, mint" });
     }
-
-    // Use the invite code the client generated (so the link it holds matches the tx signer).
-    // Fall back to generating one server-side only if the client didn't send one.
-    const codeToUse   = inviteCode || generateInviteCode();
-    const inviteKeypair = await inviteCodeToKeypair(codeToUse);
-    const inviteSigner  = inviteKeypair.publicKey.toBase58();
+    if (!inviteSignerPubkey) {
+      return res.status(400).json({ error: "Missing inviteSignerPubkey — must be derived client-side." });
+    }
 
     const craftRes  = await fetch(`${JUP_SEND_API}/craft-send`, {
       method: "POST", headers: jupHeaders,
-      body: JSON.stringify({ inviteSigner, sender, amount, mint }),
+      body: JSON.stringify({ inviteSigner: inviteSignerPubkey, sender, amount, mint }),
     });
     const craftData = await craftRes.json();
     if (craftData.error) return res.status(502).json({
@@ -107,11 +106,10 @@ export default async function handler(req, res) {
     });
     if (!craftData.tx) return res.status(502).json({ error: "No transaction returned from Jupiter Send." });
 
-    const tx = VersionedTransaction.deserialize(b64ToBytes(craftData.tx));
-    partialSignWithInviteKeypair(tx, inviteKeypair);
+    // Return raw unsigned tx — client signs with both invite keypair and sender wallet
     return res.status(200).json({
-      partiallySignedTx: bytesToB64(tx.serialize()),
-      inviteCode: codeToUse,
+      tx:     craftData.tx,
+      expiry: craftData.expiry,
     });
 
   } catch (err) {
