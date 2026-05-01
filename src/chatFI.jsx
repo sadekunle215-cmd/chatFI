@@ -624,73 +624,82 @@ const fmt = (text = "") => {
         i++;
       }
 
-      html += `<div style="display:flex;flex-direction:column;gap:5px;margin:10px 0">`;
+      html += `<div style="display:flex;flex-direction:column;gap:6px;margin:10px 0;width:100%;box-sizing:border-box">`;
       for (const item of items) {
-        // Extract optional leading [img:URL] logo tag before matching
+        // Extract optional leading [img:URL] logo tag
         const imgMatch = item.content.match(/^\[img:([^\]]+)\]/);
         const logoSrc  = imgMatch ? imgMatch[1] : null;
         const content  = imgMatch ? item.content.slice(imgMatch[0].length) : item.content;
 
-        // Parse "**SYMBOL** — Name ✓ $price (+x%) · score N" or "SYMBOL — Name ✓ $price (+x%) · score N"
-        // Also handle: price with no change, or name with no price/change at all
-        const tokenMatch = content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+-]+)\s+\(([^)]+)\)(?:\s+[·•]\s+score\s+(\d+))?/);
+        // Full card: **SYM** — Name ✓ $price (±change%) [· vol $X | · score N]
+        const tokenMatch    = content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+\-]+)\s+\(([^)]+)\)(?:\s+[·•]\s+(.+))?/);
         // Price-only (no change %): **SYM** — Name $price [· extra]
-        const priceOnlyMatch = !tokenMatch && content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+-]+)(?:\s+[·•]\s+(.+))?$/);
-        // Name-only (no price, no change): **SYM** — Name ✓ [· extra]
+        const priceOnlyMatch = !tokenMatch && content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.*?)\s+(\$[\d.,e+\-]+)(?:\s+[·•]\s+(.+))?$/);
+        // Name-only (no price): **SYM** — Name [✓]
         const nameOnlyMatch  = !tokenMatch && !priceOnlyMatch && content.match(/^\*{0,2}(\S+?)\*{0,2}\s+[—–]\s+(.+)/);
 
-        if (tokenMatch || priceOnlyMatch || nameOnlyMatch) {
-          const isFullCard = !!tokenMatch;
-          const isPriceOnly = !!priceOnlyMatch;
-          const [, sym, name, price, change, score] = tokenMatch || priceOnlyMatch || nameOnlyMatch;
-          const isUp = change ? change.startsWith("+") : null;
-          const isVerified = content.includes("✓");
-          const changeColor = isUp ? "#68d391" : isUp === false ? "#fc8181" : "#4d6a7a";
-          const changeBg = isUp ? "rgba(104,211,145,0.1)" : isUp === false ? "rgba(252,129,129,0.1)" : "transparent";
-          const scoreNum = score ? parseInt(score) : null;
-          const scoreColor = scoreNum >= 90 ? "#c7f284" : scoreNum >= 70 ? "#68d391" : "#8fa8b8";
-          const rankNum = parseInt(item.num);
-          const rankColor = rankNum === 1 ? "#f6d860" : rankNum === 2 ? "#c0c0c0" : rankNum === 3 ? "#cd7f32" : "#2d4a5a";
-          const logoHtml = logoSrc
-            ? `<img src="${logoSrc}" alt="${sym}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid #1e2d3d;" onerror="this.style.display='none'">`
-            : `<div style="width:28px;height:28px;border-radius:50%;background:#1e2d3d;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#4d6a7a">${sym.slice(0,2)}</div>`;
+        const rankNum   = parseInt(item.num);
+        const rankColor = rankNum === 1 ? "#f6d860" : rankNum === 2 ? "#c0c0c0" : rankNum === 3 ? "#cd7f32" : "#4d6a7a";
 
-          const cleanSym = sym.replace(/✓/g,"").trim();
-          html += `<div onclick="window.__chatfiSend && window.__chatfiSend('${cleanSym} info')" style="display:flex;align-items:center;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;cursor:pointer;transition:border-color 0.15s,background 0.15s;" onmouseenter="this.style.borderColor='#c7f284';this.style.background='#1a2618'" onmouseleave="this.style.borderColor='#1e2d3d';this.style.background='#161e27'">
-            <div style="width:3px;align-self:stretch;background:${rankNum<=3 ? rankColor : "#1e2d3d"};flex-shrink:0"></div>
-            <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;flex:1;min-width:0">
-              <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;flex-shrink:0">${item.num}</span>
+        if (tokenMatch || priceOnlyMatch || nameOnlyMatch) {
+          const [, sym, name, price, change, extra] = tokenMatch || priceOnlyMatch || nameOnlyMatch;
+
+          // Parse vol and score out of the extra group ("vol $1.2M" or "score 87")
+          const volMatch   = extra?.match(/vol\s+(\$[\d.,KMBkmb]+)/i);
+          const scoreMatch = extra?.match(/score\s+(\d+)/i);
+          const volStr     = volMatch?.[1] || null;
+          const scoreNum   = scoreMatch ? parseInt(scoreMatch[1]) : null;
+          const scoreColor = scoreNum >= 90 ? "#c7f284" : scoreNum >= 70 ? "#68d391" : "#8fa8b8";
+
+          const isUp        = change ? (change.startsWith("+") ? true : change.startsWith("-") ? false : null) : null;
+          const changeColor = isUp === true ? "#68d391" : isUp === false ? "#fc8181" : "#4d6a7a";
+          const changeBg    = isUp === true ? "rgba(104,211,145,0.12)" : isUp === false ? "rgba(252,129,129,0.12)" : "transparent";
+          const isVerified  = content.includes("✓");
+          const cleanSym    = sym.replace(/✓/g, "").trim();
+          const cleanName   = (name || "").replace(/✓/g, "").trim();
+
+          const logoHtml = logoSrc
+            ? `<img src="${logoSrc}" alt="${cleanSym}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid #1e2d3d;" onerror="this.style.display='none'">`
+            : `<div style="width:32px;height:32px;border-radius:50%;background:#1e2d3d;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#4d6a7a">${cleanSym.slice(0,2)}</div>`;
+
+          html += `<div onclick="window.__chatfiSend&&window.__chatfiSend('${cleanSym} info')"
+            style="display:flex;align-items:stretch;background:#161e27;border:1px solid #1e2d3d;border-radius:12px;overflow:hidden;cursor:pointer;width:100%;box-sizing:border-box;transition:border-color 0.15s,background 0.15s"
+            onmouseenter="this.style.borderColor='#c7f284';this.style.background='#1a2618'"
+            onmouseleave="this.style.borderColor='#1e2d3d';this.style.background='#161e27'">
+            <div style="width:3px;flex-shrink:0;background:${rankNum<=3?rankColor:'#1e2d3d'}"></div>
+            <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;flex:1;min-width:0;box-sizing:border-box">
+              <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:14px;text-align:center;flex-shrink:0">${item.num}</span>
               ${logoHtml}
               <div style="flex:1;min-width:0;overflow:hidden">
-                <div style="display:flex;align-items:center;gap:5px;margin-bottom:2px">
-                  <span style="font-size:13px;font-weight:700;color:#e8f4f0;letter-spacing:-0.2px">${cleanSym}</span>
+                <div style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap;overflow:hidden;margin-bottom:3px">
+                  <span style="font-size:13px;font-weight:700;color:#e8f4f0;white-space:nowrap;flex-shrink:0">${cleanSym}</span>
                   ${isVerified ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" style="flex-shrink:0"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke="#c7f284" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ""}
-                  <span style="font-size:11px;color:#4d6a7a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(name||"").replace(/✓/g,"").trim()}</span>
+                  <span style="font-size:11px;color:#4d6a7a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;min-width:0">${cleanName}</span>
                 </div>
-                <div style="display:flex;align-items:center;gap:6px">
-                  ${price ? `<span style="font-size:12px;font-weight:600;color:#c8d8e0">${price}</span>` : `<span style="font-size:11px;color:#2d4a5a">no price data</span>`}
-                  ${change ? `<span style="font-size:10px;font-weight:700;color:${changeColor};background:${changeBg};padding:1px 6px;border-radius:5px">${change}</span>` : ""}
+                <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+                  ${price ? `<span style="font-size:12px;font-weight:600;color:#c8d8e0;white-space:nowrap">${price}</span>` : `<span style="font-size:11px;color:#2d4a5a">—</span>`}
+                  ${change ? `<span style="font-size:10px;font-weight:700;color:${changeColor};background:${changeBg};padding:2px 6px;border-radius:5px;white-space:nowrap">${change}</span>` : ""}
+                  ${volStr ? `<span style="font-size:10px;color:#4d6a7a;white-space:nowrap">· ${volStr}</span>` : ""}
                 </div>
               </div>
-              ${scoreNum ? `<div style="text-align:center;flex-shrink:0;padding-left:4px"><div style="font-size:9px;color:#4d6a7a;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:1px">score</div><div style="font-size:14px;font-weight:800;color:${scoreColor};line-height:1">${scoreNum}</div></div>` : ""}
-              <span style="font-size:9px;color:#2d4a5a;flex-shrink:0;padding-left:2px">›</span>
+              ${scoreNum ? `<div style="text-align:center;flex-shrink:0;padding-left:2px"><div style="font-size:8px;color:#4d6a7a;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:1px">score</div><div style="font-size:13px;font-weight:800;color:${scoreColor};line-height:1">${scoreNum}</div></div>` : ""}
+              <span style="font-size:10px;color:#2d4a5a;flex-shrink:0">›</span>
             </div>
           </div>`;
         } else {
           // Generic numbered item — clean pill with optional logo
-          const rankNum = parseInt(item.num);
-          const rankColor = rankNum === 1 ? "#f6d860" : rankNum === 2 ? "#c0c0c0" : rankNum === 3 ? "#cd7f32" : "#2d4a5a";
           const genericSym = (content.match(/^\*\*([^*]+)\*\*/) || content.match(/^([A-Za-z][A-Za-z0-9]+)/))?.[1] || "";
-          const clickAttr = genericSym ? `onclick="window.__chatfiSend && window.__chatfiSend('${genericSym} info')" style="cursor:pointer;"` : "";
           const logoFallback = logoSrc
             ? `<img src="${logoSrc}" alt="${genericSym}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid #1e2d3d;" onerror="this.style.display='none'">`
             : "";
-          html += `<div ${clickAttr} style="display:flex;align-items:center;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:11px;overflow:hidden;${genericSym ? "cursor:pointer;" : ""}" ${genericSym ? 'onmouseenter="this.style.borderColor=\'#c7f284\'" onmouseleave="this.style.borderColor=\'#1e2d3d\'"' : ""}>
-            <div style="width:3px;align-self:stretch;background:${rankNum<=3 ? rankColor : "#1e2d3d"};flex-shrink:0"></div>
-            <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;flex:1">
-              <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:16px;text-align:center;flex-shrink:0">${item.num}</span>
+          html += `<div ${genericSym ? `onclick="window.__chatfiSend&&window.__chatfiSend('${genericSym} info')"` : ""}
+            style="display:flex;align-items:center;gap:0;background:#161e27;border:1px solid #1e2d3d;border-radius:12px;overflow:hidden;width:100%;box-sizing:border-box;${genericSym?"cursor:pointer;":""}"
+            ${genericSym ? `onmouseenter="this.style.borderColor='#c7f284'" onmouseleave="this.style.borderColor='#1e2d3d'"` : ""}>
+            <div style="width:3px;align-self:stretch;background:${rankNum<=3?rankColor:'#1e2d3d'};flex-shrink:0"></div>
+            <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;flex:1;min-width:0;box-sizing:border-box">
+              <span style="font-size:10px;font-weight:700;color:${rankColor};min-width:14px;text-align:center;flex-shrink:0">${item.num}</span>
               ${logoFallback}
-              <span style="font-size:13px;color:#e8f4f0;line-height:1.5">${inlineMd(content)}</span>
+              <span style="font-size:13px;color:#e8f4f0;line-height:1.5;word-break:break-word;min-width:0">${inlineMd(content)}</span>
             </div>
           </div>`;
         }
@@ -2907,27 +2916,50 @@ function JupChatInner() {
   };
 
   // ── xStocks — tokenized real-world stocks on Solana ────────────────────────
+  // Ordered by market relevance; all symbols searched in parallel then sorted by user request
   const XSTOCK_SYMBOLS = [
-    "SPYx","QQQx","TSLAx","COINx","AAPLx","NVDAx","MSFTx","GOOGx","AMZNx","METAx",
-    "NKEx","AMDx","INTCx","ARKKx","GDx","SLVx","GOLDx","BRKx","TSMx","SOFIx",
-    "POLYMARKET","OPENAI","ANTHROPIC","SPACEX","NEURALINK","KALSHI",
-    "NVIDIAx","JPMx","BABAx","NOx","UBERx","AIRBNBx","COSTCOx","WMTx",
+    // US large-cap equities
+    "SPYx","QQQx","AAPLx","NVDAx","MSFTx","GOOGx","AMZNx","METAx","TSLAx","COINx",
+    "TSMx","AMDx","INTCx","JPMx","BABAx","UBERx","SOFIx","NKEx","NOx","BRKx",
+    // ETFs & commodities
+    "ARKKx","GOLDx","SLVx","GDx","WMTx","COSTCOx","AIRBNBx",
+    // Private / emerging
+    "NVIDIAx","POLYMARKET","OPENAI","ANTHROPIC","SPACEX","NEURALINK","KALSHI",
   ];
-  const fetchXStocks = async (limit = 15) => {
-    // Jupiter tag API only has 2-3 xStocks tagged — skip it.
-    // Instead, search each known symbol in parallel for reliable full results.
-    const symsToFetch = XSTOCK_SYMBOLS.slice(0, Math.max(limit, XSTOCK_SYMBOLS.length));
+  const fetchXStocks = async (limit = 15, sort = "volume") => {
+    // Always fetch ALL known symbols so we can sort correctly before slicing to limit.
+    // Exact-match first, then starts-with fallback for variants like "NVIDIAx" vs "NVIDIA".
     const results = await Promise.allSettled(
-      symsToFetch.map(async (sym) => {
-        const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(sym)}&limit=5`);
-        const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
-        return list.find(t => t.symbol?.toLowerCase() === sym.toLowerCase()) || null;
+      XSTOCK_SYMBOLS.map(async (sym) => {
+        try {
+          const data = await jupFetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(sym)}&limit=8`);
+          const list = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
+          const exact = list.find(t => t.symbol?.toLowerCase() === sym.toLowerCase());
+          const fuzzy = exact || list.find(t => t.symbol?.toLowerCase().startsWith(sym.toLowerCase().replace(/x$/i, "")));
+          return fuzzy || null;
+        } catch { return null; }
       })
     );
-    return results
+    let tokens = results
       .filter(r => r.status === "fulfilled" && r.value)
-      .map(r => r.value)
-      .slice(0, limit);
+      .map(r => r.value);
+    // Deduplicate by mint address
+    const seen = new Set();
+    tokens = tokens.filter(t => { const id = t.id || t.address; if (!id || seen.has(id)) return false; seen.add(id); return true; });
+    // Sort before slicing so the user gets the best `limit` tokens
+    if (sort === "price_change") {
+      tokens.sort((a, b) => (b.stats24h?.priceChange || 0) - (a.stats24h?.priceChange || 0));
+    } else if (sort === "market_cap") {
+      tokens.sort((a, b) => (b.stats24h?.marketCap || b.mc || 0) - (a.stats24h?.marketCap || a.mc || 0));
+    } else {
+      // Default: sort by 24h volume descending
+      tokens.sort((a, b) => {
+        const volA = (a.stats24h?.buyVolume || 0) + (a.stats24h?.sellVolume || 0);
+        const volB = (b.stats24h?.buyVolume || 0) + (b.stats24h?.sellVolume || 0);
+        return volB - volA;
+      });
+    }
+    return tokens.slice(0, limit);
   };
 
   // ── Token Recent — newly listed tokens (first pool just created) ────────────
@@ -8521,23 +8553,33 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         }
 
       } else if (action === "FETCH_XSTOCKS") {
-        const limit  = Math.min(Math.max(parseInt(actionData?.limit) || 15, 1), 50);
-        const tokens = await fetchXStocks(limit);
+        const limit  = Math.min(Math.max(parseInt(actionData?.limit) || 15, 1), 100);
+        const sort   = actionData?.sort || "volume";
+        const tokens = await fetchXStocks(limit, sort);
         if (!tokens.length) {
           push("ai", text + "\n\nCould not fetch xStock tokens right now. Try searching a specific one like **SPYx** or **QQQx**.");
         } else {
+          const sortLabel = { volume: "by Volume", price_change: "by 24h Change", market_cap: "by Market Cap" }[sort] || "";
           const lines = tokens.map((t, i) => {
             const sym   = t.symbol || "?";
-            const name  = t.name ? ` — ${t.name.slice(0,28)}` : "";
-            const price = t.usdPrice ? ` $${t.usdPrice < 1 ? t.usdPrice.toFixed(4) : t.usdPrice.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "";
-            const chg   = t.stats24h?.priceChange != null ? ` (${t.stats24h.priceChange > 0 ? "+" : ""}${t.stats24h.priceChange.toFixed(2)}%)` : "";
-            const vol   = t.stats24h ? ` · vol $${((t.stats24h.buyVolume||0)+(t.stats24h.sellVolume||0)).toLocaleString("en-US",{maximumFractionDigits:0})}` : "";
-            const ver   = t.isVerified ? " ✓" : "";
-            const logo  = t.icon || t.logoURI || (t.id ? `https://img.jup.ag/tokens/${t.id}` : "");
+            const name  = t.name ? ` — ${t.name.slice(0, 24)}` : "";
+            const price = t.usdPrice
+              ? ` $${t.usdPrice < 1 ? t.usdPrice.toFixed(4) : t.usdPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : " —";
+            const chg = t.stats24h?.priceChange != null
+              ? ` (${t.stats24h.priceChange > 0 ? "+" : ""}${t.stats24h.priceChange.toFixed(2)}%)`
+              : "";
+            const v   = (t.stats24h?.buyVolume || 0) + (t.stats24h?.sellVolume || 0);
+            const vol = t.stats24h
+              ? ` · vol $${v >= 1_000_000 ? (v / 1_000_000).toFixed(1) + "M" : v >= 1_000 ? (v / 1_000).toFixed(1) + "K" : v > 0 ? v.toFixed(0) : "0"}`
+              : "";
+            const ver     = t.isVerified ? " ✓" : "";
+            const mint    = t.id || t.address || "";
+            const logo    = t.icon || t.logoURI || (mint ? `https://img.jup.ag/tokens/${mint}` : "");
             const logoTag = logo ? `[img:${logo}]` : "";
-            return `${i+1}. ${logoTag}**${sym}**${name}${ver}${price}${chg}${vol}`;
+            return `${i + 1}. ${logoTag}**${sym}**${name}${ver}${price}${chg}${vol}`;
           }).join("\n");
-          push("ai", text + `\n\n**Tokenized Stocks (xStocks)** on Solana — ${tokens.length} found:\n${lines}`);
+          push("ai", text + `\n\n**Tokenized Stocks (xStocks)** on Solana — ${tokens.length} found ${sortLabel}:\n${lines}`);
         }
 
       } else if (action === "CHECK_TOKEN_VERIFY") {
@@ -9692,17 +9734,32 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
             // ── FETCH_XSTOCKS ───────────────────────────────────────────────────
             } else if (stepAction === "FETCH_XSTOCKS") {
-              // Reuse the main FETCH_XSTOCKS handler path by dispatching as inner action
               push("ai", "Loading tokenized stocks…");
               try {
-                const url = `https://lite-api.jup.ag/v1/tokens/search?query=xstock&limit=${stepData.limit || 15}`;
-                const data = await jupFetch(url);
-                const tokens = (data?.tokens || data || []).slice(0, stepData.limit || 15);
+                const limit = Math.min(Math.max(parseInt(stepData.limit) || 15, 1), 100);
+                const sort  = stepData.sort || "volume";
+                const tokens = await fetchXStocks(limit, sort);
                 if (!tokens.length) { push("ai", "No xStocks data found right now."); continue; }
-                const lines = tokens.map((t, i) =>
-                  `${i+1}. **${t.symbol}** — ${t.name || ""} $${t.price ? Number(t.price).toFixed(2) : "?"}`
-                ).join("\n");
-                push("ai", `**Tokenized Stocks (xStocks)**\n${lines}`);
+                const lines = tokens.map((t, i) => {
+                  const sym   = t.symbol || "?";
+                  const name  = t.name ? ` — ${t.name.slice(0, 24)}` : "";
+                  const price = t.usdPrice
+                    ? ` $${t.usdPrice < 1 ? t.usdPrice.toFixed(4) : t.usdPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    : " —";
+                  const chg = t.stats24h?.priceChange != null
+                    ? ` (${t.stats24h.priceChange > 0 ? "+" : ""}${t.stats24h.priceChange.toFixed(2)}%)`
+                    : "";
+                  const v   = (t.stats24h?.buyVolume || 0) + (t.stats24h?.sellVolume || 0);
+                  const vol = t.stats24h
+                    ? ` · vol $${v >= 1_000_000 ? (v / 1_000_000).toFixed(1) + "M" : v >= 1_000 ? (v / 1_000).toFixed(1) + "K" : v > 0 ? v.toFixed(0) : "0"}`
+                    : "";
+                  const ver     = t.isVerified ? " ✓" : "";
+                  const mint    = t.id || t.address || "";
+                  const logo    = t.icon || t.logoURI || (mint ? `https://img.jup.ag/tokens/${mint}` : "");
+                  const logoTag = logo ? `[img:${logo}]` : "";
+                  return `${i + 1}. ${logoTag}**${sym}**${name}${ver}${price}${chg}${vol}`;
+                }).join("\n");
+                push("ai", `**Tokenized Stocks (xStocks)** on Solana — ${tokens.length} found:\n${lines}`);
               } catch { push("ai", "Could not load xStocks data."); }
 
             // ── FETCH_TRIGGER_ORDERS ────────────────────────────────────────────
