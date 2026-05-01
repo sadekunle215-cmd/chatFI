@@ -4870,13 +4870,12 @@ function JupChatInner() {
       const tx       = VersionedTransaction.deserialize(b64ToBytes(partiallySignedTx));
       const signedTx = await provider.signTransaction(tx);
 
-      // Step 5: broadcast
-      const rpcRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true }] },
-      });
-      const signature = rpcRes?.result;
-      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+      // Step 5: broadcast via Connection (same pattern as doDirectSend).
+      // jupFetch routes through /api/jupiter which only handles Jupiter API calls —
+      // sending a raw Solana RPC call through it silently fails with no signature returned.
+      const connection = new Connection(SOLANA_RPC, "confirmed");
+      const signature  = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true });
+      if (!signature) throw new Error("Transaction failed to send.");
 
       push("ai", `Send sent — confirming on-chain…`);
       await confirmTxLanded(signature);
