@@ -2071,6 +2071,12 @@ function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, statu
             </div>
           </div>
         )}
+        {/* Error message — shows exact backend error on mobile */}
+        {status?.startsWith("error:") && (
+          <div style={{ background: "rgba(220,53,69,0.08)", border: "1px solid rgba(220,53,69,0.3)", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#ff6b6b", lineHeight: 1.5 }}>
+            ⚠️ {status.slice(6)}
+          </div>
+        )}
         {/* Save button */}
         <button onClick={onSave} disabled={status === "saving" || !cfg.selectedPositions.length || !cfg.thresholdUSD || !cfg.targetTokenMint} style={{ width: "100%", padding: "12px 0", background: status === "saving" ? T.border : !cfg.selectedPositions.length || !cfg.targetTokenMint ? "#1e2d3d" : "linear-gradient(135deg, #c7f284, #a8d456)", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, color: status === "saving" || !cfg.selectedPositions.length ? T.text3 : "#0d1117", cursor: status === "saving" || !cfg.selectedPositions.length ? "not-allowed" : "pointer", transition: "all 0.15s" }}>
           {status === "saving" ? "Saving…" : `⚡ Activate Yield Vault${cfg.selectedPositions.length > 1 ? ` (${cfg.selectedPositions.length} positions)` : ""}`}
@@ -4899,10 +4905,15 @@ function JupChatInner() {
           body: JSON.stringify({ wallet: walletFull, earnPositionId: earnMint, earnSymbol: pos.sym, earnMint, earnJlMint: pos.jlMint, depositedAmount: pos.amount, depositedValueUSD: pos.amount * priceUSD, thresholdUSD: parseFloat(thresholdUSD), targetTokenSymbol, targetTokenMint, targetTokenDecimals: targetTokenDecimals ?? 6 }),
         });
         const data = await res.json();
-        // Fix 1: log API errors so failures are visible in console
         if (data.success) saved++;
-        else console.error("[YieldVault] API error:", data.error, data);
-      } catch (e) { console.error("[YieldVault] save error:", e.message); }
+        else {
+          console.error("[YieldVault] API error:", data.error, data);
+          setYieldVaultStatus("error:" + (data.error || `HTTP ${res.status}`));
+        }
+      } catch (e) {
+        console.error("[YieldVault] save error:", e.message);
+        setYieldVaultStatus("error:" + e.message);
+      }
     }
     setYieldVaultStatus("done");
     // Fix 2: only close panel on success — keep open on failure so user can retry
