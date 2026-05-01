@@ -1987,9 +1987,9 @@ function formatAPY(apy) {
   if (apy === null || apy === undefined) return null;
   const n = parseFloat(apy);
   if (isNaN(n)) return null;
-  // Jupiter returns totalRate/supplyRate already as a percentage value (e.g. 4.15 = 4.15%)
-  // Do NOT multiply by 100 — just display directly
-  return `${n.toFixed(2)}%`;
+  // Jupiter returns totalRate/supplyRate as a decimal ratio (e.g. 0.0305 = 3.05%)
+  // Multiply by 100 to convert to display percentage
+  return `${(n * 100).toFixed(2)}%`;
 }
 function formatEarned(earned, sym) {
   if (earned === null || earned === undefined) return null;
@@ -4847,11 +4847,13 @@ function JupChatInner() {
         const fallback = rawFallback >= 1000 && Number.isInteger(rawFallback) ? rawFallback / divisor : rawFallback;
         const amount = ubHuman > 0 ? ubHuman : uaHuman > 0 ? uaHuman : fallback;
         const shares = parseFloat(p.shares || 0);
+        // currentBalance uses only on-chain fields — p.depositedAmount can be stale after unstaking
+        const currentBalance = ubHuman > 0 ? ubHuman : uaHuman > 0 ? uaHuman : 0;
         const apy = jlTok.totalRate ?? jlTok.supplyRate ?? p.apy ?? p.supplyApy ?? p.currentApy ?? null;
         const earned = p.earnedAmount ?? p.yieldEarned ?? p.interestEarned ?? p.accruedInterest ?? null;
         const logo = underlying.logo_url || underlying.logoURI || jlTok.logoURI || `https://img.jup.ag/tokens/${mint}`;
-        return { sym, mint, jlMint, dec, amount, shares, apy, earned, logo, name: underlying.name || jlTok.name || `Jupiter Earn ${sym}`, raw: p };
-      }).filter((p) => p.mint && (p.amount > 0 || p.shares > 0));
+        return { sym, mint, jlMint, dec, amount, shares, currentBalance, apy, earned, logo, name: underlying.name || jlTok.name || `Jupiter Earn ${sym}`, raw: p };
+      }).filter((p) => p.mint && (p.currentBalance > 0 || p.shares > 0));
       setYieldVaultPositions(normalised);
     } catch (e) { console.error("[YieldVault] fetchEarnPositionsForVault:", e.message); }
     setYieldVaultLoading(false);
