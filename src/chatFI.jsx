@@ -3532,17 +3532,31 @@ function JupChatInner() {
       const rawBals = await fetch("https://lite-api.jup.ag/ultra/v1/balances/" + walletAddress)
         .then(r => r.json());
 
-      if (rawBals && !rawBals.error) {
+      if (rawBals && typeof rawBals === "object" && !rawBals.error) {
         const balances = {};  // sym → uiAmount
         const mintMap  = {};  // sym → mint address
         const logoMap  = {};  // sym → logo url
 
-        // SOL is keyed as "SOL" directly
-        if (rawBals["SOL"]) {
-          const uiAmt = rawBals["SOL"].uiAmount || 0;
-          balances["SOL"] = uiAmt;
-          mintMap["SOL"]  = "So11111111111111111111111111111111111111112";
-          logoMap["SOL"]  = "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png";
+        // Helper: extract ui amount from Ultra API token object
+        // API may return { uiAmount } or { amount, decimals } or just a number
+        const getUiAmt = (val) => {
+          if (typeof val === "number") return val;
+          if (val?.uiAmount != null) return val.uiAmount;
+          if (val?.amount != null && val?.decimals != null) return val.amount / Math.pow(10, val.decimals);
+          return 0;
+        };
+
+        const SOL_MINT = "So11111111111111111111111111111111111111112";
+
+        // SOL can be keyed as "SOL" or as the native mint address
+        const solRaw = rawBals["SOL"] ?? rawBals[SOL_MINT];
+        if (solRaw != null) {
+          const uiAmt = getUiAmt(solRaw);
+          if (uiAmt >= 0) {
+            balances["SOL"] = uiAmt;
+            mintMap["SOL"]  = SOL_MINT;
+            logoMap["SOL"]  = TOKEN_LOGO_URLS["SOL"];
+          }
         }
 
         // All other keys are mint addresses
@@ -3554,22 +3568,17 @@ function JupChatInner() {
           "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
           "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
           "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1": "BSOL",
-          // LSTs
           "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v": "jupSOL",
           "Jito4APyf642JPzcbhPdHtTkuLFkHy5SfxGgwGiRBGP":  "JitoSOL",
           "So11111111111111111111111111111111111111112":   "SOL",
-          // All other tokens (memecoins, DeFi, etc.) are resolved live via Jupiter API
-          // so symbols and logos are always accurate and never stale.
         };
 
-        // ── Collect ALL non-SOL mints, then query Jupiter API for every one ────────
-        // Jupiter is always the source of truth for symbol, name, and logo.
-        // MINT_TO_SYM is only used as a fast offline fallback if the API fails.
+        // ── Collect ALL non-SOL mints, then query Jupiter API for every one ─────
         const allMints = [];
         for (const [key, val] of Object.entries(rawBals)) {
-          if (key === "SOL") continue;
-          const uiAmt = val?.uiAmount || 0;
-          if (uiAmt <= 0) continue; // skip dust
+          if (key === "SOL" || key === SOL_MINT) continue;
+          const uiAmt = getUiAmt(val);
+          if (uiAmt <= 0) continue; // skip dust / zero balances
           allMints.push({ mint: key, uiAmt });
         }
 
@@ -3597,37 +3606,46 @@ function JupChatInner() {
             }
           };
 
-          // Query Jupiter API for EVERY mint the user holds (3-source waterfall):
+          // Query Jupiter API for EVERY mint the user holds (4-source waterfall):
           // 1. tokens.jup.ag/token/{mint}             — primary Jupiter verified registry
-          // 2. lite-api.jup.ag/tokens/v1/token/{mint} — Jupiter lite (wider coverage)
+          // 2. lite-api.jup.ag/tokens/v1/token/{mint} — Jupiter lite (wider coverage, unverified tokens)
           // 3. api.solana.fm/v0/tokens/{mint}          — SolanaFM fallback
-          // If all 3 fail, fall back to MINT_TO_SYM → TOKEN_MINTS → tokenCache → truncated address
+          // 4. token.jup.ag (metaplex on-chain)        — last resort for any Solana token
+          // If all fail, fall back to MINT_TO_SYM → TOKEN_MINTS → tokenCache → truncated address
+          const resolveOneMint = async (mint) => {
+            // Source 1: Jupiter verified registry
+            try {
+              const r = await fetch("https://tokens.jup.ag/token/" + mint, { signal: timeoutSignal(4000) });
+              if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; }
+            } catch {}
+            // Source 2: Jupiter lite API (covers unverified/new tokens)
+            try {
+              const r = await fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint, { signal: timeoutSignal(4000) });
+              if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; }
+            } catch {}
+            // Source 3: SolanaFM
+            try {
+              const r = await fetch("https://api.solana.fm/v0/tokens/" + mint, { signal: timeoutSignal(4000) });
+              if (r.ok) {
+                const d = await r.json();
+                const t = d?.tokenList || d?.result || d;
+                if (t?.name || t?.symbol) return { mint, meta: normMeta(mint, { symbol: t.symbol, name: t.name, logoURI: t.imageUrl || t.image || t.logo, decimals: t.decimals ?? 6 }) };
+              }
+            } catch {}
+            // Source 4: Metaplex token metadata via Jupiter token list search
+            try {
+              const r = await fetch(`https://tokens.jup.ag/tokens?search=${mint}&verify_only=false`, { signal: timeoutSignal(4000) });
+              if (r.ok) {
+                const arr = await r.json();
+                const found = Array.isArray(arr) ? arr.find(t => t.address === mint) : null;
+                if (found?.symbol || found?.name) return { mint, meta: normMeta(mint, found) };
+              }
+            } catch {}
+            return { mint, meta: null };
+          };
+
           const resolveResults = await Promise.allSettled(
-            allMints.slice(0, 50).map(({ mint }) =>
-              fetch("https://tokens.jup.ag/token/" + mint, { signal: timeoutSignal(5000) })
-                .then(r => r.ok ? r.json() : Promise.reject("jup-404"))
-                .catch(() =>
-                  fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint, { signal: timeoutSignal(5000) })
-                    .then(r => r.ok ? r.json() : Promise.reject("lite-404"))
-                    .catch(() =>
-                      fetch("https://api.solana.fm/v0/tokens/" + mint, { signal: timeoutSignal(5000) })
-                        .then(r => r.ok ? r.json() : Promise.reject("sfm-404"))
-                        .then(d => {
-                          const t = d?.tokenList || d?.result || d;
-                          if (!t?.name && !t?.symbol) return Promise.reject("sfm-empty");
-                          return {
-                            symbol:   t.symbol   || null,
-                            name:     t.name     || null,
-                            logoURI:  t.imageUrl || t.image || t.logo || null,
-                            decimals: t.decimals ?? 6,
-                          };
-                        })
-                        .catch(() => null)
-                    )
-                )
-                .then(raw => ({ mint, meta: normMeta(mint, raw) }))
-                .catch(() => ({ mint, meta: null }))
-            )
+            allMints.slice(0, 50).map(({ mint }) => resolveOneMint(mint))
           );
 
           // Build a mint → metadata map from API results
@@ -3665,6 +3683,10 @@ function JupChatInner() {
             if (meta?.name) {
               if (!results.nameMap) results.nameMap = {};
               results.nameMap[sym] = meta.name;
+            } else if (!apiSym && !fallbackSym && meta === undefined) {
+              // No metadata at all — store mint address shortened as sym hint in nameMap
+              // so renderer knows this is an unknown token, not a valid symbol
+              if (!results.nameMap) results.nameMap = {};
             }
 
             // Cache resolved symbol so swap panel can reference by symbol
@@ -3682,6 +3704,23 @@ function JupChatInner() {
         setPortfolio(balances);
       }
     } catch {}
+
+    // ── Safety: if Ultra API returned nothing, build SOL balance from RPC directly ─
+    if (!results.walletBalances || Object.keys(results.walletBalances).length === 0) {
+      try {
+        const solJson = await fetch("https://api.mainnet-beta.solana.com", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"getBalance", params:[walletAddress, { commitment:"confirmed" }] }),
+        }).then(r => r.json());
+        const solLamports = solJson?.result?.value || 0;
+        const solAmt = solLamports / 1e9;
+        results.walletBalances = { SOL: solAmt };
+        results.mintMap  = { SOL: "So11111111111111111111111111111111111111112" };
+        results.logoMap  = { SOL: TOKEN_LOGO_URLS["SOL"] };
+        results.nameMap  = {};
+      } catch {}
+    }
 
     // ── 2. Jupiter Portfolio positions API — wallet + all DeFi positions ───────
     // https://api.jup.ag/portfolio/v1/positions/{wallet}
@@ -6138,14 +6177,20 @@ function JupChatInner() {
 
       if (ultraRes && typeof ultraRes === "object") {
         const balances = {};
+        const SOL_MINT = "So11111111111111111111111111111111111111112";
         for (const [mint, data] of Object.entries(ultraRes)) {
-          const uiAmt = data?.uiAmount ?? (data?.amount ? data.amount / Math.pow(10, data.decimals ?? 9) : null);
-          if (!uiAmt || uiAmt <= 0) continue;
+          // Robustly extract ui amount — API may return uiAmount, or amount+decimals, or a bare number
+          const uiAmt = typeof data === "number" ? data
+            : data?.uiAmount != null ? data.uiAmount
+            : (data?.amount != null && data?.decimals != null) ? data.amount / Math.pow(10, data.decimals)
+            : null;
+          if (uiAmt == null || uiAmt < 0) continue;
           // Native SOL is keyed as "SOL" or the native mint
-          if (mint === "SOL" || mint === "So11111111111111111111111111111111111111112") {
+          if (mint === "SOL" || mint === SOL_MINT) {
             balances["SOL"] = uiAmt;
             continue;
           }
+          if (uiAmt <= 0) continue; // skip dust for SPL tokens
           const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
                    || KNOWN_MINTS[mint];
           if (sym) {
@@ -12038,10 +12083,10 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       <span style={{ fontSize:11, fontWeight:700, color:T.accent, letterSpacing:"0.08em", textTransform:"uppercase" }}>Token Balances</span>
                     </div>
                     <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                      {Object.entries(portfolioData.walletBalances || portfolioData.solBalance || {}).length === 0 ? (
+                      {Object.entries(portfolioData.walletBalances || {}).length === 0 ? (
                         <div style={{ fontSize:12, color:T.text3 }}>No balances found.</div>
                       ) : (
-                        Object.entries(portfolioData.walletBalances || portfolioData.solBalance || {})
+                        Object.entries(portfolioData.walletBalances || {})
                           .sort(([symA, balA], [symB, balB]) => {
                             const mintA = portfolioData.mintMap?.[symA];
                             const mintB = portfolioData.mintMap?.[symB];
@@ -12053,29 +12098,39 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           const mintAddr = portfolioData.mintMap?.[sym];
                           const tokenPrice = portfolioData.prices?.[sym] ?? portfolioData.prices?.[mintAddr] ?? null;
                           const usdVal  = tokenPrice != null ? bal * tokenPrice : null;
+                          // Always try img.jup.ag CDN for every token — it works for ALL Solana tokens
                           const logoUrl = portfolioData.logoMap?.[sym]
+                            || TOKEN_LOGO_URLS[sym]
                             || (mintAddr ? `https://img.jup.ag/tokens/${mintAddr}` : null);
                           const tokenName = portfolioData.nameMap?.[sym] || null;
+                          // If sym is a truncated mint address (contains "…"), use name as primary label
+                          const isTruncatedMint = sym.includes("…");
+                          const displayLabel = isTruncatedMint
+                            ? (tokenName || sym)
+                            : sym;
+                          const displaySub = isTruncatedMint
+                            ? (tokenName ? sym : null) // show truncated mint as sub if name exists
+                            : tokenName || (tokenPrice != null ? `$${tokenPrice < 0.0001 ? tokenPrice.toExponential(2) : tokenPrice < 1 ? tokenPrice.toFixed(4) : tokenPrice.toFixed(2)}` : null);
+                          const fallbackInitials = (tokenName || sym).slice(0, 2).toUpperCase();
                           return (
                             <div key={sym} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:"1px solid " + T.border, borderRadius:10 }}>
-                              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                                <div style={{ width:30, height:30, borderRadius:"50%", overflow:"hidden", flexShrink:0, background:"linear-gradient(135deg, #1e2d3d, #253545)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:T.text2, position:"relative" }}>
+                              <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0, flex:1 }}>
+                                <div style={{ width:32, height:32, borderRadius:"50%", overflow:"hidden", flexShrink:0, background:"linear-gradient(135deg, #1e2d3d, #253545)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:800, color:T.text2, position:"relative" }}>
                                   {logoUrl
                                     ? <>
-                                        <img src={logoUrl} alt={sym} style={{ width:"100%", height:"100%", objectFit:"cover", position:"absolute", top:0, left:0 }}
-                                          onError={e => { e.target.style.display="none"; e.target.nextSibling.style.display="flex"; }} />
-                                        <span style={{ display:"none", width:"100%", height:"100%", alignItems:"center", justifyContent:"center" }}>{sym.slice(0,2)}</span>
+                                        <img src={logoUrl} alt={displayLabel} style={{ width:"100%", height:"100%", objectFit:"cover", position:"absolute", top:0, left:0 }}
+                                          onError={e => { e.target.style.display="none"; if(e.target.nextSibling) e.target.nextSibling.style.display="flex"; }} />
+                                        <span style={{ display:"none", width:"100%", height:"100%", alignItems:"center", justifyContent:"center" }}>{fallbackInitials}</span>
                                       </>
-                                    : sym.slice(0,2)
+                                    : fallbackInitials
                                   }
                                 </div>
-                                <div>
-                                  <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{sym}</div>
-                                  {tokenName && <div style={{ fontSize:10, color:T.text3, marginTop:1 }}>{tokenName}</div>}
-                                  {!tokenName && tokenPrice != null && <div style={{ fontSize:10, color:T.text3 }}>${tokenPrice < 0.0001 ? tokenPrice.toExponential(2) : tokenPrice < 1 ? tokenPrice.toFixed(4) : tokenPrice.toFixed(2)}</div>}
+                                <div style={{ minWidth:0 }}>
+                                  <div style={{ fontSize:13, fontWeight:700, color:T.text1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:140 }}>{displayLabel}</div>
+                                  {displaySub && <div style={{ fontSize:10, color:T.text3, marginTop:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:140 }}>{displaySub}</div>}
                                 </div>
                               </div>
-                              <div style={{ textAlign:"right" }}>
+                              <div style={{ textAlign:"right", flexShrink:0, marginLeft:8 }}>
                                 <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{typeof bal === "number" ? (bal < 1 ? bal.toFixed(6) : bal.toFixed(4)) : String(bal)}</div>
                                 {usdVal != null && <div style={{ fontSize:11, color:usdVal > 10 ? T.accent : T.text3, marginTop:1, fontWeight: usdVal > 10 ? 600 : 400 }}>{"$" + usdVal.toFixed(2)}</div>}
                               </div>
