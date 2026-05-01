@@ -1987,7 +1987,9 @@ function formatAPY(apy) {
   if (apy === null || apy === undefined) return null;
   const n = parseFloat(apy);
   if (isNaN(n)) return null;
-  return n > 1 ? `${n.toFixed(2)}%` : `${(n * 100).toFixed(2)}%`;
+  // Jupiter returns totalRate/supplyRate already as a percentage value (e.g. 4.15 = 4.15%)
+  // Do NOT multiply by 100 — just display directly
+  return `${n.toFixed(2)}%`;
 }
 function formatEarned(earned, sym) {
   if (earned === null || earned === undefined) return null;
@@ -4823,12 +4825,27 @@ function JupChatInner() {
         // Decimals: use underlying asset decimals for amount conversion
         const dec = underlying.decimals ?? jlTok.decimals ?? p.decimals ?? 6;
         const divisor = Math.pow(10, dec);
-        // underlyingAssets and underlyingBalance are raw on-chain integers (strings from API) — always divide
+        // Log raw API fields so we can see exactly what Jupiter returns
+        console.log("[YieldVault] raw position fields:", {
+          underlyingBalance: p.underlyingBalance,
+          underlyingAssets: p.underlyingAssets,
+          amount: p.amount,
+          balance: p.balance,
+          depositedAmount: p.depositedAmount,
+          shares: p.shares,
+          dec,
+        });
+        // underlyingBalance — raw on-chain integer, divide by decimals
         const ub = parseFloat(p.underlyingBalance || 0);
-        const ua = parseFloat(p.underlyingAssets || p.underlying_assets || p.amount || p.balance || p.depositedAmount || 0);
         const ubHuman = ub > 0 ? ub / divisor : 0;
+        // underlyingAssets — raw on-chain integer, divide by decimals
+        const ua = parseFloat(p.underlyingAssets || p.underlying_assets || 0);
         const uaHuman = ua > 0 ? ua / divisor : 0;
-        const amount = ubHuman > 0 ? ubHuman : uaHuman;
+        // fallback: p.amount / p.balance / p.depositedAmount — check if raw or human
+        const rawFallback = parseFloat(p.amount || p.balance || p.depositedAmount || 0);
+        // If fallback looks like a raw int (>= 1000 and no decimal part typical of human amounts), divide it
+        const fallback = rawFallback >= 1000 && Number.isInteger(rawFallback) ? rawFallback / divisor : rawFallback;
+        const amount = ubHuman > 0 ? ubHuman : uaHuman > 0 ? uaHuman : fallback;
         const shares = parseFloat(p.shares || 0);
         const apy = jlTok.totalRate ?? jlTok.supplyRate ?? p.apy ?? p.supplyApy ?? p.currentApy ?? null;
         const earned = p.earnedAmount ?? p.yieldEarned ?? p.interestEarned ?? p.accruedInterest ?? null;
