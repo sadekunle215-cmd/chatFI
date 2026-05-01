@@ -2029,7 +2029,7 @@ function JupChatWithLanding() {
 // ─── Yield-Gated Prediction Vault Panel ───────────────────────────────────────
 function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setCfg, onDeposit, onToggle, onWithdraw, onCancel, onUpdateVault, earnVaults, earnUserPositions, isBetting, walletFull }) {
   if (!open) return null;
-  const T = { bg:"#0d1117", surface:"#161e27", border:"#1e2d3d", text1:"#e8f4f0", text2:"#8fa8b8", text3:"#4d6a7a", accent:"#c7f284", accentBg:"#1a2e1a", green:"#c7f284", purple:"#a78bfa", purpleBg:"#1e1a2e", teal:"#38bdf8" };
+  // Uses global T — no local override, so colours always match the site palette
   const [editingCfg, setEditingCfg] = useState(false);
   const [liveEdge, setLiveEdge] = useState(vault?.minEdge || "8");
   const [liveMaxBet, setLiveMaxBet] = useState(vault?.maxBet || "5");
@@ -2039,11 +2039,35 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
   const [vaultMode, setVaultMode] = useState(cfg.vaultMode || "predict");
   const [dcaToken, setDcaToken] = useState(cfg.dcaToken || "SOL");
   const [dcaThreshold, setDcaThreshold] = useState(cfg.dcaThreshold || "5");
+
+  // ── Real-time tick: re-renders every second so accrued yield moves live ────
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const usdcVault = earnVaults?.find(v => v.token?.toUpperCase() === "USDC");
   const usdcPos   = earnUserPositions?.["USDC"];
-  const ageDays   = vault ? Math.floor((Date.now() - vault.depositedAt) / 86400000) : 0;
-  const apy       = vault?.earnApy ? vault.earnApy.toFixed(2) : usdcVault?.apy ? usdcVault.apy.toFixed(2) : "?";
-  const accruedEst = vault ? Math.max(0, vault.depositAmount * (vault.earnApy||0.05) * ((Date.now()-vault.depositedAt)/(365*24*3600*1000)) - (vaultStats?.betsPlaced||0)*vault.maxBet*0.5) : 0;
+  const ageDays   = vault ? Math.floor((nowMs - vault.depositedAt) / 86400000) : 0;
+
+  // Live APY: normalise decimal form (0.0429 → 4.29%) coming from Jupiter tokens endpoint
+  const rawApy = vault?.earnApy || usdcVault?.apy || 0.05;
+  const apy    = (rawApy > 1 ? rawApy : rawApy * 100).toFixed(2);
+
+  // Mirrors estimateAccruedYield() in JupChatInner:
+  //  • Uses liveUnderlyingBalance (synced from Jupiter Earn /positions) when available
+  //  • Falls back to linear time-based estimate
+  const accruedEst = vault ? (() => {
+    if (vault.liveUnderlyingBalance != null && vault.liveUnderlyingBalance > 0) {
+      return Math.max(0, vault.liveUnderlyingBalance - vault.depositAmount);
+    }
+    const elapsedYrs = (nowMs - (vault.depositedAt || nowMs)) / (365 * 24 * 3600 * 1000);
+    const raw = vault.depositAmount * (vault.earnApy || 0.05) * elapsedYrs;
+    return Math.max(0, raw - (vaultStats?.betsPlaced || 0) * (vault.maxBet || 5) * 0.5);
+  })() : 0;
+
+  const fmtAccrued = (v) => v < 0.001 ? v.toFixed(6) : v.toFixed(3);
 
   // SVG icon components — no emojis
   const IcVault = () => (
@@ -2159,7 +2183,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
     { Icon: IcLock,    txt: "Principal never leaves Lend — only yield is at risk", key:"lock" },
   ];
 
-  const logTypeColor = { deposit:"#68d391", bet:T.accent, dca:"#f6ad55", win:T.accent, sweep:T.teal, error:"#f28484" };
+  const logTypeColor = { deposit:T.accent, bet:T.accent, dca:T.accent, win:T.accent, sweep:T.accent, error:T.red };
   const LogIcon = ({ type }) => {
     const style = { color: logTypeColor[type]||T.text2, flexShrink:0 };
     if (type==="deposit") return <span style={style}><IcDeposit/></span>;
@@ -2200,15 +2224,15 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                     <div style={{ width:8, height:8, borderRadius:"50%", background:vault.status==="active"?T.accent:"#4d6a7a", boxShadow:vault.status==="active"?`0 0 8px ${T.accent}`:"none" }}/>
                     <span style={{ fontSize:12, fontWeight:700, color:vault.status==="active"?T.accent:T.text3, textTransform:"uppercase", letterSpacing:"0.06em" }}>{vault.status==="active"?(isBetting?"Scanning…":"Active"):"Paused"}</span>
-                    <span style={{ fontSize:10, color:vault.vaultMode==="dca"?"#f6ad55":T.teal, background:vault.vaultMode==="dca"?"rgba(246,173,85,0.12)":"rgba(56,189,248,0.1)", border:`1px solid ${vault.vaultMode==="dca"?"rgba(246,173,85,0.3)":"rgba(56,189,248,0.2)"}`, borderRadius:20, padding:"1px 7px", fontWeight:700, letterSpacing:"0.04em" }}>{vault.vaultMode==="dca"?"↻ Auto-DCA":"◎ Predict"}</span>
+                    <span style={{ fontSize:10, color:vault.vaultMode==="dca"?T.accent:T.accent, background:vault.vaultMode==="dca"?T.accentBg:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:20, padding:"1px 7px", fontWeight:700, letterSpacing:"0.04em" }}>{vault.vaultMode==="dca"?"↻ Auto-DCA":"◎ Predict"}</span>
                   </div>
                   <span style={{ fontSize:10, color:T.text3 }}>Day {ageDays}</span>
                 </div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:8 }}>
-                  {[{label:"Deposited",value:`$${vault.depositAmount}`,color:T.text1},{label:"Yield APY",value:`${apy}%`,color:T.green},{label:"Accrued",value:`$${accruedEst.toFixed(3)}`,color:T.teal}].map(s=>(
+                  {[{label:"Deposited",value:`$${vault.depositAmount}`,color:T.text1},{label:"Yield APY",value:`${apy}%`,color:T.green},{label:"Accrued",value:`$${fmtAccrued(accruedEst)}`,color:T.accent}].map(s=>(
                     <div key={s.label} style={{ background:"rgba(0,0,0,0.25)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
                       <div style={{ fontSize:9, color:T.text3, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:3 }}>{s.label}</div>
-                      <div style={{ fontSize:14, fontWeight:800, color:s.color }}>{s.value}</div>
+                      <div style={{ fontSize:14, fontWeight:800, color:s.color, fontVariantNumeric:"tabular-nums" }}>{s.value}</div>
                     </div>
                   ))}
                 </div>
@@ -2221,11 +2245,11 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                   return (
                     <div style={{ marginBottom:10, background:"rgba(0,0,0,0.2)", borderRadius:8, padding:"10px 12px" }}>
                       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
-                        <span style={{ fontSize:11, color:"#f6ad55", fontWeight:700 }}>DCA into {target}</span>
-                        <span style={{ fontSize:11, color:T.text2 }}>${accruedEst.toFixed(3)} / ${thresh} threshold</span>
+                        <span style={{ fontSize:11, color:T.accent, fontWeight:700 }}>DCA into {target}</span>
+                        <span style={{ fontSize:11, color:T.text2 }}>${fmtAccrued(accruedEst)} / ${thresh} threshold</span>
                       </div>
                       <div style={{ height:6, borderRadius:3, background:"rgba(255,255,255,0.08)", overflow:"hidden" }}>
-                        <div style={{ height:"100%", width:`${pct}%`, borderRadius:3, background: pct >= 100 ? "#c7f284" : "#f6ad55", transition:"width 0.5s ease", boxShadow: pct >= 100 ? "0 0 8px #c7f28480" : "none" }}/>
+                        <div style={{ height:"100%", width:`${pct}%`, borderRadius:3, background:T.accent, transition:"width 0.5s ease", boxShadow: pct >= 100 ? `0 0 8px ${T.accent}80` : "none" }}/>
                       </div>
                       <div style={{ fontSize:9, color:T.text3, marginTop:4 }}>
                         {pct >= 100 ? "⚡ Threshold hit — swap pending next scan" : `${pct.toFixed(0)}% to next DCA swap`}
@@ -2236,8 +2260,8 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
 
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12 }}>
                   {(vault.vaultMode === "dca"
-                    ? [{label:"DCA Swaps",value:vaultStats?.betsPlaced||0,color:"#f6ad55"},{label:"Swapped",value:"$"+((vaultStats?.winningsRecycled||0).toFixed(3)),color:T.teal}]
-                    : [{label:"Auto-bets",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Recycled",value:"$"+((vaultStats?.winningsRecycled||0).toFixed(3)),color:T.teal}]
+                    ? [{label:"DCA Swaps",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Swapped",value:"$"+((vaultStats?.winningsRecycled||0).toFixed(3)),color:T.accent}]
+                    : [{label:"Auto-bets",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Recycled",value:"$"+((vaultStats?.winningsRecycled||0).toFixed(3)),color:T.accent}]
                   ).map(s=>(
                     <div key={s.label} style={{ background:"rgba(0,0,0,0.25)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
                       <div style={{ fontSize:9, color:T.text3, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:3 }}>{s.label}</div>
@@ -2274,11 +2298,11 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                         <div style={{ marginBottom:12 }}>
                           <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
                             <span style={{ fontSize:11, color:T.text3, fontWeight:600 }}>Yield Threshold (USD)</span>
-                            <span style={{ fontSize:12, color:"#f6ad55", fontWeight:700 }}>${liveDcaThreshold}</span>
+                            <span style={{ fontSize:12, color:T.accent, fontWeight:700 }}>${liveDcaThreshold}</span>
                           </div>
                           <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
                             {["1","2","5","10","20","50"].map(v=>(
-                              <button key={v} onClick={()=>setLiveDcaThreshold(v)} style={{ flex:1, padding:"7px 0", border:`1px solid ${liveDcaThreshold===v?"#f6ad55":T.border}`, borderRadius:8, background:liveDcaThreshold===v?"rgba(246,173,85,0.12)":T.bg, color:liveDcaThreshold===v?"#f6ad55":T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>
+                              <button key={v} onClick={()=>setLiveDcaThreshold(v)} style={{ flex:1, padding:"7px 0", border:`1px solid ${liveDcaThreshold===v?T.accent:T.border}`, borderRadius:8, background:liveDcaThreshold===v?T.accentBg:T.bg, color:liveDcaThreshold===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>
                             ))}
                           </div>
                           <input type="number" min="0.5" step="0.5" value={liveDcaThreshold} onChange={e=>setLiveDcaThreshold(e.target.value)} style={{ width:"100%", marginTop:6, padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, outline:"none", boxSizing:"border-box" }}/>
@@ -2329,15 +2353,15 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                 </div>
               </div>
               <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-                <button onClick={onToggle} style={{ flex:1, padding:"10px 0", borderRadius:10, border:`1px solid ${T.border}`, background:vault.status==="active"?"#1e1e1e":T.accentBg, color:vault.status==="active"?T.text2:T.accent, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                <button onClick={onToggle} style={{ flex:1, padding:"10px 0", borderRadius:10, border:`1px solid ${T.border}`, background:vault.status==="active"?T.surface:T.accentBg, color:vault.status==="active"?T.text2:T.accent, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
                   {vault.status==="active" ? <><IcPause/> Pause</> : <><IcPlay/> Resume</>}
                 </button>
-                <button onClick={onWithdraw} style={{ flex:1, padding:"10px 0", borderRadius:10, border:"1px solid #f2848440", background:"#2e1a1a", color:"#f28484", fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                <button onClick={onWithdraw} style={{ flex:1, padding:"10px 0", borderRadius:10, border:`1px solid ${T.red}40`, background:T.redBg, color:T.red, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
                   <IcUpload/> Withdraw All
                 </button>
               </div>
               {onCancel && (
-                <button onClick={onCancel} style={{ width:"100%", padding:"9px 0", marginBottom:12, borderRadius:10, border:"1px solid #6b21a840", background:"#1c1028", color:"#c084fc", fontSize:12, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
+                <button onClick={onCancel} style={{ width:"100%", padding:"9px 0", marginBottom:12, borderRadius:10, border:`1px solid ${T.border}`, background:T.surface, color:T.text2, fontSize:12, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                   Cancel Vault &amp; Withdraw Principal
                 </button>
@@ -2485,7 +2509,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
 
               {!walletFull
                 ? <div style={{ padding:"12px 0", textAlign:"center", fontSize:13, color:T.text3 }}>Connect your wallet to start the Yield Vault</div>
-                : <button onClick={()=>onDeposit(cfg)} style={{ width:"100%", padding:"13px 0", borderRadius:12, border:"none", background:T.accent, color:"#0d1117", fontSize:14, fontWeight:800, cursor:"pointer" }}>
+                : <button onClick={()=>onDeposit(cfg)} style={{ width:"100%", padding:"13px 0", borderRadius:12, border:"none", background:T.accent, color:T.bg, fontSize:14, fontWeight:800, cursor:"pointer" }}>
                     {vaultMode==="dca" ? `Start Auto-DCA — Deposit $${cfg.depositAmount||"100"} USDC` : `Start Yield Vault — Deposit $${cfg.depositAmount||"100"} USDC`}
                   </button>
               }
@@ -2712,6 +2736,8 @@ function JupChatInner() {
 
   // ── Yield-Gated Prediction Vault ─────────────────────────────────────────────
   const [showYieldVault, setShowYieldVault] = useState(false);
+  const [showVaultPrompt, setShowVaultPrompt] = useState(false);   // nudge shown after earn deposit
+  const [vaultPromptAmount, setVaultPromptAmount] = useState("0"); // amount just deposited into earn
   const [yieldVault, setYieldVault] = useState(null);
   const [yieldVaultStats, setYieldVaultStats] = useState(null);
   const [yieldVaultLog, setYieldVaultLog] = useState([]);
@@ -5364,9 +5390,14 @@ function JupChatInner() {
         const liveApy = liveToken ? (parseRate(liveToken.totalRate) || parseRate(liveToken.supplyRate)) : null;
 
         // Update vault ref with live balance + APY
+        // Also update depositAmount if user topped up their earn position externally
         if (liveBalance != null || (liveApy != null && liveApy > 0)) {
+          const newDeposit = (liveBalance != null && liveBalance > vaultCur.depositAmount)
+            ? liveBalance  // earn balance grew — treat full balance as principal
+            : vaultCur.depositAmount;
           const updatedVault = {
             ...vaultCur,
+            depositAmount: newDeposit,
             ...(liveBalance != null ? { liveUnderlyingBalance: liveBalance } : {}),
             ...(liveApy != null && liveApy > 0 ? { earnApy: liveApy } : {}),
           };
@@ -5840,6 +5871,11 @@ function JupChatInner() {
       await confirmTxLanded(signature);
       setShowEarn(false);
       push("ai", `Deposit confirmed ✓\n\n**${amount} ${vault.token}** is live in **${vault.name}** earning yield.\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
+      // ── Vault prompt: if no active vault, nudge the user to activate one ──
+      if (!yieldVaultLiveRef.current) {
+        setVaultPromptAmount(amount);
+        setShowVaultPrompt(true);
+      }
       const updated = await fetchSolanaBalances(walletFull);
       setPortfolio(updated);
     } catch (err) {
@@ -12271,6 +12307,49 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             isBetting={yieldVaultBetting}
             walletFull={walletFull}
           />
+
+          {/* ── Post-earn-deposit Vault Prompt ────────────────────────────── */}
+          {showVaultPrompt && (
+            <div style={{ position:"fixed", inset:0, zIndex:400, display:"flex", alignItems:"flex-end", justifyContent:"center", background:"rgba(0,0,0,0.55)" }}
+              onClick={e => e.target===e.currentTarget && setShowVaultPrompt(false)}>
+              <div style={{ width:"100%", maxWidth:480, background:T.bg, borderRadius:"18px 18px 0 0", border:`1px solid ${T.border}`, borderBottom:"none", padding:"20px 18px 32px" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
+                  <div style={{ width:34, height:34, borderRadius:8, background:T.accentBg, border:`1px solid ${T.accent}30`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="7" width="20" height="14" rx="2"/>
+                      <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+                      <circle cx="12" cy="14" r="2"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:14, fontWeight:700, color:T.text1 }}>Make your yield work harder</div>
+                    <div style={{ fontSize:11, color:T.text3 }}>Your {vaultPromptAmount} USDC is now earning in Jupiter Lend</div>
+                  </div>
+                  <button onClick={() => setShowVaultPrompt(false)} style={{ marginLeft:"auto", background:"none", border:"none", cursor:"pointer", padding:4, color:T.text3, fontSize:18, lineHeight:1 }}>×</button>
+                </div>
+                <div style={{ fontSize:12, color:T.text2, lineHeight:1.6, marginBottom:16, background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 12px" }}>
+                  Activate <strong style={{ color:T.accent }}>Yield Vault</strong> to automatically use your accrued yield for:
+                  <br/>· <strong style={{ color:T.text1 }}>Auto-DCA</strong> — buy SOL/JUP when yield hits a threshold
+                  <br/>· <strong style={{ color:T.text1 }}>Auto-Predict</strong> — bet yield on prediction markets with edge
+                  <br/><br/>Your principal <strong style={{ color:T.text1 }}>never leaves Lend</strong>. The vault watches your earn position — if you withdraw, it closes automatically.
+                </div>
+                <div style={{ display:"flex", gap:8 }}>
+                  <button
+                    onClick={() => { setShowVaultPrompt(false); setYieldVaultCfg(c => ({ ...c, depositAmount: vaultPromptAmount })); setShowYieldVault(true); }}
+                    style={{ flex:2, padding:"12px 0", borderRadius:10, border:"none", background:T.accent, color:T.bg, fontSize:13, fontWeight:800, cursor:"pointer" }}
+                  >
+                    Activate Yield Vault
+                  </button>
+                  <button
+                    onClick={() => setShowVaultPrompt(false)}
+                    style={{ flex:1, padding:"12px 0", borderRadius:10, border:`1px solid ${T.border}`, background:"none", color:T.text3, fontSize:13, fontWeight:600, cursor:"pointer" }}
+                  >
+                    Not now
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ── Earn / Lend vaults panel ──────────────────────────────────── */}
           {showEarn && (
