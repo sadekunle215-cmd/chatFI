@@ -15,22 +15,6 @@
     "api/jupiter.js": {
       "memory": 512,
       "maxDuration": 30
-    },
-    "api/borrow.js": {
-      "memory": 512,
-      "maxDuration": 30
-    },
-    "api/multiply.js": {
-      "memory": 512,
-      "maxDuration": 30
-    },
-    "api/send.js": {
-      "memory": 256,
-      "maxDuration": 20
-    },
-    "api/lock.js": {
-      "memory": 256,
-      "maxDuration": 20
     }
   }
 }
