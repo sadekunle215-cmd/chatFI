@@ -5203,7 +5203,7 @@ function JupChatInner() {
   // ── Jupiter Earn — Deposit ────────────────────────────────────────────────────
   const doEarnDeposit = async () => {
     const { vault, amount } = earnDeposit;
-    if (!vault || !amount || parseFloat(amount) <= 0) return;
+    if (!vault || !amount || parseFloat(amount) <= 0) { push("ai", "Please enter a valid amount greater than 0."); return; }
     if (!walletFull) { push("ai", "Connect your wallet first."); return; }
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
@@ -5252,7 +5252,7 @@ function JupChatInner() {
   // ── Jupiter Earn — Withdraw ───────────────────────────────────────────────────
   const doEarnWithdraw = async () => {
     const { vault, amount } = earnWithdraw;
-    if (!vault || !amount || parseFloat(amount) <= 0) return;
+    if (!vault || !amount || parseFloat(amount) <= 0) { push("ai", "Please enter a valid amount greater than 0."); return; }
     if (!walletFull) { push("ai", "Connect your wallet first."); return; }
     const provider = getActiveProvider();
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
@@ -5611,7 +5611,7 @@ function JupChatInner() {
     const provider = getActiveProvider();
     if (!provider?.signTransaction) { push("ai", "Wallet does not support signing."); return; }
     const { vaultId, collateral, debt, colDecimals, debtDecimals, colAmount, borrowAmount } = borrowCfg;
-    if (!colAmount || parseFloat(colAmount) <= 0 || !borrowAmount || parseFloat(borrowAmount) <= 0) return;
+    if (!colAmount || parseFloat(colAmount) <= 0 || !borrowAmount || parseFloat(borrowAmount) <= 0) { push("ai", "Please enter valid collateral and borrow amounts."); return; }
 
     const colRaw  = Math.floor(parseFloat(colAmount)    * Math.pow(10, colDecimals  ?? 9)).toString();
     const debtRaw = Math.floor(parseFloat(borrowAmount) * Math.pow(10, debtDecimals ?? 6)).toString();
@@ -6661,7 +6661,7 @@ function JupChatInner() {
   // ── Limit / DCA order ───────────────────────────────────────────────────────
   const doTrigger = async () => {
     const { token, targetPrice, amount, direction } = trigCfg;
-    if (!targetPrice || !amount) return;
+    if (!targetPrice || !amount) { push("ai", "Please enter both an amount and a target price."); return; }
     if (!walletFull) { push("ai","Connect your wallet first to set a limit order."); return; }
     const provider = getActiveProvider();
     if (!provider) { push("ai","Wallet provider not found."); return; }
@@ -6800,11 +6800,11 @@ function JupChatInner() {
     const cfg = (overrideCfg && typeof overrideCfg === "object" && !overrideCfg.nativeEvent && !overrideCfg.type)
       ? overrideCfg : trigV2Cfg;
     // OCO orders don't need triggerPriceUsd — only single/otoco do
-    if (!cfg.amount) return;
-    if (cfg.orderType === "single" && !cfg.triggerPriceUsd) return;
+    if (!cfg.amount) { push("ai", "Please enter an amount to deposit for the trigger order."); return; }
+    if (cfg.orderType === "single" && !cfg.triggerPriceUsd) { push("ai", "Please enter a trigger price (USD) for the limit order."); return; }
     if (!walletFull) { push("ai", "Connect your wallet first to place a trigger order."); return; }
     const provider = getActiveProvider();
-    if (!provider) { push("ai", "Wallet provider not found."); return; }
+    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
     if (cfg.orderType === "oco" && (!cfg.tpPriceUsd || !cfg.slPriceUsd)) {
       push("ai", "OCO orders require both take-profit and stop-loss prices."); return;
     }
@@ -6937,7 +6937,7 @@ function JupChatInner() {
   // POST /recurring/v1/execute     → { status, signature, order }
   const doRecurring = async () => {
     const { fromMint, fromDecimals, toMint, amountPerCycle, numberOfOrders, intervalSecs } = recurringCfg;
-    if (!amountPerCycle || !numberOfOrders || !intervalSecs) return;
+    if (!amountPerCycle || !numberOfOrders || !intervalSecs) { push("ai", "Please fill in amount, number of orders, and interval before placing a recurring order."); return; }
     if (!walletFull) { push("ai", "Connect your wallet first to set up a recurring order."); return; }
     if (!fromMint || !toMint) { push("ai", "Could not resolve token mints. Use the dropdowns to select tokens."); return; }
 
