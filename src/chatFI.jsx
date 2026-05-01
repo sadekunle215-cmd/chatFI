@@ -5284,6 +5284,51 @@ function JupChatInner() {
       const vaultCur = yieldVaultLiveRef.current;
       const statsCur = yieldVaultStatsLiveRef.current;
       if (!vaultCur || vaultCur.status !== "active" || yieldVaultBettingRef.current) return;
+
+      // ── Live earn position check — auto-cancel if user withdrew externally ───
+      // Runs every tick so the vault self-cancels even if user withdrew directly
+      // from the Jupiter Earn panel without using the vault's Withdraw All button.
+      try {
+        const depositToken = (vaultCur.depositToken || "USDC").toUpperCase();
+        const KNOWN_MINTS = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
+        const targetMint = KNOWN_MINTS[depositToken] || null;
+        const chkRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
+        const chkRaw = await chkRes.json();
+        let chkArr = Array.isArray(chkRaw) ? chkRaw : [];
+        if (!chkArr.length) {
+          const vals = Object.values(chkRaw);
+          chkArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
+        }
+        if (!chkArr.length) chkArr = chkRaw?.data || chkRaw?.positions || chkRaw?.items || [];
+        // Check if a matching position with a real balance still exists
+        let positionActive = false;
+        for (const entry of chkArr) {
+          const underlyingTok = entry.asset || entry.underlyingToken || {};
+          const mint = entry.assetMint || underlyingTok.address || entry.mint || null;
+          const rawSym = underlyingTok.symbol || entry.assetSymbol || "";
+          const sym = rawSym ? rawSym.toUpperCase() : (entry.token?.symbol || "").replace(/^jl/i, "").toUpperCase();
+          const mintMatch = targetMint && mint && mint === targetMint;
+          const symMatch = sym === depositToken;
+          if (!mintMatch && !symMatch) continue;
+          const rawInt = parseFloat(entry.underlyingAssets || "0");
+          const humanBalance = parseFloat(entry.underlyingBalance || 0);
+          const shares = parseFloat(entry.shares || "0");
+          if (rawInt > 0 || humanBalance > 0.001 || shares > 0) { positionActive = true; break; }
+        }
+        if (!positionActive) {
+          // Position is gone — user withdrew externally. Auto-cancel the vault.
+          clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null;
+          clearInterval(yieldVaultSweepRef.current);    yieldVaultSweepRef.current    = null;
+          yieldVaultLiveRef.current = null;
+          setYieldVault(null); setYieldVaultStats(null); setYieldVaultLog([]);
+          try { localStorage.removeItem(vaultKey(walletFull)); localStorage.removeItem(vaultStatsKey(walletFull)); localStorage.removeItem(vaultLogKey(walletFull)); } catch {}
+          if (walletFull) fsSave(walletFull, { yieldvault: null, yieldvault_stats: null, yieldvault_log: [] });
+          setShowYieldVault(false);
+          push("ai", `**Yield Vault auto-cancelled** — your **${depositToken}** position in Jupiter Earn is no longer active (withdrawn externally). The vault has been closed and all auto-scanning stopped. Start a new vault anytime.`);
+          return;
+        }
+      } catch { /* silently skip position check on network error — don't cancel on transient failures */ }
+
       const accrued = estimateAccruedYield(vaultCur, statsCur);
 
       // ── AUTO-DCA MODE ────────────────────────────────────────────────────────
