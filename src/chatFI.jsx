@@ -2079,8 +2079,12 @@ function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, statu
 }
 
 // ── Yield Vault Tracker Panel ─────────────────────────────────────────────────
-function YieldVaultTracker({ show, onClose, vaults, onCancel, onRefresh }) {
+function YieldVaultTracker({ show, onClose, vaults, onCancel, onRefresh, earnPositions = [], onSetVault }) {
   if (!show) return null;
+  // Find earn positions that don't have a saved vault config yet
+  const configuredMints = new Set((vaults || []).map((v) => v.earnMint));
+  const unconfigured = (earnPositions || []).filter((p) => p.mint && !configuredMints.has(p.mint));
+  const hasAnything = (vaults && vaults.length > 0) || unconfigured.length > 0;
   return (
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", marginBottom: 8, animation: "fadeUp 0.22s ease forwards" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${T.border}`, background: "linear-gradient(135deg, #0d1a0d, #0f1e2a)" }}>
@@ -2094,38 +2098,67 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onRefresh }) {
         </div>
       </div>
       <div style={{ padding: "14px 16px" }}>
-        {vaults.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 24, color: T.text3, fontSize: 13 }}>No active Yield Vaults. Set one up from your earn position.</div>
+        {!hasAnything ? (
+          <div style={{ textAlign: "center", padding: 24, color: T.text3, fontSize: 13 }}>No active Yield Vaults or Earn positions found.</div>
         ) : (
-          vaults.map((v) => (
-            <div key={v.id} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{v.earnSymbol} Earn → {v.targetTokenSymbol}</div>
-                  <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>Threshold: <span style={{ color: T.accent }}>${v.thresholdUSD}</span></div>
+          <>
+            {/* ── Configured vaults ── */}
+            {vaults && vaults.map((v) => (
+              <div key={v.id} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{v.earnSymbol} Earn → {v.targetTokenSymbol}</div>
+                    <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>Threshold: <span style={{ color: T.accent }}>${v.thresholdUSD}</span></div>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: v.status === "active" ? "rgba(104,211,145,0.12)" : "rgba(77,106,122,0.15)", color: v.status === "active" ? "#68d391" : T.text3, border: `1px solid ${v.status === "active" ? "rgba(104,211,145,0.2)" : T.border}` }}>{v.status === "active" ? "● ACTIVE" : v.status.toUpperCase()}</span>
                 </div>
-                <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: v.status === "active" ? "rgba(104,211,145,0.12)" : "rgba(77,106,122,0.15)", color: v.status === "active" ? "#68d391" : T.text3, border: `1px solid ${v.status === "active" ? "rgba(104,211,145,0.2)" : T.border}` }}>{v.status === "active" ? "● ACTIVE" : v.status.toUpperCase()}</span>
+                <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
+                  <div style={{ flex: 1, background: T.surface, borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 10, color: T.text3, marginBottom: 2 }}>Times Triggered</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: T.text1 }}>{v.swapCount || 0}</div>
+                  </div>
+                  <div style={{ flex: 1, background: T.surface, borderRadius: 8, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 10, color: T.text3, marginBottom: 2 }}>Total Rotated</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: T.accent }}>${(v.totalSwapped || 0).toFixed(2)}</div>
+                  </div>
+                </div>
+                {v.lastTriggeredAt && (
+                  <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>
+                    Last swap: {new Date(v.lastTriggeredAt).toLocaleDateString()} · {v.lastTxSig && <a href={`https://solscan.io/tx/${v.lastTxSig}`} target="_blank" rel="noreferrer" style={{ color: T.accent, marginLeft: 4, textDecoration: "none" }}>View tx →</a>}
+                  </div>
+                )}
+                {v.status === "active" && (
+                  <button onClick={() => onCancel(v.id)} style={{ width: "100%", padding: "8px 0", background: "none", border: `1px solid ${T.redBd}`, borderRadius: 8, color: T.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel Vault</button>
+                )}
               </div>
-              <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
-                <div style={{ flex: 1, background: T.surface, borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 10, color: T.text3, marginBottom: 2 }}>Times Triggered</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: T.text1 }}>{v.swapCount || 0}</div>
-                </div>
-                <div style={{ flex: 1, background: T.surface, borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 10, color: T.text3, marginBottom: 2 }}>Total Rotated</div>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: T.accent }}>${(v.totalSwapped || 0).toFixed(2)}</div>
-                </div>
-              </div>
-              {v.lastTriggeredAt && (
-                <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>
-                  Last swap: {new Date(v.lastTriggeredAt).toLocaleDateString()} · {v.lastTxSig && <a href={`https://solscan.io/tx/${v.lastTxSig}`} target="_blank" rel="noreferrer" style={{ color: T.accent, marginLeft: 4, textDecoration: "none" }}>View tx →</a>}
-                </div>
-              )}
-              {v.status === "active" && (
-                <button onClick={() => onCancel(v.id)} style={{ width: "100%", padding: "8px 0", background: "none", border: `1px solid ${T.redBd}`, borderRadius: 8, color: T.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel Vault</button>
-              )}
-            </div>
-          ))
+            ))}
+            {/* ── Unconfigured earn positions ── */}
+            {unconfigured.length > 0 && (
+              <>
+                {vaults && vaults.length > 0 && (
+                  <div style={{ fontSize: 11, color: T.text3, margin: "10px 0 6px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Earn Positions — No Vault Set</div>
+                )}
+                {unconfigured.map((p) => (
+                  <div key={p.mint} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {p.logo && <img src={p.logo} alt={p.sym} style={{ width: 24, height: 24, borderRadius: "50%", background: T.surface }} onError={(e) => { e.target.style.display = "none"; }} />}
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{p.sym} Earn</div>
+                          <div style={{ fontSize: 11, color: T.text3, marginTop: 1 }}>{p.amount > 0 ? `${p.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${p.sym} deposited` : "Position active"}</div>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: "rgba(77,106,122,0.15)", color: T.text3, border: `1px solid ${T.border}` }}>NO VAULT</span>
+                    </div>
+                    {p.apy != null && (
+                      <div style={{ fontSize: 11, color: T.teal, marginBottom: 8 }}>APY: {(p.apy * 100).toFixed(2)}%</div>
+                    )}
+                    <button onClick={() => onSetVault && onSetVault(p)} style={{ width: "100%", padding: "8px 0", background: T.accent, border: "none", borderRadius: 8, color: "#0d1117", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⚡ Set Yield Vault</button>
+                  </div>
+                ))}
+              </>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -4803,6 +4836,7 @@ function JupChatInner() {
     const inviteCode = generateInviteCode();
 
     setSendStatus("signing");
+    setShowSend(false);
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
       // Server receives our inviteCode, derives Keypair.fromSeed(SHA-256("invite:"+code)),
@@ -4836,7 +4870,6 @@ function JupChatInner() {
       const inviteLink = `https://jup.ag/send?code=${inviteCode}`;
       setSendLink(inviteLink);
       setSendStatus("done");
-      setShowSend(false);
       push("ai",
         `Send confirmed ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n` +
         `**Invite link:**\n\`${inviteLink}\`\n\n` +
@@ -7724,6 +7757,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       setInput("");
       push("user", raw);
       fetchSavedVaults();
+      fetchEarnPositionsForVault();
       setShowYieldVaultTracker(true);
       return;
     }
@@ -9508,6 +9542,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       } else if (action === "SHOW_YIELD_VAULT") {
         push("ai", text);
         fetchSavedVaults();
+        fetchEarnPositionsForVault();
         setShowYieldVaultTracker(true);
 
       } else {
@@ -11194,7 +11229,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             onClose={() => setShowYieldVaultTracker(false)}
             vaults={yieldVaultSaved}
             onCancel={cancelYieldVault}
-            onRefresh={fetchSavedVaults}
+            onRefresh={() => { fetchSavedVaults(); fetchEarnPositionsForVault(); }}
+            earnPositions={yieldVaultPositions}
+            onSetVault={(p) => {
+              setYieldVaultCfg(prev => ({ ...prev, selectedPositions: [p.mint] }));
+              setShowYieldVaultTracker(false);
+              setShowYieldVault(true);
+            }}
           />
 
           {/* ── Earn / Lend vaults panel ──────────────────────────────────── */}
