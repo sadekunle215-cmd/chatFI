@@ -12,23 +12,9 @@
       "memory": 1024,
       "maxDuration": 60
     },
-    "api/multiply.js": {
-      "memory": 1024,
-      "maxDuration": 30
-    },
-    "api/borrow.js": {
-      "memory": 1024,
-      "maxDuration": 30
-    },
     "api/jupiter.js": {
       "memory": 512,
       "maxDuration": 15
     }
-  },
-  "crons": [
-    {
-      "path": "/api/yield-vault?cron=1",
-      "schedule": "*/5 * * * *"
-    }
-  ]
+  }
 }
