@@ -15,13 +15,13 @@ import { initializeApp, getApps } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteField } from "firebase/firestore";
 
 const _fbConfig = {
-  apiKey: "AIzaSyDzpj9sEoB04R91F0Qf8JjwADC_5HGaPW8",
-  authDomain: "chatfi-63a83.firebaseapp.com",
-  databaseURL: "https://chatfi-63a83-default-rtdb.firebaseio.com",
-  projectId: "chatfi-63a83",
-  storageBucket: "chatfi-63a83.firebasestorage.app",
-  messagingSenderId: "727945607965",
-  appId: "1:727945607965:web:a510cc96b210ac883c3ff4",
+  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  databaseURL:       import.meta.env.VITE_FIREBASE_DATABASE_URL,
+  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId:             import.meta.env.VITE_FIREBASE_APP_ID,
 };
 const _fbApp = getApps().length ? getApps()[0] : initializeApp(_fbConfig);
 const _db    = getFirestore(_fbApp);
@@ -45,15 +45,11 @@ async function fsLoad(wallet) {
 /** Write one or more fields to the wallet doc (merge, no overwrite of others).
  *  fieldMap = { yieldvault: {...}, alerts: [...], ... }  — call fire-and-forget */
 async function fsSave(wallet, fieldMap) {
-  if (!wallet || !fieldMap) {
-    alert("⚠️ fsSave skipped: wallet=" + wallet);
-    return;
-  }
+  if (!wallet || !fieldMap) return;
   try {
     await setDoc(_userDoc(wallet), fieldMap, { merge: true });
-    alert("✅ Firebase write OK: " + Object.keys(fieldMap).join(", "));
   } catch(e) {
-    alert("❌ Firebase error: " + e.message);
+    console.error("[ChatFi] Firebase write error:", e.message);
   }
 }
 
@@ -14668,8 +14664,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
 // ─── Root export ─────────────────────────────────────────────────────────────
 export default function JupChat() {
-  // TEMP DEBUG
-  useEffect(() => { alert("🟢 NEW FILE v3 LOADED"); }, []);
   const appId = import.meta.env.VITE_PRIVY_APP_ID || "";
   if (!appId) {
     console.error(
