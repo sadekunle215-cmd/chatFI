@@ -5124,10 +5124,14 @@ function JupChatInner() {
 
   const estimateAccruedYield = (vault, stats) => {
     if (!vault) return 0;
+    // Use real on-chain balance when available — tallies exactly with jup.ag/earn
+    if (vault.liveUnderlyingBalance != null && vault.liveUnderlyingBalance > 0) {
+      return Math.max(0, vault.liveUnderlyingBalance - vault.depositAmount);
+    }
+    // Fallback: linear estimate before first live sync
     const elapsedYrs = (Date.now() - (vault.depositedAt || Date.now())) / (365 * 24 * 3600 * 1000);
     const raw = vault.depositAmount * (vault.earnApy || 0.05) * elapsedYrs;
     return Math.max(0, raw - (stats?.betsPlaced || 0) * (vault.maxBet || 5) * 0.5);
-
   };
 
   // ── placePredBet — used by Yield Vault auto-bet loop ────────────────────────
@@ -5279,65 +5283,114 @@ function JupChatInner() {
     yieldVaultLiveRef.current      = vaultInit;
     yieldVaultStatsLiveRef.current = statsInit;
     if (yieldVaultIntervalRef.current) clearInterval(yieldVaultIntervalRef.current);
+    // Track consecutive empty-position responses before auto-cancelling.
+    // Jupiter Earn has indexing lag (5–30s after deposit) — one empty response
+    // is NOT proof the position is gone. Require 3 consecutive misses.
+    let emptyPositionStreak = 0;
+    const EMPTY_STREAK_BEFORE_CANCEL = 3;
     const tick = async () => {
       // Always read the freshest vault + stats from refs (avoids stale closure)
       const vaultCur = yieldVaultLiveRef.current;
       const statsCur = yieldVaultStatsLiveRef.current;
       if (!vaultCur || vaultCur.status !== "active" || yieldVaultBettingRef.current) return;
 
-      // ── Live earn position check — auto-cancel if user withdrew externally ───
-      // Runs every tick so the vault self-cancels even if user withdrew directly
-      // from the Jupiter Earn panel without using the vault's Withdraw All button.
+      // ── Live Jupiter Earn sync (every tick) ───────────────────────────────────
+      // • Checks if the earn position still exists (auto-cancels if user withdrew)
+      // • Requires 3 consecutive empty responses before cancelling — Jupiter has
+      //   indexing lag of 5–30s after a deposit, so one empty result is NOT proof
+      //   the position is gone.
+      // • Syncs real on-chain balance + live APY so displayed yield tallies with jup.ag
       try {
         const depositToken = (vaultCur.depositToken || "USDC").toUpperCase();
-        const KNOWN_MINTS = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
-        const targetMint = KNOWN_MINTS[depositToken] || null;
-        const chkRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-        const chkRaw = await chkRes.json();
-        let chkArr = Array.isArray(chkRaw) ? chkRaw : [];
-        if (!chkArr.length) {
-          const vals = Object.values(chkRaw);
-          chkArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
-        }
-        if (!chkArr.length) chkArr = chkRaw?.data || chkRaw?.positions || chkRaw?.items || [];
-        // Check if a matching position with a real balance still exists
+        const KNOWN_MINTS_CHK = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
+        const targetMint = KNOWN_MINTS_CHK[depositToken] || null;
+
+        // Parallel fetch: positions (real balance) + tokens (live APY)
+        const [posRes, tokRes] = await Promise.all([
+          fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`),
+          jupFetch(`${JUP_EARN_API}/tokens`),
+        ]);
+        const posRaw = await posRes.json();
+        let posArr = Array.isArray(posRaw) ? posRaw : [];
+        if (!posArr.length) { const vals = Object.values(posRaw); posArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : [])); }
+        if (!posArr.length) posArr = posRaw?.data || posRaw?.positions || posRaw?.items || [];
+
         let positionActive = false;
-        for (const entry of chkArr) {
+        let liveBalance = null;
+        for (const entry of posArr) {
           const underlyingTok = entry.asset || entry.underlyingToken || {};
           const mint = entry.assetMint || underlyingTok.address || entry.mint || null;
           const rawSym = underlyingTok.symbol || entry.assetSymbol || "";
           const sym = rawSym ? rawSym.toUpperCase() : (entry.token?.symbol || "").replace(/^jl/i, "").toUpperCase();
-          const mintMatch = targetMint && mint && mint === targetMint;
-          const symMatch = sym === depositToken;
-          if (!mintMatch && !symMatch) continue;
-          const rawInt = parseFloat(entry.underlyingAssets || "0");
+          if (!(targetMint && mint && mint === targetMint) && sym !== depositToken) continue;
           const humanBalance = parseFloat(entry.underlyingBalance || 0);
+          const rawInt = parseFloat(entry.underlyingAssets || "0");
           const shares = parseFloat(entry.shares || "0");
-          if (rawInt > 0 || humanBalance > 0.001 || shares > 0) { positionActive = true; break; }
+          if (rawInt > 0 || humanBalance > 0.001 || shares > 0) {
+            positionActive = true;
+            liveBalance = humanBalance > 0 ? humanBalance : null;
+          }
+          break;
         }
+
         if (!positionActive) {
-          // Position is gone — user withdrew externally. Auto-cancel the vault.
-          clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null;
-          clearInterval(yieldVaultSweepRef.current);    yieldVaultSweepRef.current    = null;
-          yieldVaultLiveRef.current = null;
-          setYieldVault(null); setYieldVaultStats(null); setYieldVaultLog([]);
-          try { localStorage.removeItem(vaultKey(walletFull)); localStorage.removeItem(vaultStatsKey(walletFull)); localStorage.removeItem(vaultLogKey(walletFull)); } catch {}
-          if (walletFull) fsSave(walletFull, { yieldvault: null, yieldvault_stats: null, yieldvault_log: [] });
-          setShowYieldVault(false);
-          push("ai", `**Yield Vault auto-cancelled** — your **${depositToken}** position in Jupiter Earn is no longer active (withdrawn externally). The vault has been closed and all auto-scanning stopped. Start a new vault anytime.`);
+          // Require 3 consecutive empty responses before cancelling
+          emptyPositionStreak++;
+          if (emptyPositionStreak < EMPTY_STREAK_BEFORE_CANCEL) {
+            // Not yet sure — skip this tick, try again next interval
+          } else {
+            clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null;
+            clearInterval(yieldVaultSweepRef.current);    yieldVaultSweepRef.current    = null;
+            yieldVaultLiveRef.current = null;
+            setYieldVault(null); setYieldVaultStats(null); setYieldVaultLog([]);
+            try { localStorage.removeItem(vaultKey(walletFull)); localStorage.removeItem(vaultStatsKey(walletFull)); localStorage.removeItem(vaultLogKey(walletFull)); } catch {}
+            if (walletFull) fsSave(walletFull, { yieldvault: null, yieldvault_stats: null, yieldvault_log: [] });
+            setShowYieldVault(false);
+            push("ai", `**Yield Vault auto-cancelled** — your **${depositToken}** position in Jupiter Earn is no longer active (withdrawn externally). The vault has been closed and all auto-scanning stopped. Start a new vault anytime.`);
+          }
           return;
         }
-      } catch { /* silently skip position check on network error — don't cancel on transient failures */ }
+        // Position confirmed active — reset streak
+        emptyPositionStreak = 0;
 
-      const accrued = estimateAccruedYield(vaultCur, statsCur);
+        // Sync live APY from tokens endpoint
+        const tokens = Array.isArray(tokRes) ? tokRes : (tokRes?.data || []);
+        const liveToken = tokens.find(t => {
+          const s = (t.asset?.symbol || t.symbol || "").toUpperCase();
+          const m = t.asset?.address || t.assetMint || t.mint || "";
+          return s === depositToken || (targetMint && m === targetMint);
+        });
+        const parseRate = (raw) => { const n = parseFloat(raw || 0); if (!n || n <= 0) return 0; return n > 100 ? n / 100 : n; };
+        const liveApy = liveToken ? (parseRate(liveToken.totalRate) || parseRate(liveToken.supplyRate)) : null;
+
+        // Update vault ref with live balance + APY
+        if (liveBalance != null || (liveApy != null && liveApy > 0)) {
+          const updatedVault = {
+            ...vaultCur,
+            ...(liveBalance != null ? { liveUnderlyingBalance: liveBalance } : {}),
+            ...(liveApy != null && liveApy > 0 ? { earnApy: liveApy } : {}),
+          };
+          yieldVaultLiveRef.current = updatedVault;
+          setYieldVault(updatedVault);
+          saveYieldVault(updatedVault, undefined);
+        }
+      } catch { /* skip on network error — never cancel on transient failures */ }
+
+      // Re-read vault after sync (may have updated liveUnderlyingBalance / earnApy)
+      const vaultSynced = yieldVaultLiveRef.current;
+      if (!vaultSynced) return;
+      const accrued = estimateAccruedYield(vaultSynced, statsCur);
 
       // ── AUTO-DCA MODE ────────────────────────────────────────────────────────
       // When yield hits the user's threshold, swap accrued yield into chosen token
-      if (vaultCur.vaultMode === "dca") {
-        const threshold = parseFloat(vaultCur.dcaThreshold || "5");
+      if (vaultSynced.vaultMode === "dca") {
+        const threshold = parseFloat(vaultSynced.dcaThreshold || "5");
         if (accrued < threshold) return; // not enough yield yet
-        const swapToken = (vaultCur.dcaToken || "SOL").toUpperCase();
-        const swapAmt = accrued.toFixed(2);
+        const swapToken = (vaultSynced.dcaToken || "SOL").toUpperCase();
+        // Cap swap to real wallet USDC balance — accrued is an estimate
+        const walletUsdc = portfolio?.USDC ?? 0;
+        const safeSwapAmt = Math.min(accrued, walletUsdc > 0.01 ? walletUsdc - 0.01 : accrued);
+        if (safeSwapAmt < 0.01) { return; }
         try {
           yieldVaultBettingRef.current = true;
           setYieldVaultBetting(true);
@@ -5349,25 +5402,32 @@ function JupChatInner() {
           }
           if (!toMint) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
           const fromMint = TOKEN_MINTS.USDC;
-          const amtRaw = Math.floor(parseFloat(swapAmt) * 1e6);
-          const orderRes = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amtRaw}&taker=${walletFull}`);
-          if (!orderRes?.transaction) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
+          const amtRaw = Math.floor(safeSwapAmt * 1e6);
+          // v2 swap MUST go through /execute with requestId — not raw RPC broadcast
+          const orderRes = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amtRaw}&taker=${walletFull}&referral=${CHATFI_REFERRAL}`);
+          if (!orderRes?.transaction || !orderRes?.requestId) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
           const provider = getActiveProvider();
           if (!provider) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
           const tx = VersionedTransaction.deserialize(b64ToBytes(orderRes.transaction));
           const signedTx = await provider.signTransaction(tx);
-          const rpcRes = await jupFetch(SOLANA_RPC, {
-            method: "POST",
-            body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
-          });
-          const sig = rpcRes?.result;
+          const signedBase64 = bytesToB64(signedTx.serialize());
+          let execResult = await jupFetch(JUP_SWAP_EXEC, { method: "POST", body: { signedTransaction: signedBase64, requestId: orderRes.requestId } });
+          if (!execResult?.signature && !execResult?.txid) {
+            const retryOrder = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amtRaw}&taker=${walletFull}`);
+            if (retryOrder?.transaction && retryOrder?.requestId) {
+              const retryTx = VersionedTransaction.deserialize(b64ToBytes(retryOrder.transaction));
+              const retrySignedTx = await provider.signTransaction(retryTx);
+              execResult = await jupFetch(JUP_SWAP_EXEC, { method: "POST", body: { signedTransaction: bytesToB64(retrySignedTx.serialize()), requestId: retryOrder.requestId } });
+            }
+          }
+          const sig = execResult?.signature || execResult?.txid;
           if (sig) {
-            const newStats = { ...statsCur, betsPlaced: (statsCur?.betsPlaced||0)+1, winningsRecycled: (statsCur?.winningsRecycled||0)+parseFloat(swapAmt), lastScanAt: Date.now() };
+            const newStats = { ...statsCur, betsPlaced: (statsCur?.betsPlaced||0)+1, winningsRecycled: (statsCur?.winningsRecycled||0)+safeSwapAmt, lastScanAt: Date.now() };
             yieldVaultStatsLiveRef.current = newStats;
             setYieldVaultStats(newStats);
             saveYieldVault(undefined, newStats);
-            setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "dca", detail: `Auto-DCA: $${swapAmt} USDC → ${swapToken} · threshold $${threshold} · [tx](https://solscan.io/tx/${sig})` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
-            push("ai", `**Yield Vault Auto-DCA** — $${swapAmt} USDC yield swapped into **${swapToken}**. Principal still earning in Lend. [Solscan →](https://solscan.io/tx/${sig})`);
+            setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "dca", detail: `Auto-DCA: $${safeSwapAmt.toFixed(2)} USDC → ${swapToken} · threshold $${threshold} · [tx](https://solscan.io/tx/${sig})` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
+            push("ai", `**Yield Vault Auto-DCA** — $${safeSwapAmt.toFixed(2)} USDC yield swapped into **${swapToken}**. Principal still earning in Lend. [Solscan →](https://solscan.io/tx/${sig})`);
           }
         } catch (err) {
           setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "error", detail: `Auto-DCA failed: ${err?.message || "Unknown"}` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
@@ -5378,7 +5438,9 @@ function JupChatInner() {
       }
 
       // ── PREDICT MODE (original) ───────────────────────────────────────────────
-      const maxBet  = Math.min(vaultCur.maxBet, accrued);
+      // Cap maxBet to real wallet USDC balance — accrued is an estimate
+      const walletUsdcBal = portfolio?.USDC ?? 0;
+      const maxBet = Math.min(vaultSynced.maxBet, accrued, walletUsdcBal > 0.5 ? walletUsdcBal - 0.1 : 0);
       if (maxBet < 1) return;
       try {
         yieldVaultBettingRef.current = true;
@@ -5422,7 +5484,9 @@ function JupChatInner() {
       yieldVaultBettingRef.current = false;
       setYieldVaultBetting(false);
     };
-    tick();
+    // Delay first tick by 60s — Jupiter Earn needs time to index a fresh deposit.
+    // Firing immediately after deposit causes false "position not found" cancellation.
+    setTimeout(tick, 60 * 1000);
     yieldVaultIntervalRef.current = setInterval(tick, 3 * 60 * 1000);
     // Sweep winnings back to earn every 15 min (independent of bet scan)
     if (yieldVaultSweepRef.current) clearInterval(yieldVaultSweepRef.current);
