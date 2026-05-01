@@ -10,54 +10,6 @@ import { solana as solanaMainnet } from "@reown/appkit/networks";
 // ── Privy (social / email login with embedded Solana wallet) ─────────────────
 import { PrivyProvider, usePrivy, useWallets, useSolanaWallets } from "@privy-io/react-auth";
 
-// ── Firebase — tool progress persistence (keyed by wallet address, no personal data) ──
-import { initializeApp, getApps } from "firebase/app";
-import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteField } from "firebase/firestore";
-
-const _fbConfig = {
-  apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  databaseURL:       import.meta.env.VITE_FIREBASE_DATABASE_URL,
-  projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId:             import.meta.env.VITE_FIREBASE_APP_ID,
-};
-const _fbApp = getApps().length ? getApps()[0] : initializeApp(_fbConfig);
-const _db    = getFirestore(_fbApp);
-
-// Tool-progress fields stored per wallet doc in "chatfi_users/{walletAddress}"
-// Fields: yieldvault, yieldvault_stats, yieldvault_log, alerts, volmon, journal
-// No emails, no names — wallet address is the only identifier (public on-chain data).
-
-const _userDoc = (wallet) => doc(_db, "chatfi_users", wallet);
-
-/** Read all tool-progress fields for a wallet from Firestore.
- *  Returns an object with whatever fields exist, or {} on error. */
-async function fsLoad(wallet) {
-  if (!wallet) return {};
-  try {
-    const snap = await getDoc(_userDoc(wallet));
-    return snap.exists() ? snap.data() : {};
-  } catch { return {}; }
-}
-
-/** Write one or more fields to the wallet doc (merge, no overwrite of others).
- *  fieldMap = { yieldvault: {...}, alerts: [...], ... }  — call fire-and-forget */
-async function fsSave(wallet, fieldMap) {
-  if (!wallet || !fieldMap) return;
-  try {
-    await setDoc(_userDoc(wallet), fieldMap, { merge: true });
-  } catch(e) {
-    console.error("[ChatFi] Firebase write error:", e.message);
-  }
-}
-
-/** Delete one field from the wallet doc */
-async function fsDel(wallet, field) {
-  if (!wallet || !field) return;
-  try { await updateDoc(_userDoc(wallet), { [field]: deleteField() }); } catch {}
-}
 
 // ── Plugins (add new feature files here) ─────────────────────────────────────
 // import ExamplePlugin, { suggestionGroup as exampleSuggestions } from "./plugins/ExamplePlugin";
@@ -336,15 +288,6 @@ JUPITER LOCK KNOWLEDGE:
 • FETCH_LOCKS shows all locks where user is creator or recipient.
 • Vested tokens can be claimed progressively — no need to wait for full vest.
 
-YIELD-GATED PREDICTION VAULT KNOWLEDGE:
-• The Yield Vault lets users deposit USDC only, which earns live APY via Jupiter Lend (Earn) while idle between bets.
-• Two vault modes: **Predict** (auto-bet on prediction markets using accrued yield) and **Auto-DCA** (when accrued yield hits a user-set threshold, it auto-buys a chosen token like SOL/JUP via Jupiter swap — great for users who don't trust predictions).
-• Auto-scans prediction markets every 3 min. When a market with edge ≥ minEdge% is found, it auto-bets using accrued yield — principal is never touched.
-• Winnings sweep back into Lend to compound. Capital is always working, never sitting idle.
-• Users configure: depositAmount, depositToken (USDC/SOL/JLP), vaultMode (predict/dca), dcaToken (target token for DCA swaps), dcaThreshold (yield threshold in USD to trigger DCA), minEdge (% edge threshold, default 8), maxBet (USDC cap per bet, default 5), category (sports/crypto/politics/null for all).
-• Vault status shows: deposited, current APY, accrued yield (est.), bets placed, winnings recycled, active/paused.
-• Users can pause/resume auto-betting and withdraw at any time — withdrawal uses existing Earn withdraw flow.
-• On wallet connect: if user has >$20 idle USDC/SOL not already in Earn, ChatFi surfaces a one-tap suggestion to put it to work.
 
 JUPITER ROUTING KNOWLEDGE:
 • SHOW_ROUTE reveals the exact DEX path for any swap: which AMMs are used, split %, price impact per hop.
@@ -413,8 +356,6 @@ Available actions:
 - "SWAP_ALL_WALLET" → actionData: { "to": "USDC", "exclude": ["SOL","USDC"] } — use ONLY when user says "swap everything/all tokens in my wallet" or "swap all tokens except X" and does NOT name specific tokens. The client will read the live wallet balances and build the trades list. "exclude" must always contain the target "to" token plus any tokens the user explicitly wants to keep. Examples: "swap all tokens to USDC except SOL" → to:"USDC", exclude:["SOL","USDC"]; "convert my whole wallet to SOL except USDC" → to:"SOL", exclude:["SOL","USDC"]; "dump everything to USDC" → to:"USDC", exclude:["USDC"]. CRITICAL: use BASKET_SWAP (not this) when user names the specific tokens to swap.
 - "CHAINED_ACTIONS"  → actionData: { "steps": [...] } — execute any sequence of actions back-to-back. Every supported action can be a chain step. Each step: { "action": "<ACTION_NAME>", "actionData": {...} }. The UI runs steps sequentially, showing a brief label before each. Use whenever user intent involves 2+ actions in sequence — selling then doing something, buying then alerting, locking then sending, opening a perp then checking positions, creating a token then claiming fees, etc. Examples: "sell my BONK and JUP to USDC then set a $50 limit order for BTC" → step1: BASKET_SWAP sell BONK+JUP→USDC, step2: SHOW_TRIGGER_V2 buy BTC amountUSD:"50". "sell all my memecoins and DCA $20/day into SOL" → step1: BASKET_SWAP sell all→USDC, step2: SHOW_RECURRING USDC→SOL amountPerCycle:"20". "buy SOL then open a 5x long perp" → step1: SHOW_SWAP from:USDC to:SOL, step2: SHOW_PERPS market:SOL-PERP side:long leverage:5. "swap SOL then borrow USDC against it" → step1: SHOW_SWAP, step2: SHOW_BORROW. "create a token then check my creator fees" → step1: SHOW_STUDIO, step2: FETCH_STUDIO_FEES. "lock my JUP then show my locks" → step1: SHOW_LOCK, step2: FETCH_LOCKS. "swap USDC to SOL then alert me when it hits $200" → step1: SHOW_SWAP, step2: SET_PRICE_ALERT. "sell my bags then show my portfolio" → step1: BASKET_SWAP, step2: FETCH_PORTFOLIO. "send SOL then check pending invites" → step1: SHOW_SEND, step2: FETCH_SEND_HISTORY type:pending. "buy $50 of SOL then show the swap route" → step1: SHOW_SWAP, step2: SHOW_ROUTE. "bet on Arsenal then claim my winnings" → step1: PLACE_PREDICTION, step2: CLAIM_PAYOUTS. "swap SOL then multiply my position" → step1: SHOW_SWAP, step2: SHOW_MULTIPLY. NOTE: use amountUSD when user says "$N from proceeds", portion:"all" when user says "use all proceeds".
 - "COPY_TRADE"      → actionData: { "wallet": "WALLET_ADDRESS", "limit": 5 } — fetch and show recent swaps from another wallet so user can mirror them. limit default 5.
-- "SHOW_YIELD_VAULT" → actionData: { "depositAmount": "100", "minEdge": "8", "maxBet": "5", "category": null } — open the Yield-Gated Prediction Vault panel. depositAmount in USDC. minEdge = minimum % edge to auto-bet (default 8). maxBet = max USDC per individual bet from yield (default 5). category: "sports"|"crypto"|"politics"|null for all markets.
-- "FETCH_YIELD_VAULT" → actionData: {} — show current vault status: deposit, yield earned, auto-bets placed, winnings recycled, APY.
 
 Rules:
 - "buy X" / "swap X to Y" / "exchange" → SHOW_SWAP — use EXACT symbol user mentioned even if unknown meme coin
@@ -487,10 +428,6 @@ Rules:
 - REVERSE TRADING / TIMED SELL-BACK: When user says "buy A B C then sell them back to USDC after X minutes/seconds/hours" OR "buy X Y Z and sell back to USDC after [time]" OR "buy these, wait [time], then sell all back" → use CHAINED_ACTIONS: step 1 = BASKET_SWAP (buy trades, from USDC), step 2 = SHOW_RECURRING or null (if time-based sell is wanted, note it in text). HOWEVER if the user says "buy X Y Z and sell back to USDC after [time]" — the SELL step is a DELAYED action, so: include the sell-back trades as a second BASKET_SWAP step in CHAINED_ACTIONS and set a note in text that the sells will be shown after the delay. The client processes steps sequentially so the sell BASKET_SWAP panel shows up right after buys complete. If the user says "sell them back" / "now sell" as a follow-up message after buying, treat it as a new BASKET_SWAP selling all the previously mentioned tokens back to USDC.
 - DELAYED/TIMED SELL: "after 4 seconds sell X to USDC" / "sell back in 2 minutes" → include a second BASKET_SWAP step in CHAINED_ACTIONS with the sell trades. The UI executes steps in sequence — the user will see the sell panel open immediately after buys complete. Mention the timing in your text but do not skip the action.
 - "copy trade" / "mirror wallet" / "copy trades from" / "what is wallet X buying" / "follow wallet" / "mirror trades of" → COPY_TRADE — extract the wallet address
-- "yield vault" / "yield-gated vault" / "prediction vault" / "auto bet with yield" / "earn while betting" / "bet yield not principal" / "capital always working" / "start vault" → SHOW_YIELD_VAULT — pre-fill depositAmount/minEdge/maxBet/category from user message if mentioned
-- "vault status" / "my yield vault" / "how is my vault doing" / "vault stats" / "check vault" / "vault history" / "my vault history" / "yield vault history" / "vault activity" / "vault log" / "what has my vault done" / "vault bets" / "vault auto-bets" → FETCH_YIELD_VAULT
-- "withdraw from vault" / "close vault" / "stop vault" / "exit vault" / "get my USDC back" / "withdraw yield vault" / "pull out my vault" / "close my yield vault" / "end vault" → trigger onWithdraw (open the Yield Vault panel and the withdraw modal via FETCH_YIELD_VAULT then note the user should tap Withdraw All)
-- YIELD VAULT CHAINING: "deposit USDC and start yield vault" / "earn yield and auto-bet predictions" → CHAINED_ACTIONS steps: [SHOW_SWAP (if no USDC), SHOW_YIELD_VAULT]. "check my vault then scan odds" → CHAINED_ACTIONS [FETCH_YIELD_VAULT, SCAN_PRED_ODDS]
 - NEVER say you don't have live data. ALWAYS trigger the appropriate action and let the UI fetch it. Never fabricate prices. Be concise.
 - CRITICAL — NEVER say "I can't", "I currently can't", "I don't support", "I'm unable to", or any phrase implying you cannot do something that has a supported action. ALWAYS fire the action instead.
 - CRITICAL — SHOW_RECURRING is fully supported. When user asks for a recurring/DCA order, you MUST return action:"SHOW_RECURRING" with all fields pre-filled from the user's message. Never tell the user to do it manually.
@@ -573,11 +510,11 @@ FULL FEATURE LIST (use this when asked what you can do — list ALL of these, ne
 - "morning briefing" / "portfolio pulse" / "how is my portfolio doing" / "daily brief" → Power Command (client-side). Return action:null, text:"Pulling your portfolio pulse — checking balances, earn positions, and open orders in parallel…"
 
 INTENT FLEXIBILITY — always infer what the user means even with typos, abbreviations, slang, or indirect phrasing:
-- "take out my money" / "get my funds back" / "i want out" / "gimme my usdc" / "withdrow" / "pull my money" → withdraw from Earn / Yield Vault
-- "how much am i making" / "what's my yield" / "is my money working" / "earning anything?" → FETCH_YIELD_VAULT or FETCH_PORTFOLIO
+- "take out my money" / "get my funds back" / "i want out" / "gimme my usdc" / "withdrow" / "pull my money" → withdraw from Earn
+- "how much am i making" / "what's my yield" / "is my money working" / "earning anything?" → FETCH_PORTFOLIO
 - "buy some sol" / "get me sol" / "put $50 in sol" / "i want sol" → SHOW_SWAP from:USDC to:SOL
 - "megaeth" / single token name or ticker with no other context → FETCH_TOKEN_INFO for that token
-- "start vault" / "yield thing" / "auto earn" / "passive income" / "make my usdc work" → SHOW_YIELD_VAULT
+- "passive income" / "make my usdc work" → FETCH_EARN
 - "my orders" / "what orders do i have" / "open orders" / "pending orders" → FETCH_TRIGGER_ORDERS
 - "what coins are popping" / "what's hot right now" / "what should i buy" / "trending" → FETCH_TOKEN_CATEGORY toptrending 24h
 - "predict [team]" / "[team] gonna win" / "[team] match" / "[team] game" → SHOW_PREDICTION
@@ -605,7 +542,7 @@ const SUGGESTION_GROUPS = [
   {
     label: "Earn",
     color: "#68d391",
-    items: ["Show earn vaults", "DCA $10 USDC into SOL daily", "Start Yield Vault"],
+    items: ["Show earn vaults", "DCA $10 USDC into SOL daily"],
   },
   {
     label: "Tools",
@@ -2026,502 +1963,6 @@ function JupChatWithLanding() {
   return <JupChatInner />;
 }
 
-// ─── Yield-Gated Prediction Vault Panel ───────────────────────────────────────
-function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setCfg, onDeposit, onToggle, onWithdraw, onCancel, onUpdateVault, earnVaults, earnUserPositions, isBetting, walletFull }) {
-  if (!open) return null;
-  // Uses global T — no local override, so colours always match the site palette
-  const [editingCfg, setEditingCfg] = useState(false);
-  const [liveEdge, setLiveEdge] = useState(vault?.minEdge || "8");
-  const [liveMaxBet, setLiveMaxBet] = useState(vault?.maxBet || "5");
-  const [liveDcaToken, setLiveDcaToken] = useState(vault?.dcaToken || cfg.dcaToken || "SOL");
-  const [liveDcaThreshold, setLiveDcaThreshold] = useState(String(vault?.dcaThreshold || cfg.dcaThreshold || "5"));
-  // Auto-DCA mode: "predict" (original) | "dca" (buy token when yield hits threshold)
-  const [vaultMode, setVaultMode] = useState(cfg.vaultMode || "predict");
-  const [dcaToken, setDcaToken] = useState(cfg.dcaToken || "SOL");
-  const [dcaThreshold, setDcaThreshold] = useState(cfg.dcaThreshold || "5");
-
-  // ── Real-time tick: re-renders every second so accrued yield moves live ────
-  const [nowMs, setNowMs] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const usdcVault = earnVaults?.find(v => v.token?.toUpperCase() === "USDC");
-  const usdcPos   = earnUserPositions?.["USDC"];
-  const ageDays   = vault ? Math.floor((nowMs - vault.depositedAt) / 86400000) : 0;
-
-  // Live APY: normalise decimal form (0.0429 → 4.29%) coming from Jupiter tokens endpoint
-  const rawApy = vault?.earnApy || usdcVault?.apy || 0.05;
-  const apy    = (rawApy > 1 ? rawApy : rawApy * 100).toFixed(2);
-
-  // Mirrors estimateAccruedYield() in JupChatInner:
-  //  • Uses liveUnderlyingBalance (synced from Jupiter Earn /positions) when available
-  //  • Falls back to linear time-based estimate
-  const accruedEst = vault ? (() => {
-    if (vault.liveUnderlyingBalance != null && vault.liveUnderlyingBalance > 0) {
-      return Math.max(0, vault.liveUnderlyingBalance - vault.depositAmount);
-    }
-    const elapsedYrs = (nowMs - (vault.depositedAt || nowMs)) / (365 * 24 * 3600 * 1000);
-    const raw = vault.depositAmount * (vault.earnApy || 0.05) * elapsedYrs;
-    return Math.max(0, raw - (vaultStats?.betsPlaced || 0) * (vault.maxBet || 5) * 0.5);
-  })() : 0;
-
-  const fmtAccrued = (v) => v < 0.001 ? v.toFixed(6) : v.toFixed(3);
-
-  // SVG icon components — no emojis
-  const IcVault = () => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2" y="7" width="20" height="14" rx="2"/>
-      <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
-      <circle cx="12" cy="14" r="2"/>
-      <line x1="12" y1="12" x2="12" y2="12"/>
-    </svg>
-  );
-  const IcClose = () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={T.text3} strokeWidth="2" strokeLinecap="round">
-      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-    </svg>
-  );
-  const IcDeposit = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>
-    </svg>
-  );
-  const IcBolt = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-    </svg>
-  );
-  const IcTarget = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
-    </svg>
-  );
-  const IcRecycle = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
-    </svg>
-  );
-  const IcLock = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="5" y="11" width="14" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-    </svg>
-  );
-  const IcChart = () => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>
-    </svg>
-  );
-  const IcTrophy = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/>
-      <path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/>
-      <path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/>
-      <path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>
-    </svg>
-  );
-  const IcPause = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-      <rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>
-    </svg>
-  );
-  const IcPlay = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-      <polygon points="5 3 19 12 5 21 5 3"/>
-    </svg>
-  );
-  const IcUpload = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>
-    </svg>
-  );
-  const IcSports = () => (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10"/>
-      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-      <path d="M2 12h20"/>
-    </svg>
-  );
-  const IcCrypto = () => (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M11.767 19.089c4.924.868 6.14-6.025 1.216-6.894m-1.216 6.894L5.86 18.047m5.908 1.042-.347 1.97m1.563-8.864c4.924.869 6.14-6.025 1.215-6.893m-1.215 6.893-3.94-.694m5.155-6.2L8.29 5.4m5.908 1.042.348-1.97M7.48 20.364l3.126-17.727"/>
-    </svg>
-  );
-  const IcPolitics = () => (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-      <polyline points="9 22 9 12 15 12 15 22"/>
-    </svg>
-  );
-  const IcDot = () => (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="3"/>
-    </svg>
-  );
-
-  // Jupiter logo SVG (official mark)
-  const JupLogo = () => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z" fill={T.accent} fillOpacity="0.15"/>
-      <path d="M7 8.5C7 7.119 8.119 6 9.5 6h5C15.881 6 17 7.119 17 8.5v1C17 10.881 15.881 12 14.5 12H12v2.5A2.5 2.5 0 0 1 9.5 17h-1a.5.5 0 0 1 0-1h1A1.5 1.5 0 0 0 11 14.5V12H9.5C8.119 12 7 10.881 7 9.5v-1zm2.5-1.5A1.5 1.5 0 0 0 8 8.5v1A1.5 1.5 0 0 0 9.5 11H14.5A1.5 1.5 0 0 0 16 9.5v-1A1.5 1.5 0 0 0 14.5 7h-5z" fill={T.accent}/>
-    </svg>
-  );
-
-  const categories = [
-    { label:"All", value:null, Icon: null },
-    { label:"Sports", value:"sports", Icon: IcSports },
-    { label:"Crypto", value:"crypto", Icon: IcCrypto },
-    { label:"Politics", value:"politics", Icon: IcPolitics },
-  ];
-
-  const howItWorks = [
-    { Icon: IcDeposit, txt: `Deposit USDC → earns **${usdcVault?.apyDisplay||"~5–10%"}** APY in Jupiter Lend`, key:"deposit" },
-    { Icon: IcBolt,    txt: "Auto-scans prediction markets every 3 min for edge", key:"bolt" },
-    { Icon: IcTarget,  txt: "Bets accrued yield only when edge ≥ your threshold", key:"target" },
-    { Icon: IcRecycle, txt: "Winnings auto-sweep back to Lend to compound", key:"recycle" },
-    { Icon: IcLock,    txt: "Principal never leaves Lend — only yield is at risk", key:"lock" },
-  ];
-
-  const logTypeColor = { deposit:T.accent, bet:T.accent, dca:T.accent, win:T.accent, sweep:T.accent, error:T.red };
-  const LogIcon = ({ type }) => {
-    const style = { color: logTypeColor[type]||T.text2, flexShrink:0 };
-    if (type==="deposit") return <span style={style}><IcDeposit/></span>;
-    if (type==="bet")     return <span style={style}><IcBolt/></span>;
-    if (type==="dca")     return <span style={style}><IcRecycle/></span>;
-    if (type==="win")     return <span style={style}><IcTrophy/></span>;
-    if (type==="sweep")   return <span style={style}><IcRecycle/></span>;
-    if (type==="error")   return <span style={style}><IcClose/></span>;
-    return <span style={style}><IcDot/></span>;
-  };
-
-  return (
-    <div style={{ position:"fixed", inset:0, zIndex:300, display:"flex", alignItems:"flex-end", justifyContent:"center", background:"rgba(0,0,0,0.6)" }} onClick={e => e.target===e.currentTarget && onClose()}>
-      <div style={{ width:"100%", maxWidth:480, background:T.bg, borderRadius:"18px 18px 0 0", border:`1px solid ${T.border}`, borderBottom:"none", maxHeight:"88vh", overflowY:"auto", padding:"0 0 32px" }}>
-
-        {/* Header */}
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"16px 16px 12px", borderBottom:`1px solid ${T.border}`, position:"sticky", top:0, background:T.bg, zIndex:2 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <div style={{ width:32, height:32, borderRadius:8, background:T.accentBg, border:`1px solid ${T.accent}30`, display:"flex", alignItems:"center", justifyContent:"center" }}>
-              <IcVault/>
-            </div>
-            <div>
-              <div style={{ fontSize:14, fontWeight:700, color:T.text1 }}>Yield Vault</div>
-              <div style={{ fontSize:11, color:T.text3 }}>USDC earns yield · auto-bets on edge · <span style={{ color:T.text3 }} title="External wallets (Phantom, Jupiter, Backpack, etc.) — enable Auto-approve in wallet settings to silence signing popups">External wallet (Phantom, Jupiter, etc.)</span></div>
-            </div>
-          </div>
-          <button onClick={onClose} style={{ background:"none", border:"none", cursor:"pointer", padding:"4px", display:"flex", alignItems:"center", justifyContent:"center" }}>
-            <IcClose/>
-          </button>
-        </div>
-
-        <div style={{ padding:"16px 16px 0" }}>
-          {vault ? (
-            <>
-              {/* Active vault dashboard */}
-              <div style={{ background:vault.status==="active"?T.accentBg:"#1a1a1a", border:`1px solid ${vault.status==="active"?T.accent+"40":T.border}`, borderRadius:12, padding:"14px 16px", marginBottom:12 }}>
-                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10 }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-                    <div style={{ width:8, height:8, borderRadius:"50%", background:vault.status==="active"?T.accent:"#4d6a7a", boxShadow:vault.status==="active"?`0 0 8px ${T.accent}`:"none" }}/>
-                    <span style={{ fontSize:12, fontWeight:700, color:vault.status==="active"?T.accent:T.text3, textTransform:"uppercase", letterSpacing:"0.06em" }}>{vault.status==="active"?(isBetting?"Scanning…":"Active"):"Paused"}</span>
-                    <span style={{ fontSize:10, color:vault.vaultMode==="dca"?T.accent:T.accent, background:vault.vaultMode==="dca"?T.accentBg:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:20, padding:"1px 7px", fontWeight:700, letterSpacing:"0.04em" }}>{vault.vaultMode==="dca"?"↻ Auto-DCA":"◎ Predict"}</span>
-                  </div>
-                  <span style={{ fontSize:10, color:T.text3 }}>Day {ageDays}</span>
-                </div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:8 }}>
-                  {[{label:"Deposited",value:`$${vault.depositAmount}`,color:T.text1},{label:"Yield APY",value:`${apy}%`,color:T.green},{label:"Accrued",value:`$${fmtAccrued(accruedEst)}`,color:T.accent}].map(s=>(
-                    <div key={s.label} style={{ background:"rgba(0,0,0,0.25)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
-                      <div style={{ fontSize:9, color:T.text3, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:3 }}>{s.label}</div>
-                      <div style={{ fontSize:14, fontWeight:800, color:s.color, fontVariantNumeric:"tabular-nums" }}>{s.value}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* DCA mode: progress bar towards threshold */}
-                {vault.vaultMode === "dca" && (() => {
-                  const thresh = parseFloat(vault.dcaThreshold || 5);
-                  const pct    = Math.min(100, (accruedEst / thresh) * 100);
-                  const target = vault.dcaToken || "SOL";
-                  return (
-                    <div style={{ marginBottom:10, background:"rgba(0,0,0,0.2)", borderRadius:8, padding:"10px 12px" }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
-                        <span style={{ fontSize:11, color:T.accent, fontWeight:700 }}>DCA into {target}</span>
-                        <span style={{ fontSize:11, color:T.text2 }}>${fmtAccrued(accruedEst)} / ${thresh} threshold</span>
-                      </div>
-                      <div style={{ height:6, borderRadius:3, background:"rgba(255,255,255,0.08)", overflow:"hidden" }}>
-                        <div style={{ height:"100%", width:`${pct}%`, borderRadius:3, background:T.accent, transition:"width 0.5s ease", boxShadow: pct >= 100 ? `0 0 8px ${T.accent}80` : "none" }}/>
-                      </div>
-                      <div style={{ fontSize:9, color:T.text3, marginTop:4 }}>
-                        {pct >= 100 ? "⚡ Threshold hit — swap pending next scan" : `${pct.toFixed(0)}% to next DCA swap`}
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12 }}>
-                  {(vault.vaultMode === "dca"
-                    ? [{label:"DCA Swaps",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Swapped",value:"$"+((vaultStats?.winningsRecycled||0).toFixed(3)),color:T.accent}]
-                    : [{label:"Auto-bets",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Recycled",value:"$"+((vaultStats?.winningsRecycled||0).toFixed(3)),color:T.accent}]
-                  ).map(s=>(
-                    <div key={s.label} style={{ background:"rgba(0,0,0,0.25)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
-                      <div style={{ fontSize:9, color:T.text3, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:3 }}>{s.label}</div>
-                      <div style={{ fontSize:13, fontWeight:700, color:s.color }}>{s.value}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                  {!editingCfg ? (
-                    <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-                      {(vault.vaultMode === "dca"
-                        ? ["Target: "+(vault.dcaToken||"SOL"),"Threshold: $"+(vault.dcaThreshold||5)]
-                        : ["Min edge "+(vault.minEdge)+"%","Max $"+(vault.maxBet)+"/bet",vault.category?vault.category.charAt(0).toUpperCase()+vault.category.slice(1):"All markets"]
-                      ).map(tag=>(
-                        <span key={tag} style={{ fontSize:10, color:T.text3, background:T.surface, border:"1px solid "+T.border, borderRadius:20, padding:"2px 8px" }}>{tag}</span>
-                      ))}
-                      <button onClick={()=>{ setLiveEdge(String(vault.minEdge)); setLiveMaxBet(String(vault.maxBet)); setLiveDcaToken(vault.dcaToken||"SOL"); setLiveDcaThreshold(String(vault.dcaThreshold||5)); setEditingCfg(true); }} style={{ fontSize:10, color:T.accent, background:"transparent", border:`1px solid ${T.accent}40`, borderRadius:20, padding:"2px 8px", cursor:"pointer", fontWeight:600 }}>✎ Adjust</button>
-                    </div>
-                  ) : (
-                    <div style={{ background:T.surface, border:`1px solid ${T.accent}30`, borderRadius:10, padding:"12px 14px", marginTop:4, width:"100%" }}>
-                      <div style={{ fontSize:11, fontWeight:700, color:T.accent, marginBottom:10, textTransform:"uppercase", letterSpacing:"0.06em" }}>Adjust Live Settings</div>
-
-                      {vault.vaultMode === "dca" ? (<>
-                        {/* DCA target token */}
-                        <div style={{ marginBottom:10 }}>
-                          <div style={{ fontSize:11, color:T.text3, fontWeight:600, marginBottom:6 }}>DCA Target Token</div>
-                          <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-                            {["SOL","JUP","BONK","WIF","JTO","PYTH"].map(t=>(
-                              <button key={t} onClick={()=>setLiveDcaToken(t)} style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${liveDcaToken===t?T.accent:T.border}`, background:liveDcaToken===t?T.accentBg:T.bg, color:liveDcaToken===t?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>{t}</button>
-                            ))}
-                          </div>
-                        </div>
-                        {/* DCA threshold */}
-                        <div style={{ marginBottom:12 }}>
-                          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
-                            <span style={{ fontSize:11, color:T.text3, fontWeight:600 }}>Yield Threshold (USD)</span>
-                            <span style={{ fontSize:12, color:T.accent, fontWeight:700 }}>${liveDcaThreshold}</span>
-                          </div>
-                          <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-                            {["1","2","5","10","20","50"].map(v=>(
-                              <button key={v} onClick={()=>setLiveDcaThreshold(v)} style={{ flex:1, padding:"7px 0", border:`1px solid ${liveDcaThreshold===v?T.accent:T.border}`, borderRadius:8, background:liveDcaThreshold===v?T.accentBg:T.bg, color:liveDcaThreshold===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>
-                            ))}
-                          </div>
-                          <input type="number" min="0.5" step="0.5" value={liveDcaThreshold} onChange={e=>setLiveDcaThreshold(e.target.value)} style={{ width:"100%", marginTop:6, padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, outline:"none", boxSizing:"border-box" }}/>
-                          <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>When yield ≥ this, auto-swap into {liveDcaToken}. Lower = more frequent, smaller swaps.</div>
-                        </div>
-                      </>) : (<>
-                        {/* Edge slider */}
-                        <div style={{ marginBottom:10 }}>
-                          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
-                            <span style={{ fontSize:11, color:T.text3, fontWeight:600 }}>Min Edge</span>
-                            <span style={{ fontSize:12, color:T.accent, fontWeight:700 }}>{liveEdge}%</span>
-                          </div>
-                          <input type="range" min="1" max="30" step="1" value={liveEdge} onChange={e=>setLiveEdge(e.target.value)}
-                            style={{ width:"100%", accentColor:T.accent, cursor:"pointer" }}/>
-                          <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, gap:4 }}>
-                            {["3","5","8","12","20"].map(v=>(
-                              <button key={v} onClick={()=>setLiveEdge(v)} style={{ flex:1, padding:"4px 0", border:`1px solid ${liveEdge===v?T.accent:T.border}`, borderRadius:6, background:liveEdge===v?T.accentBg:T.bg, color:liveEdge===v?T.accent:T.text3, fontSize:11, fontWeight:600, cursor:"pointer" }}>{v}%</button>
-                            ))}
-                          </div>
-                          <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Higher = fewer but sharper bets.</div>
-                        </div>
-                        {/* Max bet */}
-                        <div style={{ marginBottom:12 }}>
-                          <div style={{ fontSize:11, color:T.text3, fontWeight:600, marginBottom:5 }}>Max Bet Per Market (USDC)</div>
-                          <div style={{ display:"flex", gap:5 }}>
-                            <input type="number" min="1" step="1" value={liveMaxBet} onChange={e=>setLiveMaxBet(e.target.value)}
-                              style={{ flex:1, padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, outline:"none" }}/>
-                            {["2","5","10","25"].map(v=>(
-                              <button key={v} onClick={()=>setLiveMaxBet(v)} style={{ padding:"7px 10px", border:`1px solid ${liveMaxBet===v?T.accent:T.border}`, borderRadius:8, background:liveMaxBet===v?T.accentBg:T.bg, color:liveMaxBet===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>
-                            ))}
-                          </div>
-                        </div>
-                      </>)}
-
-                      <div style={{ display:"flex", gap:6 }}>
-                        <button onClick={()=>setEditingCfg(false)} style={{ flex:1, padding:"8px 0", borderRadius:8, border:`1px solid ${T.border}`, background:T.bg, color:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>Cancel</button>
-                        <button onClick={()=>{
-                          if (vault.vaultMode === "dca") {
-                            onUpdateVault?.({ dcaToken: liveDcaToken, dcaThreshold: liveDcaThreshold });
-                          } else {
-                            onUpdateVault?.({ minEdge: liveEdge, maxBet: liveMaxBet });
-                          }
-                          setEditingCfg(false);
-                        }} style={{ flex:2, padding:"8px 0", borderRadius:8, border:"none", background:T.accentBg, color:T.accent, fontSize:12, fontWeight:700, cursor:"pointer" }}>✓ Save Changes</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-                <button onClick={onToggle} style={{ flex:1, padding:"10px 0", borderRadius:10, border:`1px solid ${T.border}`, background:vault.status==="active"?T.surface:T.accentBg, color:vault.status==="active"?T.text2:T.accent, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
-                  {vault.status==="active" ? <><IcPause/> Pause</> : <><IcPlay/> Resume</>}
-                </button>
-                <button onClick={onWithdraw} style={{ flex:1, padding:"10px 0", borderRadius:10, border:`1px solid ${T.red}40`, background:T.redBg, color:T.red, fontSize:13, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
-                  <IcUpload/> Withdraw All
-                </button>
-              </div>
-              {onCancel && (
-                <button onClick={onCancel} style={{ width:"100%", padding:"9px 0", marginBottom:12, borderRadius:10, border:`1px solid ${T.border}`, background:T.surface, color:T.text2, fontSize:12, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-                  Cancel Vault &amp; Withdraw Principal
-                </button>
-              )}
-              {vaultLog?.length>0&&(
-                <div style={{ marginBottom:12 }}>
-                  <div style={{ fontSize:10, fontWeight:700, color:T.text3, textTransform:"uppercase", letterSpacing:"0.08em", marginBottom:8 }}>Activity</div>
-                  <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                    {vaultLog.slice(0,10).map((entry,i)=>(
-                      <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:8, padding:"8px 10px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:8 }}>
-                        <LogIcon type={entry.type}/>
-                        <span style={{ fontSize:11, color:logTypeColor[entry.type]||T.text2, flex:1, lineHeight:1.4 }}>{entry.detail}</span>
-                        <span style={{ fontSize:9, color:T.text3, flexShrink:0 }}>{new Date(entry.ts).toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              {/* Setup form */}
-              <div style={{ background:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:12, padding:14, marginBottom:14 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:T.accent, marginBottom:8 }}>How it works</div>
-                {howItWorks.map(({ Icon, txt, key }) => (
-                  <div key={key} style={{ display:"flex", gap:8, alignItems:"flex-start", marginBottom:6 }}>
-                    <span style={{ color:T.accent, flexShrink:0, marginTop:1 }}><Icon/></span>
-                    <span style={{ fontSize:12, color:T.text2, lineHeight:1.45 }} dangerouslySetInnerHTML={{ __html:txt.replace(/\*\*(.+?)\*\*/g,`<strong style="color:${T.text1}">$1</strong>`) }}/>
-                  </div>
-                ))}
-              </div>
-
-              {/* Mode selector: Predict vs Auto-DCA */}
-              <div style={{ display:"flex", gap:6, marginBottom:14 }}>
-                {[{id:"predict",label:"Auto-Predict",icon:"◎"},{id:"dca",label:"Auto-DCA",icon:"↻"}].map(m=>(
-                  <button key={m.id} onClick={()=>{ setVaultMode(m.id); setCfg(c=>({...c,vaultMode:m.id})); }}
-                    style={{ flex:1, padding:"9px 0", borderRadius:10, border:`1px solid ${vaultMode===m.id?T.accent:T.border}`, background:vaultMode===m.id?T.accentBg:T.surface, color:vaultMode===m.id?T.accent:T.text3, fontSize:12, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:5 }}>
-                    <span style={{fontSize:14}}>{m.icon}</span>{m.label}
-                  </button>
-                ))}
-              </div>
-              {vaultMode==="dca" && (
-                <div style={{ background:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:10, padding:"12px 14px", marginBottom:14 }}>
-                  <div style={{ fontSize:11, fontWeight:700, color:T.accent, marginBottom:8 }}>Auto-DCA Mode</div>
-                  <div style={{ fontSize:11, color:T.text2, marginBottom:10, lineHeight:1.5 }}>When accrued yield hits the threshold, it auto-buys your chosen token via Jupiter swap. Principal stays in Lend the whole time.</div>
-                  <div style={{ marginBottom:10 }}>
-                    <div style={{ fontSize:11, color:T.text3, fontWeight:600, marginBottom:5 }}>BUY TOKEN</div>
-                    <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
-                      {["SOL","JUP","BONK","JitoSOL","USDC"].map(t=>(
-                        <button key={t} onClick={()=>{ setDcaToken(t); setCfg(c=>({...c,dcaToken:t})); }}
-                          style={{ padding:"7px 12px", borderRadius:8, border:`1px solid ${dcaToken===t?T.accent:T.border}`, background:dcaToken===t?T.accentBg:T.surface, color:dcaToken===t?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                          {t}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize:11, color:T.text3, fontWeight:600, marginBottom:5 }}>YIELD THRESHOLD TO TRIGGER SWAP ($)</div>
-                    <div style={{ display:"flex", gap:5 }}>
-                      <input type="number" min="1" step="1" value={dcaThreshold} onChange={e=>{ setDcaThreshold(e.target.value); setCfg(c=>({...c,dcaThreshold:e.target.value})); }}
-                        style={{ flex:1, padding:"8px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.surface, color:T.text1, fontSize:13, outline:"none" }}/>
-                      {["2","5","10","25"].map(v=>(
-                        <button key={v} onClick={()=>{ setDcaThreshold(v); setCfg(c=>({...c,dcaThreshold:v})); }}
-                          style={{ padding:"8px 10px", border:`1px solid ${dcaThreshold===v?T.accent:T.border}`, borderRadius:8, background:dcaThreshold===v?T.accentBg:T.surface, color:dcaThreshold===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                          ${v}
-                        </button>
-                      ))}
-                    </div>
-                    <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>When yield ≥ ${dcaThreshold}, it swaps into {dcaToken}. Good for compounding into a target asset.</div>
-                  </div>
-                </div>
-              )}
-
-              {/* Deposit amount */}
-              <div style={{ marginBottom:10 }}>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Deposit Token</div>
-                <div style={{ display:"flex", gap:5, marginBottom:10 }}>
-                  <div style={{ flex:1, padding:"8px 0", border:`1px solid ${T.accent}`, borderRadius:9, background:T.accentBg, color:T.accent, fontSize:11, fontWeight:700, textAlign:"center" }}>
-                    <div style={{ fontSize:12 }}>USDC</div>
-                    <div style={{ fontSize:10, opacity:0.8 }}>{earnVaults?.find(v=>v.token==="USDC")?.apyDisplay||"~5%"}</div>
-                  </div>
-                </div>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Deposit Amount (USDC)</div>
-                <div style={{ display:"flex", gap:6 }}>
-                  <input type="number" min="10" step="10" value={cfg.depositAmount} onChange={e=>setCfg(c=>({...c,depositAmount:e.target.value}))} placeholder="100" style={{ flex:1, padding:"9px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.surface, color:T.text1, fontSize:14, outline:"none" }}/>
-                  {["50","100","500"].map(v=><button key={v} onClick={()=>setCfg(c=>({...c,depositAmount:v}))} style={{ padding:"9px 12px", border:`1px solid ${cfg.depositAmount===v?T.accent:T.border}`, borderRadius:8, background:cfg.depositAmount===v?T.accentBg:T.surface, color:cfg.depositAmount===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>)}
-                </div>
-                {usdcPos?.amount>0&&<div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Current Earn balance: {usdcPos.amount.toFixed(4)} USDC</div>}
-              </div>
-
-              {/* Min edge + max bet + category — only relevant in Predict mode */}
-              {vaultMode !== "dca" && (<>
-              {/* Min edge */}
-              <div style={{ marginBottom:10 }}>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Min Edge to Auto-bet (%)</div>
-                <div style={{ display:"flex", gap:6 }}>
-                  <input type="number" min="1" max="50" step="1" value={cfg.minEdge} onChange={e=>setCfg(c=>({...c,minEdge:e.target.value}))} style={{ flex:1, padding:"9px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.surface, color:T.text1, fontSize:14, outline:"none" }}/>
-                  {["5","8","12","20"].map(v=><button key={v} onClick={()=>setCfg(c=>({...c,minEdge:v}))} style={{ padding:"9px 10px", border:`1px solid ${cfg.minEdge===v?T.accent:T.border}`, borderRadius:8, background:cfg.minEdge===v?T.accentBg:T.surface, color:cfg.minEdge===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>{v}%</button>)}
-                </div>
-                <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Higher = fewer but sharper bets. 8% is a good starting point.</div>
-              </div>
-
-              {/* Max bet */}
-              <div style={{ marginBottom:10 }}>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Max Bet Per Market (USDC)</div>
-                <div style={{ display:"flex", gap:6 }}>
-                  <input type="number" min="1" step="1" value={cfg.maxBet} onChange={e=>setCfg(c=>({...c,maxBet:e.target.value}))} style={{ flex:1, padding:"9px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.surface, color:T.text1, fontSize:14, outline:"none" }}/>
-                  {["2","5","10"].map(v=><button key={v} onClick={()=>setCfg(c=>({...c,maxBet:v}))} style={{ padding:"9px 12px", border:`1px solid ${cfg.maxBet===v?T.accent:T.border}`, borderRadius:8, background:cfg.maxBet===v?T.accentBg:T.surface, color:cfg.maxBet===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>)}
-                </div>
-                <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Capped to accrued yield — never touches principal.</div>
-              </div>
-
-              {/* Category */}
-              <div style={{ marginBottom:14 }}>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Market Category</div>
-                <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
-                  {categories.map(cat => {
-                    const active = cfg.category === cat.value;
-                    return (
-                      <button key={String(cat.value)} onClick={()=>setCfg(c=>({...c,category:cat.value}))} style={{ padding:"7px 12px", border:`1px solid ${active?T.accent:T.border}`, borderRadius:8, background:active?T.accentBg:T.surface, color:active?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer", display:"flex", alignItems:"center", gap:5 }}>
-                        {cat.Icon && <cat.Icon/>}
-                        {cat.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              </>)}
-
-              {/* APY preview */}
-              {(() => {
-                const selectedVault = earnVaults?.find(v => v.token?.toUpperCase() === (cfg.depositToken||"USDC").toUpperCase()) || usdcVault;
-                return selectedVault ? (
-                  <div style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", background:T.accentBg, border:`1px solid ${T.accent}30`, borderRadius:10, marginBottom:14 }}>
-                    <div style={{ flexShrink:0 }}><IcChart/></div>
-                    <div>
-                      <div style={{ fontSize:12, fontWeight:700, color:T.accent, display:"flex", alignItems:"center", gap:5 }}>
-                        <JupLogo/> {cfg.depositToken||"USDC"} Earn APY: {selectedVault.apyDisplay}
-                      </div>
-                      <div style={{ fontSize:10, color:T.text3 }}>Your {cfg.depositAmount||"100"} {cfg.depositToken||"USDC"} earns ~${((parseFloat(cfg.depositAmount||"100")*(selectedVault.apy||0.05))/12).toFixed(3)}/mo before bets</div>
-                    </div>
-                  </div>
-                ) : null;
-              })()}
-
-              {!walletFull
-                ? <div style={{ padding:"12px 0", textAlign:"center", fontSize:13, color:T.text3 }}>Connect your wallet to start the Yield Vault</div>
-                : <button onClick={()=>onDeposit(cfg)} style={{ width:"100%", padding:"13px 0", borderRadius:12, border:"none", background:T.accent, color:T.bg, fontSize:14, fontWeight:800, cursor:"pointer" }}>
-                    {vaultMode==="dca" ? `Start Auto-DCA — Deposit $${cfg.depositAmount||"100"} USDC` : `Start Yield Vault — Deposit $${cfg.depositAmount||"100"} USDC`}
-                  </button>
-              }
-              <div style={{ fontSize:10, color:T.text3, textAlign:"center", marginTop:8, lineHeight:1.5 }}>Bets use accrued yield only. Principal stays in Jupiter Lend at all times.</div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function JupChatInner() {
   const [msgs, setMsgs] = useState(() => {
     try {
@@ -2734,20 +2175,6 @@ function JupChatInner() {
   const [showEarnWithdraw, setShowEarnWithdraw] = useState(false);
   const [earnUserPositions, setEarnUserPositions] = useState({}); // { [TOKEN]: { amount, amountRaw, shares, decimals } }
 
-  // ── Yield-Gated Prediction Vault ─────────────────────────────────────────────
-  const [showYieldVault, setShowYieldVault] = useState(false);
-  const [showVaultPrompt, setShowVaultPrompt] = useState(false);   // nudge shown after earn deposit
-  const [vaultPromptAmount, setVaultPromptAmount] = useState("0"); // amount just deposited into earn
-  const [yieldVault, setYieldVault] = useState(null);
-  const [yieldVaultStats, setYieldVaultStats] = useState(null);
-  const [yieldVaultLog, setYieldVaultLog] = useState([]);
-  const [yieldVaultBetting, setYieldVaultBetting] = useState(false);
-  const [yieldVaultCfg, setYieldVaultCfg] = useState({ depositAmount: "100", minEdge: "8", maxBet: "5", category: null, vaultMode: "predict", dcaToken: "SOL", dcaThreshold: "5", depositToken: "USDC" });
-  const yieldVaultIntervalRef  = useRef(null);
-  const yieldVaultSweepRef     = useRef(null); // separate 15-min sweep interval
-  const yieldVaultLiveRef      = useRef(null); // always-current vault snapshot (avoids stale closure)
-  const yieldVaultStatsLiveRef = useRef(null); // always-current stats snapshot
-  const yieldVaultBettingRef   = useRef(false); // mirror of yieldVaultBetting (avoids stale closure)
 
   // ── Jupiter Studio state ─────────────────────────────────────────────────────
   const [showStudio, setShowStudio]         = useState(false);
@@ -2950,7 +2377,7 @@ function JupChatInner() {
     if (!container) return;
     const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
     if (isNearBottom) endRef.current?.scrollIntoView({ behavior:"smooth" });
-  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showTrigV2, showTrigOrders, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders, showStudio, showStudioFees, showLock, showLocks, showRoute, showVolMonitors, showPredCLI, showYieldVault]);
+  }, [msgs, typing, showSwap, showPred, showPredList, showEarn, showTrig, showTrigV2, showTrigOrders, showMultiply, showMultiplyForm, showRecurring, showRecurringOrders, showStudio, showStudioFees, showLock, showLocks, showRoute, showVolMonitors, showPredCLI]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -3080,86 +2507,15 @@ function JupChatInner() {
 
   // ── Reload ALL per-wallet data when wallet changes ───────────────────────────
   useEffect(() => {
-    if (yieldVaultIntervalRef.current) { clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null; }
-    if (yieldVaultSweepRef.current)    { clearInterval(yieldVaultSweepRef.current);    yieldVaultSweepRef.current    = null; }
     if (!walletFull) {
-      setYieldVault(null); setYieldVaultStats(null); setYieldVaultLog([]);
       setPriceAlerts([]); setVolMonitors([]); setTradeJournal([]);
       return;
     }
     const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(`${key}-${walletFull}`) || fallback); } catch { return JSON.parse(fallback); } };
-    // ── Load tool progress: Firestore first, localStorage as fallback ──────────
-    (async () => {
-      const remote = await fsLoad(walletFull);
-      // Helper: prefer Firestore value, fall back to localStorage
-      const pick = (fsField, lsKey, fallback) => {
-        if (remote[fsField] !== undefined) return remote[fsField];
-        return loadLocal(lsKey, fallback);
-      };
-      const v  = pick("yieldvault",       "chatfi-yieldvault",       "null");
-      const s  = pick("yieldvault_stats", "chatfi-yieldvault-stats", "null");
-      const lg = pick("yieldvault_log",   "chatfi-yieldvault-log",   "[]");
-      setYieldVault(v); setYieldVaultStats(s); setYieldVaultLog(lg);
-      // Also load alerts / volmon / journal from remote
-      const alerts  = pick("alerts",  "chatfi-alerts",  "[]");
-      const volmon  = pick("volmon",  "chatfi-volmon",  "[]");
-      const journal = pick("journal", "chatfi-journal", "[]");
-      setPriceAlerts(alerts); setVolMonitors(volmon); setTradeJournal(journal);
-      if (v?.status === "active") {
-        startYieldVaultLoop(v, s);
-      } else if (!v) {
-      // No local vault found (cache was cleared). Scan on-chain Jupiter Lend
-      // positions and auto-restore vault state if funds are still there.
-      (async () => {
-        try {
-          const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-          const earnRaw = await earnRes.json();
-          let earnArr = Array.isArray(earnRaw) ? earnRaw
-            : earnRaw?.data || earnRaw?.positions
-            || Object.values(earnRaw).flatMap(x => Array.isArray(x) ? x : []);
-          if (!Array.isArray(earnArr)) earnArr = [];
-          const TRACKED = ["USDC", "SOL", "JLP"];
-          for (const e of earnArr) {
-            const tok = e.token || e.asset || {};
-            const sym = (tok.symbol || e.assetSymbol || "").toUpperCase();
-            if (!TRACKED.includes(sym)) continue;
-            const dec    = tok.decimals ?? 6;
-            const ub     = parseFloat(e.underlyingBalance || 0);
-            const ua     = parseFloat(e.underlyingAssets || e.amount || 0);
-            const amount = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
-            if (amount < 1) continue;
-            // Found a live on-chain position — rebuild vault state
-            const apy = parseFloat(e.apy || e.supplyApy || 0.05);
-            const restored = {
-              depositAmount: amount,
-              depositToken: sym,
-              minEdge: 8, maxBet: 5, category: null,
-              vaultMode: "predict", dcaToken: "SOL", dcaThreshold: 5,
-              depositedAt: Date.now(),
-              earnApy: apy,
-              status: "active",
-              txSig: null,
-              _restored: true,
-            };
-            const restoredStats = { accrued: 0, betsPlaced: 0, winningsRecycled: 0, currentApy: apy, lastScanAt: null };
-            const restoredLog   = [{ ts: Date.now(), type: "restore", detail: `Vault auto-restored: ${amount.toFixed(4)} ${sym} found in Jupiter Lend` }];
-            setYieldVault(restored);
-            setYieldVaultStats(restoredStats);
-            setYieldVaultLog(restoredLog);
-            try {
-              localStorage.setItem(`chatfi-yieldvault-${walletFull}`, JSON.stringify(restored));
-              localStorage.setItem(`chatfi-yieldvault-stats-${walletFull}`, JSON.stringify(restoredStats));
-              localStorage.setItem(`chatfi-yieldvault-log-${walletFull}`, JSON.stringify(restoredLog));
-            } catch {}
-            fsSave(walletFull, { yieldvault: restored, yieldvault_stats: restoredStats, yieldvault_log: restoredLog });
-            startYieldVaultLoop(restored, restoredStats);
-            push("ai", `🔄 **Vault Restored** — Found **${amount.toFixed(4)} ${sym}** in Jupiter Lend from a previous session. Your Yield Vault is active again.\n\nSettings reset to defaults (edge ≥8%, max $5/bet). Tap **Vault Status** to reconfigure.`);
-            break; // restore only the first/primary position
-          }
-        } catch {}
-      })();
-    }
-    })(); // end outer async load IIFE
+    const alerts  = loadLocal("chatfi-alerts",  "[]");
+    const volmon  = loadLocal("chatfi-volmon",  "[]");
+    const journal = loadLocal("chatfi-journal", "[]");
+    setPriceAlerts(alerts); setVolMonitors(volmon); setTradeJournal(journal);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletFull]);
 
@@ -3353,7 +2709,7 @@ function JupChatInner() {
     setTradeJournal(prev => {
       const next = [record, ...prev].slice(0, 300);
       try { localStorage.setItem(`chatfi-journal-${walletFull||"anon"}`, JSON.stringify(next)); } catch {}
-      fsSave(walletFull||"anon", { journal: next });
+      try { localStorage.setItem(`chatfi-journal-${walletFull||'anon'}`, JSON.stringify(next)); } catch {}
       return next;
     });
   };
@@ -3381,7 +2737,7 @@ function JupChatInner() {
         });
         setPriceAlerts(updated);
         try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
-        fsSave(walletFull||"anon", { alerts: updated });
+        try { localStorage.setItem(`chatfi-alerts-${walletFull||'anon'}`, JSON.stringify(updated)); } catch {}
       } catch {}
     }, 30000);
     return () => clearInterval(alertIntervalRef.current);
@@ -3520,7 +2876,7 @@ function JupChatInner() {
         if (changed) {
           setVolMonitors(nextMonitors);
           try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(nextMonitors)); } catch {}
-          fsSave(walletFull||"anon", { volmon: nextMonitors });
+          try { localStorage.setItem(`chatfi-volmon-${walletFull||'anon'}`, JSON.stringify(nextMonitors)); } catch {}
         }
       } catch (e) {
         console.warn("[ChatFi] Volatility monitor tick error:", e);
@@ -5097,857 +4453,19 @@ function JupChatInner() {
     } catch { return {}; }
   };
 
-  // ── Yield-Gated Prediction Vault — helpers & engine ──────────────────────────
-
-  // ── Shared tx helpers ─────────────────────────────────────────────────────
-  // Poll Solana RPC until tx is confirmed or fails. Throws on failure/timeout.
+  // ── Shared tx helper ─────────────────────────────────────────────────────────
   const confirmTxLanded = async (sig, timeoutMs = 30000) => {
     const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
     const conn = new Connection(_rpc, "confirmed");
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      const res = await conn.getSignatureStatuses([sig], { searchTransactionHistory: true });
-      const st  = res?.value?.[0];
-      if (st?.err) throw new Error("Transaction failed on-chain: " + JSON.stringify(st.err));
-      if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") return;
-      await new Promise(r => setTimeout(r, 1500));
+      const status = await conn.getSignatureStatus(sig, { searchTransactionHistory: true });
+      const conf   = status?.value?.confirmationStatus;
+      if (conf === "confirmed" || conf === "finalized") return true;
+      if (status?.value?.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.value.err)}`);
+      await new Promise(r => setTimeout(r, 2000));
     }
-    throw new Error("Transaction not confirmed within 30 s. Check Solscan — funds were NOT moved until confirmed.");
-  };
-
-  // Check wallet portfolio has enough of a token before proceeding.
-  const checkBalance = (token, needed, action) => {
-    const sym = (token || "").toUpperCase();
-    const bal = portfolio?.[sym] ?? portfolio?.[token] ?? 0;
-    if (bal < needed) {
-      const balFmt  = Number(bal).toFixed(4);
-      const needFmt = Number(needed).toFixed(4);
-      push("ai", `Insufficient **${sym}** balance. You have **${balFmt} ${sym}** but need **${needFmt} ${sym}**${action ? " for " + action : ""}. Swap or deposit more ${sym} first, then try again.`);
-      return false;
-    }
-    return true;
-  };
-
-  const vaultKey      = (addr) => `chatfi-yieldvault-${addr}`;
-  const vaultStatsKey = (addr) => `chatfi-yieldvault-stats-${addr}`;
-  const vaultLogKey   = (addr) => `chatfi-yieldvault-log-${addr}`;
-
-  const saveYieldVault = (vaultData, statsData) => {
-    const addr = walletFull; if (!addr) return;
-    const fsFields = {};
-    try {
-      if (vaultData  !== undefined) { localStorage.setItem(vaultKey(addr), JSON.stringify(vaultData));  fsFields.yieldvault       = vaultData;  }
-      if (statsData  !== undefined) { localStorage.setItem(vaultStatsKey(addr), JSON.stringify(statsData)); fsFields.yieldvault_stats = statsData; }
-    } catch {}
-    if (Object.keys(fsFields).length) fsSave(addr, fsFields);
-  };
-  const saveYieldVaultLog = (log) => {
-    const addr = walletFull; if (!addr) return;
-    const trimmed = log.slice(0, 50);
-    try { localStorage.setItem(vaultLogKey(addr), JSON.stringify(trimmed)); } catch {}
-    fsSave(addr, { yieldvault_log: trimmed });
-  };
-
-  const estimateAccruedYield = (vault, stats) => {
-    if (!vault) return 0;
-    // Use real on-chain balance when available — tallies exactly with jup.ag/earn
-    if (vault.liveUnderlyingBalance != null && vault.liveUnderlyingBalance > 0) {
-      return Math.max(0, vault.liveUnderlyingBalance - vault.depositAmount);
-    }
-    // Fallback: linear estimate before first live sync
-    const elapsedYrs = (Date.now() - (vault.depositedAt || Date.now())) / (365 * 24 * 3600 * 1000);
-    const raw = vault.depositAmount * (vault.earnApy || 0.05) * elapsedYrs;
-    return Math.max(0, raw - (stats?.betsPlaced || 0) * (vault.maxBet || 5) * 0.5);
-  };
-
-  // ── placePredBet — used by Yield Vault auto-bet loop ────────────────────────
-  // Takes an already-resolved market object (no extra search needed) + side + amount string.
-  // Signs via the active wallet provider and submits on-chain.
-  const placePredBet = async (market, side, amountStr) => {
-    const provider = getActiveProvider();
-    if (!provider) return { success: false, msg: "Wallet provider not found." };
-    if (!walletFull)  return { success: false, msg: "Wallet not connected." };
-    const amtNum = parseFloat(amountStr);
-    if (!amtNum || amtNum < 1) return { success: false, msg: `Amount too small: $${amountStr}` };
-    const marketId = market.marketId || market.id;
-    if (!marketId) return { success: false, msg: "Market ID missing." };
-    const isYes = side === "yes";
-    const depositAmount = Math.floor(amtNum * 1_000_000);
-    const tryMints = [USDC_MINT, JUPUSD_MINT];
-    try {
-      let orderRes = null;
-      for (const mint of tryMints) {
-        const res = await predFetch(`${JUP_PRED_API}/orders`, {
-          method: "POST",
-          body: { ownerPubkey: walletFull, marketId, isYes, isBuy: true, depositAmount, depositMint: mint },
-        });
-        if (res?.transaction) { orderRes = res; break; }
-        orderRes = res;
-      }
-      if (!orderRes?.transaction) throw new Error(`API error: ${JSON.stringify(orderRes).slice(0, 150)}`);
-      const txBytes = b64ToBytes(orderRes.transaction);
-      const tx = VersionedTransaction.deserialize(txBytes);
-      if (!provider.signTransaction) throw new Error("Wallet does not support signing.");
-      const signedTx = await provider.signTransaction(tx);
-      const rpcRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
-      });
-      const sig = rpcRes?.result;
-      if (!sig) throw new Error(rpcRes?.error?.message || "Send failed.");
-      return { success: true, sig };
-    } catch (err) {
-      return { success: false, msg: err?.message || "Unknown error" };
-    }
-  };
-
-  // ── Sweep prediction winnings back into Jupiter Lend Earn ──────────────────
-  // Called every 15 min (5× the scan interval). Claims any resolved prediction
-  // positions and immediately re-deposits the USDC into the earn vault so
-  // winnings compound rather than sitting idle in the wallet.
-  const sweepWinningsToEarn = async () => {
-    const provider = getActiveProvider();
-    if (!provider || !walletFull) return;
-    try {
-      const res = await predFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletFull}`);
-      const positions = Array.isArray(res) ? res : (res?.data || []);
-      const claimable = positions.filter(p => p.claimable === true && p.claimed === false);
-      if (!claimable.length) return;
-
-      let totalClaimed = 0;
-      let claimedCount = 0;
-
-      // Claim each winning position silently
-      for (const pos of claimable) {
-        try {
-          const claimRes = await predFetch(`${JUP_PRED_API}/positions/${pos.pubkey}/claim`, {
-            method: "POST",
-            body: { ownerPubkey: walletFull },
-          });
-          if (!claimRes.transaction) continue;
-          const binaryStr = atob(claimRes.transaction);
-          const txBytes = new Uint8Array(binaryStr.length);
-          for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
-          const tx = VersionedTransaction.deserialize(txBytes);
-          const signed = await provider.signTransaction(tx);
-          const rpcRes = await jupFetch(SOLANA_RPC, {
-            method: "POST",
-            body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signed.serialize()), { encoding: "base64", skipPreflight: true }] },
-          });
-          const sig = rpcRes?.result;
-          if (!sig) continue;
-          await confirmTxLanded(sig);
-          const payoutUsd = parseInt(pos.payoutUsd || 0) / 1_000_000;
-          totalClaimed += payoutUsd;
-          claimedCount++;
-          const title = pos.marketMetadata?.title || pos.marketId || "market";
-          setYieldVaultLog(prev => {
-            const next = [{ ts: Date.now(), type: "win", detail: `Won $${payoutUsd.toFixed(2)} from "${title.slice(0, 40)}"` }, ...prev.slice(0, 49)];
-            saveYieldVaultLog(next);
-            return next;
-          });
-        } catch { /* skip individual claim failures — non-fatal */ }
-      }
-
-      if (totalClaimed < 0.01) return; // nothing worth sweeping
-
-      // Re-deposit winnings back into Jupiter Lend Earn
-      let usdcVault = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
-      if (!usdcVault) {
-        await fetchEarnVaults();
-        usdcVault = earnVaults.find(v => v.token?.toUpperCase() === "USDC");
-      }
-      if (usdcVault?.assetMint) {
-        try {
-          const decimals  = usdcVault.assetDecimals || 6;
-          const amountRaw = Math.floor(totalClaimed * Math.pow(10, decimals)).toString();
-          const depositRes = await jupFetch(`${JUP_EARN_API}/deposit`, {
-            method: "POST",
-            body: { asset: usdcVault.assetMint, amount: amountRaw, signer: walletFull },
-          });
-          if (depositRes.transaction) {
-            const bStr2 = atob(depositRes.transaction);
-            const txB2  = new Uint8Array(bStr2.length);
-            for (let i = 0; i < bStr2.length; i++) txB2[i] = bStr2.charCodeAt(i);
-            const tx2     = VersionedTransaction.deserialize(txB2);
-            const signed2 = await provider.signTransaction(tx2);
-            const rpc2    = await jupFetch(SOLANA_RPC, {
-              method: "POST",
-              body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signed2.serialize()), { encoding: "base64", skipPreflight: true }] },
-            });
-            const sig2 = rpc2?.result;
-            if (sig2) {
-              await confirmTxLanded(sig2);
-              // Update winningsRecycled stat
-              setYieldVaultStats(prev => {
-                const next = { ...(prev || {}), winningsRecycled: ((prev?.winningsRecycled) || 0) + totalClaimed };
-                saveYieldVault(undefined, next);
-                return next;
-              });
-              setYieldVaultLog(prev => {
-                const next = [{ ts: Date.now(), type: "sweep", detail: `Swept $${totalClaimed.toFixed(2)} USDC back into Lend (${claimedCount} win${claimedCount > 1 ? "s" : ""})` }, ...prev.slice(0, 49)];
-                saveYieldVaultLog(next);
-                return next;
-              });
-              push("ai", `**Yield Vault** — $${totalClaimed.toFixed(2)} USDC from ${claimedCount} winning bet${claimedCount > 1 ? "s" : ""} swept back into Jupiter Lend. Compounding.`);
-              return;
-            }
-          }
-        } catch { /* deposit failed — winnings stay in wallet, log it */ }
-      }
-      // Earn deposit failed but claims succeeded — at least log the wins
-      setYieldVaultLog(prev => {
-        const next = [{ ts: Date.now(), type: "sweep", detail: `Claimed $${totalClaimed.toFixed(2)} USDC — re-deposit to Lend failed, funds in wallet` }, ...prev.slice(0, 49)];
-        saveYieldVaultLog(next);
-        return next;
-      });
-    } catch { /* sweep check is fully non-fatal */ }
-  };
-
-  const startYieldVaultLoop = (vaultInit, statsInit) => {
-    // Keep live refs updated so the interval tick always reads current config
-    yieldVaultLiveRef.current      = vaultInit;
-    yieldVaultStatsLiveRef.current = statsInit;
-    if (yieldVaultIntervalRef.current) clearInterval(yieldVaultIntervalRef.current);
-    // Track consecutive empty-position responses before auto-cancelling.
-    // Jupiter Earn has indexing lag (5–30s after deposit) — one empty response
-    // is NOT proof the position is gone. Require 3 consecutive misses.
-    let emptyPositionStreak = 0;
-    const EMPTY_STREAK_BEFORE_CANCEL = 3;
-    const tick = async () => {
-      // Always read the freshest vault + stats from refs (avoids stale closure)
-      const vaultCur = yieldVaultLiveRef.current;
-      const statsCur = yieldVaultStatsLiveRef.current;
-      if (!vaultCur || vaultCur.status !== "active" || yieldVaultBettingRef.current) return;
-
-      // ── Live Jupiter Earn sync (every tick) ───────────────────────────────────
-      // • Checks if the earn position still exists (auto-cancels if user withdrew)
-      // • Requires 3 consecutive empty responses before cancelling — Jupiter has
-      //   indexing lag of 5–30s after a deposit, so one empty result is NOT proof
-      //   the position is gone.
-      // • Syncs real on-chain balance + live APY so displayed yield tallies with jup.ag
-      try {
-        const depositToken = (vaultCur.depositToken || "USDC").toUpperCase();
-        const KNOWN_MINTS_CHK = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
-        const targetMint = KNOWN_MINTS_CHK[depositToken] || null;
-
-        // Parallel fetch: positions (real balance) + tokens (live APY)
-        const [posRes, tokRes] = await Promise.all([
-          fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`),
-          jupFetch(`${JUP_EARN_API}/tokens`),
-        ]);
-        const posRaw = await posRes.json();
-        let posArr = Array.isArray(posRaw) ? posRaw : [];
-        if (!posArr.length) { const vals = Object.values(posRaw); posArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : [])); }
-        if (!posArr.length) posArr = posRaw?.data || posRaw?.positions || posRaw?.items || [];
-
-        let positionActive = false;
-        let liveBalance = null;
-        for (const entry of posArr) {
-          const underlyingTok = entry.asset || entry.underlyingToken || {};
-          const mint = entry.assetMint || underlyingTok.address || entry.mint || null;
-          const rawSym = underlyingTok.symbol || entry.assetSymbol || "";
-          const sym = rawSym ? rawSym.toUpperCase() : (entry.token?.symbol || "").replace(/^jl/i, "").toUpperCase();
-          if (!(targetMint && mint && mint === targetMint) && sym !== depositToken) continue;
-          const humanBalance = parseFloat(entry.underlyingBalance || 0);
-          const rawInt = parseFloat(entry.underlyingAssets || "0");
-          const shares = parseFloat(entry.shares || "0");
-          if (rawInt > 0 || humanBalance > 0.001 || shares > 0) {
-            positionActive = true;
-            liveBalance = humanBalance > 0 ? humanBalance : null;
-          }
-          break;
-        }
-
-        if (!positionActive) {
-          // Require 3 consecutive empty responses before cancelling
-          emptyPositionStreak++;
-          if (emptyPositionStreak < EMPTY_STREAK_BEFORE_CANCEL) {
-            // Not yet sure — skip this tick, try again next interval
-          } else {
-            clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null;
-            clearInterval(yieldVaultSweepRef.current);    yieldVaultSweepRef.current    = null;
-            yieldVaultLiveRef.current = null;
-            setYieldVault(null); setYieldVaultStats(null); setYieldVaultLog([]);
-            try { localStorage.removeItem(vaultKey(walletFull)); localStorage.removeItem(vaultStatsKey(walletFull)); localStorage.removeItem(vaultLogKey(walletFull)); } catch {}
-            if (walletFull) fsSave(walletFull, { yieldvault: null, yieldvault_stats: null, yieldvault_log: [] });
-            setShowYieldVault(false);
-            push("ai", `**Yield Vault auto-cancelled** — your **${depositToken}** position in Jupiter Earn is no longer active (withdrawn externally). The vault has been closed and all auto-scanning stopped. Start a new vault anytime.`);
-          }
-          return;
-        }
-        // Position confirmed active — reset streak
-        emptyPositionStreak = 0;
-
-        // Sync live APY from tokens endpoint
-        const tokens = Array.isArray(tokRes) ? tokRes : (tokRes?.data || []);
-        const liveToken = tokens.find(t => {
-          const s = (t.asset?.symbol || t.symbol || "").toUpperCase();
-          const m = t.asset?.address || t.assetMint || t.mint || "";
-          return s === depositToken || (targetMint && m === targetMint);
-        });
-        const parseRate = (raw) => { const n = parseFloat(raw || 0); if (!n || n <= 0) return 0; return n > 100 ? n / 100 : n; };
-        const liveApy = liveToken ? (parseRate(liveToken.totalRate) || parseRate(liveToken.supplyRate)) : null;
-
-        // Update vault ref with live balance + APY
-        // Also update depositAmount if user topped up their earn position externally
-        if (liveBalance != null || (liveApy != null && liveApy > 0)) {
-          const newDeposit = (liveBalance != null && liveBalance > vaultCur.depositAmount)
-            ? liveBalance  // earn balance grew — treat full balance as principal
-            : vaultCur.depositAmount;
-          const updatedVault = {
-            ...vaultCur,
-            depositAmount: newDeposit,
-            ...(liveBalance != null ? { liveUnderlyingBalance: liveBalance } : {}),
-            ...(liveApy != null && liveApy > 0 ? { earnApy: liveApy } : {}),
-          };
-          yieldVaultLiveRef.current = updatedVault;
-          setYieldVault(updatedVault);
-          saveYieldVault(updatedVault, undefined);
-        }
-      } catch { /* skip on network error — never cancel on transient failures */ }
-
-      // Re-read vault after sync (may have updated liveUnderlyingBalance / earnApy)
-      const vaultSynced = yieldVaultLiveRef.current;
-      if (!vaultSynced) return;
-      const accrued = estimateAccruedYield(vaultSynced, statsCur);
-
-      // ── AUTO-DCA MODE ────────────────────────────────────────────────────────
-      // When yield hits the user's threshold, swap accrued yield into chosen token
-      if (vaultSynced.vaultMode === "dca") {
-        const threshold = parseFloat(vaultSynced.dcaThreshold || "5");
-        if (accrued < threshold) return; // not enough yield yet
-        const swapToken = (vaultSynced.dcaToken || "SOL").toUpperCase();
-        // Cap swap to real wallet USDC balance — accrued is an estimate
-        const walletUsdc = portfolio?.USDC ?? 0;
-        const safeSwapAmt = Math.min(accrued, walletUsdc > 0.01 ? walletUsdc - 0.01 : accrued);
-        if (safeSwapAmt < 0.01) { return; }
-        try {
-          yieldVaultBettingRef.current = true;
-          setYieldVaultBetting(true);
-          // Resolve output mint
-          let toMint = TOKEN_MINTS[swapToken] || tokenCacheRef.current[swapToken];
-          if (!toMint) {
-            const res = await resolveToken(swapToken);
-            toMint = res?.mint;
-          }
-          if (!toMint) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
-          const fromMint = TOKEN_MINTS.USDC;
-          const amtRaw = Math.floor(safeSwapAmt * 1e6);
-          // v2 swap MUST go through /execute with requestId — not raw RPC broadcast
-          const orderRes = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amtRaw}&taker=${walletFull}&referral=${CHATFI_REFERRAL}`);
-          if (!orderRes?.transaction || !orderRes?.requestId) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
-          const provider = getActiveProvider();
-          if (!provider) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
-          const tx = VersionedTransaction.deserialize(b64ToBytes(orderRes.transaction));
-          const signedTx = await provider.signTransaction(tx);
-          const signedBase64 = bytesToB64(signedTx.serialize());
-          let execResult = await jupFetch(JUP_SWAP_EXEC, { method: "POST", body: { signedTransaction: signedBase64, requestId: orderRes.requestId } });
-          if (!execResult?.signature && !execResult?.txid) {
-            const retryOrder = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amtRaw}&taker=${walletFull}`);
-            if (retryOrder?.transaction && retryOrder?.requestId) {
-              const retryTx = VersionedTransaction.deserialize(b64ToBytes(retryOrder.transaction));
-              const retrySignedTx = await provider.signTransaction(retryTx);
-              execResult = await jupFetch(JUP_SWAP_EXEC, { method: "POST", body: { signedTransaction: bytesToB64(retrySignedTx.serialize()), requestId: retryOrder.requestId } });
-            }
-          }
-          const sig = execResult?.signature || execResult?.txid;
-          if (sig) {
-            const newStats = { ...statsCur, betsPlaced: (statsCur?.betsPlaced||0)+1, winningsRecycled: (statsCur?.winningsRecycled||0)+safeSwapAmt, lastScanAt: Date.now() };
-            yieldVaultStatsLiveRef.current = newStats;
-            setYieldVaultStats(newStats);
-            saveYieldVault(undefined, newStats);
-            setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "dca", detail: `Auto-DCA: $${safeSwapAmt.toFixed(2)} USDC → ${swapToken} · threshold $${threshold} · [tx](https://solscan.io/tx/${sig})` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
-            push("ai", `**Yield Vault Auto-DCA** — $${safeSwapAmt.toFixed(2)} USDC yield swapped into **${swapToken}**. Principal still earning in Lend. [Solscan →](https://solscan.io/tx/${sig})`);
-          }
-        } catch (err) {
-          setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "error", detail: `Auto-DCA failed: ${err?.message || "Unknown"}` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
-        }
-        yieldVaultBettingRef.current = false;
-        setYieldVaultBetting(false);
-        return;
-      }
-
-      // ── PREDICT MODE (original) ───────────────────────────────────────────────
-      // Cap maxBet to real wallet USDC balance — accrued is an estimate
-      const walletUsdcBal = portfolio?.USDC ?? 0;
-      const maxBet = Math.min(vaultSynced.maxBet, accrued, walletUsdcBal > 0.5 ? walletUsdcBal - 0.1 : 0);
-      if (maxBet < 1) return;
-      try {
-        yieldVaultBettingRef.current = true;
-        setYieldVaultBetting(true);
-        const { markets } = await fetchPredictionMarkets(vaultCur.category, null, 30);
-        if (!markets?.length) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
-        const scored = [];
-        for (const ev of markets) {
-          for (const mk of (ev.markets || [])) {
-            if (mk.status !== "open" && mk.status !== "active") continue;
-            const yesPrice = parseFloat(mk.pricing?.buyYesPriceUsd || mk.pricing?.yesCost || 0);
-            const noPrice  = parseFloat(mk.pricing?.buyNoPriceUsd  || mk.pricing?.noCost  || 0);
-            if (!yesPrice || !noPrice) continue;
-            const impliedYes = yesPrice / (yesPrice + noPrice);
-            const edge = Math.abs(impliedYes - 0.5) * 100;
-            if (edge < vaultCur.minEdge) continue;
-            const side = impliedYes < 0.5 ? "no" : "yes";
-            scored.push({ event: ev, market: mk, edge, side });
-          }
-        }
-        if (!scored.length) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
-        scored.sort((a, b) => b.edge - a.edge);
-        const best    = scored[0];
-        const betAmt  = Math.min(maxBet, vaultCur.maxBet).toFixed(2);
-        const betResult = await placePredBet(best.market, best.side, betAmt);
-        if (betResult?.success) {
-          const newStats = { ...statsCur, betsPlaced: (statsCur?.betsPlaced || 0) + 1, lastScanAt: Date.now() };
-          yieldVaultStatsLiveRef.current = newStats;
-          setYieldVaultStats(newStats);
-          saveYieldVault(undefined, newStats);
-          const evTitle = best.event.metadata?.title || best.event.title || "market";
-          const mkTitle = best.market.metadata?.title || best.market.title || "outcome";
-          setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "bet", detail: `Auto-bet $${betAmt} ${best.side.toUpperCase()} on "${mkTitle}" (${evTitle}) — edge ${best.edge.toFixed(1)}%` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
-          push("ai", `**Yield Vault auto-bet** — $${betAmt} ${best.side.toUpperCase()} on **${evTitle}** (${best.edge.toFixed(1)}% edge). Principal stays in Lend earning yield.`);
-        } else {
-          setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "error", detail: `Auto-bet failed: ${betResult?.msg || "Unknown error"}` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
-        }
-      } catch (err) {
-        setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "error", detail: `Vault scan error: ${err?.message || "Unknown"}` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
-      }
-      yieldVaultBettingRef.current = false;
-      setYieldVaultBetting(false);
-    };
-    // Delay first tick by 60s — Jupiter Earn needs time to index a fresh deposit.
-    // Firing immediately after deposit causes false "position not found" cancellation.
-    setTimeout(tick, 60 * 1000);
-    yieldVaultIntervalRef.current = setInterval(tick, 3 * 60 * 1000);
-    // Sweep winnings back to earn every 15 min (independent of bet scan)
-    if (yieldVaultSweepRef.current) clearInterval(yieldVaultSweepRef.current);
-    sweepWinningsToEarn(); // run once immediately on vault start
-    yieldVaultSweepRef.current = setInterval(sweepWinningsToEarn, 15 * 60 * 1000);
-  };
-
-  const doYieldVaultDeposit = async (cfg) => {
-    if (!walletFull) { push("ai", "Connect your wallet first to start the Yield Vault."); return; }
-    const provider = getActiveProvider();
-    if (!provider) { push("ai", "Wallet provider not found."); return; }
-    const depositAmt = parseFloat(cfg.depositAmount || "100");
-    if (depositAmt < 1) { push("ai", "Minimum deposit is $1."); return; }
-
-    // Determine which token to deposit — USDC (default), SOL, or JLP
-    const depositToken = "USDC"; // USDC only
-    const depositBalance = portfolio?.[depositToken] ?? 0;
-    if (depositBalance < depositAmt) {
-      push("ai", `Insufficient ${depositToken} balance. You have **${depositBalance.toFixed(4)} ${depositToken}** but this deposit requires **${depositAmt} ${depositToken}**.`);
-      return;
-    }
-
-    // Find the matching earn vault for the chosen token
-    let targetVault = earnVaults.find(v => v.token?.toUpperCase() === depositToken);
-    if (!targetVault) { await fetchEarnVaults(); targetVault = earnVaults.find(v => v.token?.toUpperCase() === depositToken); }
-    if (!targetVault) {
-      push("ai", `${depositToken} Earn vault not found. Try USDC, SOL, or JLP instead.`);
-      return;
-    }
-    const assetMint = targetVault.assetMint || TOKEN_MINTS[depositToken];
-    if (!assetMint) { push("ai", `Could not resolve mint for ${depositToken} vault.`); return; }
-    const decimals  = targetVault.assetDecimals || (depositToken === "SOL" ? 9 : 6);
-    const amountRaw = Math.floor(depositAmt * Math.pow(10, decimals)).toString();
-    push("ai", `Depositing **${depositAmt} ${depositToken}** into Jupiter Lend Earn (${targetVault.apyDisplay} APY) for your Yield Vault…`);
-    try {
-      const res = await jupFetch(`${JUP_EARN_API}/deposit`, { method: "POST", body: { asset: assetMint, amount: amountRaw, signer: walletFull } });
-      if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
-      if (!res.transaction) throw new Error("No transaction returned from Jupiter Lend.");
-      const txBytes = Uint8Array.from(atob(res.transaction), c => c.charCodeAt(0));
-      const tx = VersionedTransaction.deserialize(txBytes);
-      const signedTx = await provider.signTransaction(tx);
-      const rpcRes = await jupFetch(SOLANA_RPC, { method: "POST", body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] } });
-      const sig = rpcRes?.result;
-      if (!sig) throw new Error("No transaction signature.");
-      const connection = new Connection(import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com", "confirmed");
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
-      // Verify tx actually succeeded (confirmed ≠ no error)
-      const txResult = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-      if (txResult?.meta?.err) throw new Error("Transaction landed but failed on-chain: " + JSON.stringify(txResult.meta.err));
-      const newVault = { depositAmount: depositAmt, depositToken, minEdge: parseFloat(cfg.minEdge || "8"), maxBet: parseFloat(cfg.maxBet || "5"), category: cfg.category || null, vaultMode: cfg.vaultMode || "predict", dcaToken: cfg.dcaToken || "SOL", dcaThreshold: parseFloat(cfg.dcaThreshold || "5"), depositedAt: Date.now(), earnApy: targetVault.apy, status: "active", txSig: sig };
-      const newStats = { accrued: 0, betsPlaced: 0, winningsRecycled: 0, currentApy: targetVault.apy, lastScanAt: null };
-      yieldVaultLiveRef.current      = newVault;
-      yieldVaultStatsLiveRef.current = newStats;
-      setYieldVault(newVault);
-      setYieldVaultStats(newStats);
-      const initLog = [{ ts: Date.now(), type: "deposit", detail: `Deposited ${depositAmt} ${depositToken} at ${targetVault.apyDisplay} APY` }];
-      setYieldVaultLog(initLog);
-      saveYieldVaultLog(initLog);
-      saveYieldVault(newVault, newStats);
-      push("ai", `✅ **Yield Vault Active${cfg.vaultMode==="dca"?" (Auto-DCA)":""}!**\n\n**${depositAmt} ${depositToken}** is now earning **${targetVault.apyDisplay} APY** in Jupiter Lend.\n\n${cfg.vaultMode==="dca"?`When accrued yield hits **$${cfg.dcaThreshold||"5"}**, it auto-buys **${cfg.dcaToken||"SOL"}** via Jupiter swap — principal stays in Lend.`:`The vault scans prediction markets every 3 min. When a market with ≥${cfg.minEdge}% edge appears, it auto-bets up to **$${cfg.maxBet}** from accrued yield — principal is always protected.`}\n\n[View tx →](https://solscan.io/tx/${sig})`);
-      startYieldVaultLoop(newVault, newStats);
-    } catch (err) {
-      push("ai", `Yield Vault deposit failed: ${err?.message}`);
-      // Panel stays open so user can retry or adjust settings
-    }
-  };
-
-  const toggleYieldVaultStatus = () => {
-    setYieldVault(prev => {
-      if (!prev) return prev;
-      const next = { ...prev, status: prev.status === "active" ? "paused" : "active" };
-      yieldVaultLiveRef.current = next;
-      saveYieldVault(next, undefined);
-      if (next.status === "paused") { clearInterval(yieldVaultIntervalRef.current); clearInterval(yieldVaultSweepRef.current); }
-      else { startYieldVaultLoop(next, yieldVaultStats); }
-      push("ai", `Yield Vault ${next.status === "active" ? "▶ resumed" : "⏸ paused"}. USDC stays in Lend earning yield.`);
-      return next;
-    });
-  };
-
-  // ── Cancel Vault — stops everything and clears state ─────────────────────────
-  // Unlike Pause (keeps vault alive), Cancel fully tears down the vault:
-  // stops intervals, clears all vault state, then kicks off the Earn withdraw flow
-  // so the user gets their principal back.
-  const cancelYieldVault = async () => {
-    // 1. Stop the loop and sweep intervals immediately
-    if (yieldVaultIntervalRef.current) { clearInterval(yieldVaultIntervalRef.current); yieldVaultIntervalRef.current = null; }
-    if (yieldVaultSweepRef.current)    { clearInterval(yieldVaultSweepRef.current);    yieldVaultSweepRef.current    = null; }
-    // 2. Capture the deposit token before clearing state (needed for earn position lookup)
-    const depositToken = (yieldVault?.depositToken || "USDC").toUpperCase();
-    const KNOWN_MINTS = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
-    const targetMint = KNOWN_MINTS[depositToken] || null;
-    // 3. Clear vault state and persisted storage
-    setYieldVault(null);
-    setYieldVaultStats(null);
-    setYieldVaultLog([]);
-    try { localStorage.removeItem("yieldVault"); localStorage.removeItem("yieldVaultStats"); localStorage.removeItem("yieldVaultLog"); } catch {}
-    if (walletFull) { fsSave(walletFull, { yieldvault: null, yieldvault_stats: null, yieldvault_log: [] }); }
-    // 4. Close the panel
-    setShowYieldVault(false);
-    push("ai", "**Yield Vault cancelled.** Fetching your Earn position so you can withdraw your principal…");
-    // 5. Fetch earn position and open withdraw modal
-    if (!walletFull) { push("ai", "Connect your wallet to withdraw."); return; }
-    try {
-      const posRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-      const posRaw = await posRes.json();
-      let posArr = Array.isArray(posRaw) ? posRaw : [];
-      if (!posArr.length) {
-        const vals = Object.values(posRaw);
-        posArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
-      }
-      if (!posArr.length) posArr = posRaw?.data || posRaw?.positions || posRaw?.items || [];
-      let found = null;
-      for (const entry of posArr) {
-        const underlyingTok = entry.asset || entry.underlyingToken || {};
-        const mint = entry.assetMint || underlyingTok.address || entry.mint || null;
-        const rawSym = underlyingTok.symbol || entry.assetSymbol || "";
-        const sym = rawSym ? rawSym.toUpperCase() : (entry.token?.symbol || "").replace(/^jl/i, "").toUpperCase();
-        const dec = underlyingTok.decimals ?? entry.token?.decimals ?? 6;
-        const rawStr = entry.underlyingAssets || "0";
-        const rawInt = parseFloat(rawStr);
-        const humanBalance = parseFloat(entry.underlyingBalance || 0);
-        if ((!targetMint || mint !== targetMint) && sym !== depositToken) continue;
-        if (!mint || (rawInt <= 0 && parseFloat(entry.shares || 0) <= 0)) continue;
-        const humanAmt = humanBalance > 0 ? humanBalance : (rawInt > 1e6 ? rawInt / Math.pow(10, dec) : rawInt);
-        found = { assetMint: mint, decimals: dec, rawAmount: rawStr, humanAmount: humanAmt, shares: entry.shares || "0", symbol: sym || depositToken, name: underlyingTok.name || `Jupiter Lend ${sym || depositToken}` };
-        break;
-      }
-      if (!found) { push("ai", "No open Earn position found. Funds may already be in your wallet."); return; }
-      setEarnUserPositions(prev => ({ ...prev, [found.symbol]: { amount: found.humanAmount, amountRaw: parseFloat(found.rawAmount), shares: parseFloat(found.shares), decimals: found.decimals } }));
-      setEarnWithdraw({ vault: { name: found.name, token: found.symbol, assetMint: found.assetMint, assetDecimals: found.decimals }, amount: found.humanAmount.toFixed(found.decimals), positionAmount: found.humanAmount, isYieldVaultClose: false });
-      setShowEarnWithdraw(true);
-      push("ai", `Ready to withdraw **${found.humanAmount.toFixed(4)} ${found.symbol}** from Jupiter Earn. Select an amount below.`);
-    } catch (err) {
-      push("ai", `Failed to fetch Earn position: ${err?.message || "Unknown"}. Please withdraw manually at jup.ag/lend.`);
-    }
-  };
-
-  const updateYieldVaultCfg = ({ minEdge, maxBet, dcaToken, dcaThreshold }) => {
-    setYieldVault(prev => {
-      if (!prev) return prev;
-      const next = {
-        ...prev,
-        ...(minEdge      !== undefined ? { minEdge:      parseFloat(minEdge)      || prev.minEdge }      : {}),
-        ...(maxBet       !== undefined ? { maxBet:        parseFloat(maxBet)       || prev.maxBet }       : {}),
-        ...(dcaToken     !== undefined ? { dcaToken:      dcaToken                                 }      : {}),
-        ...(dcaThreshold !== undefined ? { dcaThreshold:  parseFloat(dcaThreshold) || prev.dcaThreshold } : {}),
-      };
-      yieldVaultLiveRef.current = next;
-      saveYieldVault(next, undefined);
-      if (prev.vaultMode === "dca") {
-        push("ai", `Yield Vault updated — DCA target: **${next.dcaToken}** · threshold: **$${next.dcaThreshold}**`);
-      } else {
-        push("ai", `Yield Vault updated — Min edge: **${next.minEdge}%** · Max bet: **$${next.maxBet}**`);
-      }
-      return next;
-    });
-  };
-
-  const withdrawYieldVault = async () => {
-    if (!walletFull) { push("ai", "Connect your wallet first to withdraw."); return; }
-
-    push("ai", "Fetching your Jupiter Earn position…");
-
-    // ── Step 1: Fetch the live position directly from the Jupiter Earn API ────
-    // MUST use direct fetch() — jupFetch proxy strips/transforms the earn response.
-    // Use ?wallets= (not ?users=) — that is the correct query param for this endpoint.
-    // Jupiter API shape: [{ token: { address, symbol, decimals }, assetMint, asset: { symbol, decimals },
-    //                        shares, underlyingAssets, underlyingBalance }]
-    // • token.symbol may be "Earn" (jlToken name) — do NOT rely on it for asset matching
-    // • assetMint (top-level) = real underlying mint (preferred)
-    // • asset.symbol = real underlying symbol (e.g. "USDC")
-    // • underlyingAssets = raw integer balance string
-    // • underlyingBalance = human-readable float
-    let livePosition = null;
-    try {
-      const posRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-      const posRaw = await posRes.json();
-      // Response may be array, wallet-keyed object, or wrapped
-      let posArr = Array.isArray(posRaw) ? posRaw : [];
-      if (!posArr.length) {
-        const vals = Object.values(posRaw);
-        posArr = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
-      }
-      // Also try standard wrapper fields
-      if (!posArr.length) posArr = posRaw?.data || posRaw?.positions || posRaw?.items || [];
-
-      // Find the vault's deposit token (default USDC). Match by assetMint or asset.symbol.
-      const depositToken = (yieldVault?.depositToken || "USDC").toUpperCase();
-      // Known mints as fallback
-      const KNOWN_MINTS = { USDC: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", SOL: "So11111111111111111111111111111111111111112" };
-      const targetMint = KNOWN_MINTS[depositToken] || null;
-
-      for (const entry of posArr) {
-        const tok          = entry.token || {};
-        const underlyingTok = entry.asset || entry.underlyingToken || {};
-        // Real underlying mint — prefer top-level assetMint, then asset.address, never the jlToken mint
-        const mint = entry.assetMint || underlyingTok.address || entry.mint || null;
-        // Real underlying symbol — prefer asset.symbol; strip jl prefix from tok.symbol if needed
-        const rawSym = underlyingTok.symbol || entry.assetSymbol || "";
-        const sym = rawSym
-          ? rawSym.toUpperCase()
-          : (tok.symbol || "").replace(/^jl/i, "").toUpperCase();
-        const dec = underlyingTok.decimals ?? tok.decimals ?? entry.decimals ?? 6;
-        const rawStr = entry.underlyingAssets || entry.underlying_assets || "0";
-        const rawInt = parseFloat(rawStr);
-        const humanBalance = parseFloat(entry.underlyingBalance || 0);
-        const shares = entry.shares || "0";
-
-        // Match by mint address first, then by symbol
-        const mintMatch   = targetMint && mint && (mint === targetMint);
-        const symbolMatch = sym === depositToken;
-        if (!mintMatch && !symbolMatch) continue;
-        if (!mint)    continue;
-        if (rawInt <= 0 && parseFloat(shares) <= 0) continue;
-
-        const humanAmt = humanBalance > 0 ? humanBalance : (rawInt > 1e6 ? rawInt / Math.pow(10, dec) : rawInt);
-        livePosition = {
-          assetMint:   mint,
-          decimals:    dec,
-          rawAmount:   rawStr,
-          humanAmount: humanAmt,
-          shares,
-          symbol:      sym || depositToken,
-          name:        underlyingTok.name || `Jupiter Lend ${sym || depositToken}`,
-        };
-        break;
-      }
-    } catch (err) {
-      push("ai", `Failed to fetch your Earn position: ${err?.message || "Unknown error"}. Please try again.`);
-      return;
-    }
-
-    if (!livePosition) {
-      push("ai", "No open Earn position found for this wallet. If you just deposited, wait 30 seconds for the chain to confirm and try again.");
-      return;
-    }
-
-    // ── Step 2: Sync the live position into React state so the UI is consistent ─
-    setEarnUserPositions(prev => ({
-      ...prev,
-      [livePosition.symbol]: {
-        amount:    livePosition.humanAmount,
-        amountRaw: parseFloat(livePosition.rawAmount),
-        shares:    parseFloat(livePosition.shares),
-        decimals:  livePosition.decimals,
-      },
-    }));
-
-    // ── Step 3: Build the vault object doEarnWithdraw needs ──────────────────
-    // doEarnWithdraw reads vault.assetMint and vault.assetDecimals — both sourced
-    // directly from the live /positions response, no guessing needed.
-    const vaultForWithdraw = {
-      name:          livePosition.name,
-      token:         livePosition.symbol,
-      assetMint:     livePosition.assetMint,   // ← token.address from positions API
-      assetDecimals: livePosition.decimals,
-    };
-
-    // ── Step 4: Open the withdraw modal ──────────────────────────────────────
-    // NOTE: vault state is NOT cleared here — only cleared after tx confirms in doEarnWithdraw
-    setEarnWithdraw({
-      vault:           vaultForWithdraw,
-      amount:          livePosition.humanAmount.toFixed(livePosition.decimals),
-      positionAmount:  livePosition.humanAmount,
-      isYieldVaultClose: true, // signals doEarnWithdraw to close the Yield Vault on success
-    });
-    setShowEarnWithdraw(true);
-    push("ai", `Ready to withdraw **${livePosition.humanAmount.toFixed(4)} ${livePosition.symbol}** from Jupiter Earn. Choose 25%, 50%, 75%, or MAX below. Your vault stays active until the transaction confirms.`);
-  };
-  const doEarnDeposit = async () => {
-    const { vault, amount } = earnDeposit;
-    if (!amount || parseFloat(amount) <= 0) return;
-    if (!walletFull) { push("ai", "Connect your wallet first to deposit."); return; }
-    const provider = getActiveProvider();
-    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
-    if (!checkBalance(vault.token || "USDC", parseFloat(amount), "this Earn deposit")) return;
-
-    // Get the asset mint from the vault object
-    let assetMint = vault.assetMint;
-    let decimals  = vault.assetDecimals || 6;
-
-    // If mint is still missing (e.g. portfolio-fallback position with no address),
-    // re-fetch the positions endpoint — it always has token.address for every position.
-    if (!assetMint) {
-      const sym = (vault.token || "").toUpperCase();
-      try {
-        const posRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-        const posArr = await posRes.json().then(r => Array.isArray(r) ? r : (r?.data || r?.positions || []));
-        for (const p of (Array.isArray(posArr) ? posArr : [])) {
-          const tok  = p.token || p.asset || {};
-          const pSym = (tok.symbol || "").toUpperCase();
-          const pMint= tok.address || tok.id || p.assetMint || p.mint || null;
-          // Match by symbol, or take the first position if sym is unknown
-          if (pMint && (!sym || sym === "UNKNOWN" || pSym === sym || !pSym)) {
-            assetMint = pMint;
-            decimals  = tok.decimals ?? p.decimals ?? decimals;
-            break;
-          }
-        }
-      } catch {}
-    }
-    // Last resort: fetch /tokens and match by symbol
-    if (!assetMint) {
-      const sym = (vault.token || "").toUpperCase();
-      try {
-        const tokData = await jupFetch(`${JUP_EARN_API}/tokens`);
-        const tokArr  = Array.isArray(tokData) ? tokData : (tokData?.data || []);
-        const match   = tokArr.find(t => (t.asset?.symbol || t.token?.symbol || t.symbol || "").toUpperCase() === sym)
-                     || (tokArr.length === 1 ? tokArr[0] : null);
-        if (match) {
-          assetMint = match.asset?.address || match.token?.address || match.mint || match.address || null;
-          decimals  = match.asset?.decimals ?? match.token?.decimals ?? match.decimals ?? decimals;
-        }
-      } catch {}
-    }
-    if (!assetMint) {
-      push("ai", `Could not resolve the asset mint for **${vault.name}**. Please withdraw directly at [jup.ag/lend](https://jup.ag/lend).`);
-      return;
-    }
-    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
-
-    setShowEarnDeposit(false);
-    push("ai", `Preparing deposit of **${amount} ${vault.token}** into **${vault.name}** (${vault.apyDisplay} APY)…`);
-    try {
-      const res = await jupFetch(`${JUP_EARN_API}/deposit`, {
-        method: "POST",
-        body: { asset: assetMint, amount: amountRaw, signer: walletFull },
-      });
-      if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
-      if (!res.transaction) throw new Error("No transaction returned from Jupiter Lend.");
-
-      const binaryStr = atob(res.transaction);
-      const txBytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
-      const tx = VersionedTransaction.deserialize(txBytes);
-      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
-      const signedTx = await provider.signTransaction(tx);
-
-      // Send via Solana RPC
-      const signedBytes = signedTx.serialize();
-      const rpcRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedBytes), { encoding: "base64", skipPreflight: true }] },
-      });
-      const signature = rpcRes?.result;
-      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
-
-      push("ai", `Deposit sent — confirming on-chain…`);
-      await confirmTxLanded(signature);
-      setShowEarn(false);
-      push("ai", `Deposit confirmed ✓\n\n**${amount} ${vault.token}** is live in **${vault.name}** earning yield.\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
-      // ── Vault prompt: if no active vault, nudge the user to activate one ──
-      if (!yieldVaultLiveRef.current) {
-        setVaultPromptAmount(amount);
-        setShowVaultPrompt(true);
-      }
-      const updated = await fetchSolanaBalances(walletFull);
-      setPortfolio(updated);
-    } catch (err) {
-      const msg = err?.message || "Unknown error";
-      const hint = msg.toLowerCase().includes("insufficient") || msg.toLowerCase().includes("balance")
-        ? " Make sure you have enough " + (earnDeposit?.vault?.token || "tokens") + " in your wallet."
-        : "";
-      push("ai", `Earn deposit failed: ${msg}.${hint}`);
-    }
-  };
-
-  // ── Earn withdraw — POST /lend/v1/earn/withdraw ────────────────────────────
-  const doEarnWithdraw = async () => {
-    const { vault, amount } = earnWithdraw;
-    if (!amount || parseFloat(amount) <= 0) return;
-    if (!walletFull) { push("ai", "Connect your wallet first to withdraw."); return; }
-    const provider = getActiveProvider();
-    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
-
-    const assetMint = vault.assetMint;
-    if (!assetMint) {
-      push("ai", `Could not resolve the asset mint address for **${vault.name}**. This usually means the vault list hasn't loaded yet — please wait a moment and try again, or refresh the page.`);
-      return;
-    }
-    const decimals = vault.assetDecimals || 6;
-    const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
-
-    setShowEarnWithdraw(false);
-    push("ai", `Preparing withdrawal of **${amount} ${vault.token}** from **${vault.name}**…`);
-    try {
-      const res = await jupFetch(`${JUP_EARN_API}/withdraw`, {
-        method: "POST",
-        body: { asset: assetMint, amount: amountRaw, signer: walletFull },
-      });
-      if (res.error) throw new Error(typeof res.error === "object" ? JSON.stringify(res.error) : res.error);
-      if (!res.transaction) throw new Error("No transaction returned from Jupiter Lend withdraw.");
-
-      const binaryStr = atob(res.transaction);
-      const txBytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) txBytes[i] = binaryStr.charCodeAt(i);
-      const tx = VersionedTransaction.deserialize(txBytes);
-      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
-      const signedTx = await provider.signTransaction(tx);
-
-      const signedBytes = signedTx.serialize();
-      const rpcRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedBytes), { encoding: "base64", skipPreflight: true }] },
-      });
-      const signature = rpcRes?.result;
-      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
-
-      push("ai", `Withdrawal sent — confirming on-chain…`);
-      await confirmTxLanded(signature);
-      push("ai", `Withdrawal confirmed ✓\n\n**${amount} ${vault.token}** is back in your wallet from **${vault.name}**.\n\nTransaction: \`${signature.slice(0, 20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`);
-      // If this withdrawal was triggered from the Yield Vault, close the vault now that tx confirmed
-      if (earnWithdraw.isYieldVaultClose) {
-        clearInterval(yieldVaultIntervalRef.current);
-        clearInterval(yieldVaultSweepRef.current);
-        setYieldVault(null);
-        setYieldVaultStats(null);
-        saveYieldVault(null, null);
-        setYieldVaultLog([]);
-        saveYieldVaultLog([]);
-        setShowYieldVault(false);
-        push("ai", "Yield Vault closed. Your USDC is back in your wallet.");
-      }
-      const updated = await fetchSolanaBalances(walletFull);
-      setPortfolio(updated);
-    } catch (err) {
-      push("ai", `Withdrawal failed: ${err?.message || "Unknown error"}. Please check your earn balance and try again.`);
-    }
+    throw new Error("Transaction confirmation timed out.");
   };
 
   // ── Send — real onchain tx via POST /send/v1/craft-send ─────────────────────
@@ -7310,7 +5828,7 @@ function JupChatInner() {
           const hasEarn = earnArr?.some(e => parseFloat(e.underlyingBalance||e.underlyingAssets||0) > 0);
           if (!hasEarn) {
             const idleLabel = idleUSDC >= 20 ? `${idleUSDC.toFixed(2)} USDC` : `${idleSOL.toFixed(3)} SOL (~$${(idleSOL*solPrice).toFixed(2)})`;
-            push("ai", `**Idle funds detected** — you have **${idleLabel}** sitting uninvested.\n\nPut it to work earning **${idleUSDC>=20?"~5-10% APY (USDC)":"~8%+ APY (SOL)"}** in Jupiter Lend with one tap:\n\n*"Start yield vault with ${idleUSDC>=20?Math.floor(idleUSDC)+" USDC":Math.floor(idleSOL*10)/10+" SOL"}"*`);
+            push("ai", `**Idle funds detected** — you have **${idleLabel}** sitting uninvested.\n\nPut it to work earning **${idleUSDC>=20?"~5-10% APY (USDC)":"~8%+ APY (SOL)"}** in Jupiter Lend.\n\nType *"show earn vaults"* to get started.`);
           }
         } catch { /* non-fatal */ }
       }, 2500);
@@ -8234,7 +6752,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                   const idleLabel = idleUSDC >= 20
                     ? `${idleUSDC.toFixed(2)} USDC`
                     : `${idleSOL.toFixed(3)} SOL (~$${(idleSOL*solPrice).toFixed(2)})`;
-                  push("ai", `**Idle funds detected** — you have **${idleLabel}** sitting uninvested.\n\nPut it to work earning **${idleUSDC>=20?"~5-10% APY (USDC)":"~8%+ APY (SOL)"}** in Jupiter Lend with one tap:\n\n*"Start yield vault with ${idleUSDC>=20?Math.floor(idleUSDC)+" USDC":Math.floor(idleSOL*10)/10+" SOL"}"*`);
+                  push("ai", `**Idle funds detected** — you have **${idleLabel}** sitting uninvested.\n\nPut it to work earning **${idleUSDC>=20?"~5-10% APY (USDC)":"~8%+ APY (SOL)"}** in Jupiter Lend.\n\nType *"show earn vaults"* to get started.`);
                 }
               } catch { /* non-fatal */ }
             }, 2500);
@@ -8328,7 +6846,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                 const hasEarn = earnArr?.some(e => parseFloat(e.underlyingBalance||e.underlyingAssets||0) > 0);
                 if (!hasEarn) {
                   const idleLabel = idleUSDC >= 20 ? `${idleUSDC.toFixed(2)} USDC` : `${idleSOL.toFixed(3)} SOL (~$${(idleSOL*solPrice).toFixed(2)})`;
-                  push("ai", `**Idle funds detected** — you have **${idleLabel}** sitting uninvested.\n\nPut it to work earning **${idleUSDC>=20?"~5-10% APY (USDC)":"~8%+ APY (SOL)"}** in Jupiter Lend with one tap:\n\n*"Start yield vault with ${idleUSDC>=20?Math.floor(idleUSDC)+" USDC":Math.floor(idleSOL*10)/10+" SOL"}"*`);
+                  push("ai", `**Idle funds detected** — you have **${idleLabel}** sitting uninvested.\n\nPut it to work earning **${idleUSDC>=20?"~5-10% APY (USDC)":"~8%+ APY (SOL)"}** in Jupiter Lend.\n\nType *"show earn vaults"* to get started.`);
                 }
               } catch { /* non-fatal */ }
             }, 2500);
@@ -9572,7 +8090,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const updated = [...priceAlerts, newAlert];
           setPriceAlerts(updated);
           try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
-          fsSave(walletFull||"anon", { alerts: updated });
+          try { localStorage.setItem(`chatfi-alerts-${walletFull||'anon'}`, JSON.stringify(updated)); } catch {}
           push("ai", text + `\n\nAlert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**\nI'll notify you in chat when it triggers. You can set multiple alerts.`);
         }
 
@@ -9608,7 +8126,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const updated = [...volMonitors, newMon];
           setVolMonitors(updated);
           try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
-          fsSave(walletFull||"anon", { volmon: updated });
+          try { localStorage.setItem(`chatfi-volmon-${walletFull||'anon'}`, JSON.stringify(updated)); } catch {}
           const fmtThreshold = isVol ? `**${threshold}%** rolling std-dev · 10-sample window`
             : triggerType === "mc"          ? `MC ${condition} **$${(thresholdValue/1e9).toFixed(2)}B**`
             : triggerType === "volume"      ? `24h volume ${condition} **$${(thresholdValue/1e6).toFixed(2)}M**`
@@ -9658,57 +8176,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         setPredCLILog([]);
         setShowPredCLI(true);
         await autoPredBet({ category: cat, query, minEdge, maxAmount, side, limit, dryRun });
-
-      // ── SHOW_YIELD_VAULT — Yield-Gated Prediction Vault panel ────────────────
-      } else if (action === "SHOW_YIELD_VAULT") {
-        const cfg = {
-          depositAmount: actionData?.depositAmount || "100",
-          minEdge:       actionData?.minEdge       || "8",
-          maxBet:        actionData?.maxBet        || "5",
-          category:      actionData?.category      || null,
-        };
-        setYieldVaultCfg(cfg);
-        push("ai", text);
-        setShowYieldVault(true);
-        if (!earnVaults.length) fetchEarnVaults();
-        if (walletFull) fetchEarnUserPositions();
-
-      // ── FETCH_YIELD_VAULT — show vault status + history in chat ──────────────
-      } else if (action === "FETCH_YIELD_VAULT") {
-        const isWithdrawQuery = /withdraw|close vault|stop vault|exit vault|get.*usdc back|pull out|end vault/i.test(input);
-        if (!yieldVault) {
-          push("ai", isWithdrawQuery
-            ? "You don't have an active Yield Vault to withdraw from."
-            : "You don't have an active Yield Vault yet. Type **start yield vault** to open one — your USDC earns yield while the vault auto-bets prediction markets.");
-        } else if (isWithdrawQuery) {
-          // Route directly to the withdraw flow
-          // withdrawYieldVault() fetches fresh positions internally — no pre-fetch needed
-          setShowYieldVault(true);
-          await withdrawYieldVault();
-        } else {
-          const accrued = estimateAccruedYield(yieldVault, yieldVaultStats);
-          const stats   = yieldVaultStats || {};
-          const apy     = yieldVault.earnApy ? yieldVault.earnApy.toFixed(2) : "?";
-          const ageDays = Math.floor((Date.now() - yieldVault.depositedAt) / 86400000);
-          const isHistoryQuery = /history|activity|log|auto.?bet|what.*done|bets/i.test(input);
-          const logEntries = yieldVaultLog || [];
-          let statusMsg = `**Yield Vault Status**\n\nDeposited: **$${yieldVault.depositAmount} USDC**\nStatus: ${yieldVault.status === "active" ? "Active" : "Paused"}\nEarn APY: **${apy}%**\nAge: **${ageDays} day${ageDays !== 1 ? "s" : ""}**\nAccrued yield (est.): **$${accrued.toFixed(4)} USDC**\nAuto-bets placed: **${stats.betsPlaced || 0}**\nWinnings recycled: **$${(stats.winningsRecycled || 0).toFixed(4)} USDC**\nMin edge: **${yieldVault.minEdge}%** · Max bet: **$${yieldVault.maxBet}**\nCategory: **${yieldVault.category || "All markets"}**`;
-          if (isHistoryQuery || logEntries.length > 0) {
-            if (logEntries.length === 0) {
-              statusMsg += "\n\n**Activity Log**\nNo activity recorded yet — the vault scans every 3 minutes for qualifying markets.";
-            } else {
-              const logLines = logEntries.slice(0, 15).map((entry, i) => {
-                const time = new Date(entry.ts).toLocaleString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
-                const typeLabel = entry.type === "deposit" ? "Deposit" : entry.type === "bet" ? "Auto-bet" : entry.type === "win" ? "Win" : entry.type === "sweep" ? "Sweep" : entry.type === "error" ? "Error" : "Event";
-                return `${i + 1}. **${typeLabel}** · ${entry.detail} · _${time}_`;
-              }).join("\n");
-              statusMsg += `\n\n**Activity Log** (${logEntries.length} event${logEntries.length !== 1 ? "s" : ""})\n${logLines}`;
-              if (logEntries.length > 15) statusMsg += `\n_...and ${logEntries.length - 15} more. Open the vault panel to see all._`;
-            }
-          }
-          push("ai", statusMsg);
-          setShowYieldVault(true);
-        }
 
       // ── SHOW_PRED_CLI — open CLI dashboard ────────────────────────────────
       } else if (action === "SHOW_PRED_CLI") {
@@ -10465,7 +8932,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               const updated = [...priceAlerts, newAlert];
               setPriceAlerts(updated);
               try { localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
-              fsSave(walletFull||"anon", { alerts: updated });
+              try { localStorage.setItem(`chatfi-alerts-${walletFull||'anon'}`, JSON.stringify(updated)); } catch {}
               push("ai", `🔔 Alert set: **${alertToken}** ${alertCond} **$${alertPrice.toLocaleString()}**`);
 
             // ── SHOW_TRADE_JOURNAL ──────────────────────────────────────────────
@@ -12289,67 +10756,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           )}
 
           {/* ── Yield-Gated Prediction Vault ──────────────────────────────── */}
-          <YieldVaultPanel
-            open={showYieldVault}
-            onClose={() => setShowYieldVault(false)}
-            vault={yieldVault}
-            vaultStats={yieldVaultStats}
-            vaultLog={yieldVaultLog}
-            cfg={yieldVaultCfg}
-            setCfg={setYieldVaultCfg}
-            onDeposit={doYieldVaultDeposit}
-            onToggle={toggleYieldVaultStatus}
-            onWithdraw={withdrawYieldVault}
-            onCancel={cancelYieldVault}
-            onUpdateVault={updateYieldVaultCfg}
-            earnVaults={earnVaults}
-            earnUserPositions={earnUserPositions}
-            isBetting={yieldVaultBetting}
-            walletFull={walletFull}
-          />
 
-          {/* ── Post-earn-deposit Vault Prompt ────────────────────────────── */}
-          {showVaultPrompt && (
-            <div style={{ position:"fixed", inset:0, zIndex:400, display:"flex", alignItems:"flex-end", justifyContent:"center", background:"rgba(0,0,0,0.55)" }}
-              onClick={e => e.target===e.currentTarget && setShowVaultPrompt(false)}>
-              <div style={{ width:"100%", maxWidth:480, background:T.bg, borderRadius:"18px 18px 0 0", border:`1px solid ${T.border}`, borderBottom:"none", padding:"20px 18px 32px" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-                  <div style={{ width:34, height:34, borderRadius:8, background:T.accentBg, border:`1px solid ${T.accent}30`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="7" width="20" height="14" rx="2"/>
-                      <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
-                      <circle cx="12" cy="14" r="2"/>
-                    </svg>
-                  </div>
-                  <div>
-                    <div style={{ fontSize:14, fontWeight:700, color:T.text1 }}>Make your yield work harder</div>
-                    <div style={{ fontSize:11, color:T.text3 }}>Your {vaultPromptAmount} USDC is now earning in Jupiter Lend</div>
-                  </div>
-                  <button onClick={() => setShowVaultPrompt(false)} style={{ marginLeft:"auto", background:"none", border:"none", cursor:"pointer", padding:4, color:T.text3, fontSize:18, lineHeight:1 }}>×</button>
-                </div>
-                <div style={{ fontSize:12, color:T.text2, lineHeight:1.6, marginBottom:16, background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, padding:"10px 12px" }}>
-                  Activate <strong style={{ color:T.accent }}>Yield Vault</strong> to automatically use your accrued yield for:
-                  <br/>· <strong style={{ color:T.text1 }}>Auto-DCA</strong> — buy SOL/JUP when yield hits a threshold
-                  <br/>· <strong style={{ color:T.text1 }}>Auto-Predict</strong> — bet yield on prediction markets with edge
-                  <br/><br/>Your principal <strong style={{ color:T.text1 }}>never leaves Lend</strong>. The vault watches your earn position — if you withdraw, it closes automatically.
-                </div>
-                <div style={{ display:"flex", gap:8 }}>
-                  <button
-                    onClick={() => { setShowVaultPrompt(false); setYieldVaultCfg(c => ({ ...c, depositAmount: vaultPromptAmount })); setShowYieldVault(true); }}
-                    style={{ flex:2, padding:"12px 0", borderRadius:10, border:"none", background:T.accent, color:T.bg, fontSize:13, fontWeight:800, cursor:"pointer" }}
-                  >
-                    Activate Yield Vault
-                  </button>
-                  <button
-                    onClick={() => setShowVaultPrompt(false)}
-                    style={{ flex:1, padding:"12px 0", borderRadius:10, border:`1px solid ${T.border}`, background:"none", color:T.text3, fontSize:13, fontWeight:600, cursor:"pointer" }}
-                  >
-                    Not now
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* ── Earn / Lend vaults panel ──────────────────────────────────── */}
           {showEarn && (
@@ -13447,14 +11854,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               const updated = volMonitors.filter(m => m.id !== id);
               setVolMonitors(updated);
               try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
-              fsSave(walletFull||"anon", { volmon: updated });
+              try { localStorage.setItem(`chatfi-volmon-${walletFull||'anon'}`, JSON.stringify(updated)); } catch {}
             };
             const resetMon = (id) => {
               priceHistoryRef.current = { ...priceHistoryRef.current };
               const updated = volMonitors.map(m => m.id === id ? { ...m, triggered: false } : m);
               setVolMonitors(updated);
               try { localStorage.setItem(`chatfi-volmon-${walletFull||"anon"}`, JSON.stringify(updated)); } catch {}
-              fsSave(walletFull||"anon", { volmon: updated });
+              try { localStorage.setItem(`chatfi-volmon-${walletFull||'anon'}`, JSON.stringify(updated)); } catch {}
             };
             const VolCard = ({ mon }) => {
               const hist   = priceHistoryRef.current[mon.token] || [];
@@ -13590,7 +11997,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         setVolMonitors([]);
                         priceHistoryRef.current = {};
                         try { localStorage.removeItem(`chatfi-volmon-${walletFull||"anon"}`); } catch {}
-                        fsSave(walletFull||"anon", { volmon: [] });
+                        try { localStorage.setItem(`chatfi-volmon-${walletFull||'anon'}`, JSON.stringify([])); } catch {}
                       }
                     }} className="hov-btn"
                       style={{ fontSize:11, padding:"4px 10px", background:"transparent", border:`1px solid ${T.redBd}`, borderRadius:8, color:T.red, cursor:"pointer" }}>
@@ -14799,7 +13206,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             <span style={{ fontSize:12, color:T.text2 }}>
               <strong>{priceAlerts.filter(a=>!a.triggered).length}</strong> active alert{priceAlerts.filter(a=>!a.triggered).length>1?"s":""}: {priceAlerts.filter(a=>!a.triggered).map(a=>`${a.token} ${a.condition} $${a.target.toLocaleString()}`).join(" · ")}
             </span>
-            <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`,JSON.stringify(cleared));}catch{} fsSave(walletFull||"anon",{alerts:cleared}); }}
+            <button onClick={() => { const cleared = priceAlerts.map(a=>({...a,triggered:true})); setPriceAlerts(cleared); try{localStorage.setItem(`chatfi-alerts-${walletFull||"anon"}`,JSON.stringify(cleared));}catch{} try { localStorage.setItem(`chatfi-alerts-${walletFull||'anon'}`, JSON.stringify(cleared)); } catch {} }}
               style={{ background:"none", border:"none", color:T.text3, fontSize:12, cursor:"pointer", flexShrink:0 }}>Clear all</button>
           </div>
         )}
