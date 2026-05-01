@@ -2172,7 +2172,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
   };
 
   return (
-    <div style={{ position:"fixed", inset:0, zIndex:300, display:"flex", alignItems:"flex-end", justifyContent:"center", background:"rgba(0,0,0,0.6)", backdropFilter:"blur(4px)" }} onClick={e => e.target===e.currentTarget && onClose()}>
+    <div style={{ position:"fixed", inset:0, zIndex:300, display:"flex", alignItems:"flex-end", justifyContent:"center", background:"rgba(0,0,0,0.6)" }} onClick={e => e.target===e.currentTarget && onClose()}>
       <div style={{ width:"100%", maxWidth:480, background:T.bg, borderRadius:"18px 18px 0 0", border:`1px solid ${T.border}`, borderBottom:"none", maxHeight:"88vh", overflowY:"auto", padding:"0 0 32px" }}>
 
         {/* Header */}
@@ -5396,17 +5396,18 @@ function JupChatInner() {
   };
 
   const doYieldVaultDeposit = async (cfg) => {
-    if (!walletFull) { push("ai", "Connect your wallet first to start the Yield Vault."); return; }
+    if (!walletFull) { push("ai", "Connect your wallet first to start the Yield Vault."); setShowYieldVault(false); return; }
     const provider = getActiveProvider();
-    if (!provider) { push("ai", "Wallet provider not found."); return; }
+    if (!provider) { push("ai", "Wallet provider not found."); setShowYieldVault(false); return; }
     const depositAmt = parseFloat(cfg.depositAmount || "100");
-    if (depositAmt < 1) { push("ai", "Minimum deposit is $1."); return; }
+    if (depositAmt < 1) { push("ai", "Minimum deposit is $1."); setShowYieldVault(false); return; }
 
     // Determine which token to deposit — USDC (default), SOL, or JLP
     const depositToken = (cfg.depositToken || "USDC").toUpperCase();
     const depositBalance = portfolio?.[depositToken] ?? 0;
     if (depositBalance < depositAmt) {
       push("ai", `Insufficient ${depositToken} balance. You have **${depositBalance.toFixed(4)} ${depositToken}** but this deposit requires **${depositAmt} ${depositToken}**.`);
+      setShowYieldVault(false);
       return;
     }
 
@@ -5415,10 +5416,11 @@ function JupChatInner() {
     if (!targetVault) { await fetchEarnVaults(); targetVault = earnVaults.find(v => v.token?.toUpperCase() === depositToken); }
     if (!targetVault) {
       push("ai", `${depositToken} Earn vault not found. Try USDC, SOL, or JLP instead.`);
+      setShowYieldVault(false);
       return;
     }
     const assetMint = targetVault.assetMint || TOKEN_MINTS[depositToken];
-    if (!assetMint) { push("ai", `Could not resolve mint for ${depositToken} vault.`); return; }
+    if (!assetMint) { push("ai", `Could not resolve mint for ${depositToken} vault.`); setShowYieldVault(false); return; }
     const decimals  = targetVault.assetDecimals || (depositToken === "SOL" ? 9 : 6);
     const amountRaw = Math.floor(depositAmt * Math.pow(10, decimals)).toString();
     push("ai", `Depositing **${depositAmt} ${depositToken}** into Jupiter Lend Earn (${targetVault.apyDisplay} APY) for your Yield Vault…`);
