@@ -20,5 +20,11 @@
       "memory": 512,
       "maxDuration": 15
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/yield-vault-watcher",
+      "schedule": "*/5 * * * *"
+    }
+  ]
 }
