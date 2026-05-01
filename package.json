@@ -13,14 +13,15 @@
     "react-dom": "^18.3.1",
     "@solana/web3.js": "^1.98.0",
     "@solana/spl-token": "^0.4.9",
-    "@jup-ag/lend": "latest",
-    "@jup-ag/lend-read": "latest",
+    "@jup-ag/lend": "0.1.9",
+    "@jup-ag/lend-read": "0.1.9",
     "@coral-xyz/anchor": "^0.30.1",
     "bn.js": "^5.2.1",
     "@reown/appkit": "^1.7.3",
     "@reown/appkit-adapter-solana": "^1.7.3",
     "@privy-io/react-auth": "^2.4.0",
-    "firebase": "^11.0.0"
+    "firebase": "^11.0.0",
+    "firebase-admin": "^12.0.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
