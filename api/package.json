@@ -5,6 +5,8 @@
   "type": "module",
   "dependencies": {
     "@solana/web3.js": "^1.98.0",
+    "@solana/spl-token": "^0.4.9",
+    "@jup-ag/lend-read": "latest",
     "tweetnacl": "^1.0.3"
   }
 }
