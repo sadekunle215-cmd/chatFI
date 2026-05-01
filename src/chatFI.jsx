@@ -4756,35 +4756,30 @@ function JupChatInner() {
   const fetchEarnUserPositions = async () => {
     if (!walletFull) return;
     try {
-      // jupFetch proxy — injects x-api-key; ?users= per Jupiter docs
       const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`);
       let earnArr = Array.isArray(earnRaw) ? earnRaw
-        : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
-        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || null;
-      // Also try Object.values when earnArr is empty/null — handles { "WALLET": [...] } shape
+        : earnRaw?.data || earnRaw?.positions || earnRaw?.items || [];
+      // Handle { "WALLET": [...] } shape
       if (!Array.isArray(earnArr) || earnArr.length === 0) {
-        const vals = Object.values(earnRaw);
-        const flat = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []));
+        const vals = Object.values(earnRaw || {});
+        const flat = vals.flatMap(v => Array.isArray(v) ? v : []);
         if (flat.length > 0) earnArr = flat;
-        else if (!Array.isArray(earnArr)) earnArr = [];
+        else earnArr = [];
       }
       const map = {};
       earnArr.forEach(e => {
-        // Jupiter Earn /positions returns { token: { symbol, address, decimals }, underlyingBalance, underlyingAssets, shares }
-        // e.token is the primary field — e.asset is a fallback for older response shapes.
-        const jlTok = e.token || e.asset || {};
-        const underlying = jlTok.asset || e.underlyingToken || {};
-        const sym = (underlying.symbol || jlTok.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
+        // Per Jupiter docs: e.token = underlying asset { symbol, address, decimals }
+        const tok = e.token || {};
+        const sym = (tok.symbol || e.symbol || "").toUpperCase().replace(/^JL/, "");
         if (!sym) return;
-        // Use underlying asset decimals for amount conversion
-        const dec = underlying.decimals ?? jlTok.decimals ?? e.decimals ?? 6;
-        // Both fields are raw on-chain integers — always divide by decimals
-        const ub  = parseFloat(e.underlyingBalance || 0);
-        const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
+        const dec = tok.decimals ?? 6;
         const divisor = Math.pow(10, dec);
-        const amount = ub > 0 ? ub / divisor : (ua > 0 ? ua / divisor : 0);
-        const shares = parseFloat(e.shares || 0);
-        if (amount > 0 || shares > 0) {
+        // underlyingAssets = raw integer of user's balance in protocol (principal + interest)
+        // underlyingBalance = wallet balance — NOT the deposit amount, ignore for display
+        const ua = parseFloat(e.underlyingAssets ?? 0);
+        const amount = ua > 0 ? ua / divisor : 0;
+        const shares = parseFloat(e.shares ?? 0);
+        if (amount > 0 || shares > 1000) {
           map[sym] = { amount, amountRaw: ua, shares, decimals: dec };
         }
       });
