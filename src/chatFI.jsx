@@ -7991,6 +7991,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       setShowLendPos(false);
       setShowStudio(false); setShowStudioFees(false); setStudioFees(null);
       setShowBlog(false);
+      setShowYieldVault(false); setShowYieldVaultTracker(false);
       setPortfolioData(null);
       setEarnWithdraw({ vault:null, amount:"", positionAmount:0 });
       histRef.current = [];
@@ -8014,14 +8015,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       push("user", raw);
       fetchSavedVaults();
       fetchEarnPositionsForVault();
-      setShowYieldVaultTracker(true);
+      push("ai", "__YIELD_VAULT_TRACKER__");
       return;
     }
     if (/set yield vault|auto rotate yield|auto compound yield|setup vault/i.test(lower)) {
       setInput("");
       push("user", raw);
       fetchEarnPositionsForVault();
-      setShowYieldVault(true);
+      push("ai", "__YIELD_VAULT_PANEL__");
       return;
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -9846,13 +9847,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       } else if (action === "SET_YIELD_VAULT") {
         push("ai", text);
         fetchEarnPositionsForVault();
-        setShowYieldVault(true);
+        push("ai", "__YIELD_VAULT_PANEL__");
 
       } else if (action === "SHOW_YIELD_VAULT") {
         push("ai", text);
         fetchSavedVaults();
         fetchEarnPositionsForVault();
-        setShowYieldVaultTracker(true);
+        push("ai", "__YIELD_VAULT_TRACKER__");
 
       } else {
         push("ai", text);
@@ -10482,6 +10483,32 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   );
                 })() : m.text?.startsWith("__YIELD_VAULT_PROMPT__") ? (
                   <YieldVaultPromptCard onSetVault={() => { fetchEarnPositionsForVault(); setShowYieldVault(true); }} />
+                ) : m.text?.startsWith("__YIELD_VAULT_PANEL__") ? (
+                  <YieldVaultPanel
+                    show={true}
+                    onClose={() => setMsgs(prev => prev.filter(x => x.id !== m.id))}
+                    positions={yieldVaultPositions}
+                    loading={yieldVaultLoading}
+                    cfg={yieldVaultCfg}
+                    setCfg={setYieldVaultCfg}
+                    status={yieldVaultStatus}
+                    onSave={saveYieldVault}
+                    jupFetch={jupFetch}
+                  />
+                ) : m.text?.startsWith("__YIELD_VAULT_TRACKER__") ? (
+                  <YieldVaultTracker
+                    show={true}
+                    onClose={() => setMsgs(prev => prev.filter(x => x.id !== m.id))}
+                    vaults={yieldVaultSaved}
+                    onCancel={cancelYieldVault}
+                    onRefresh={() => { fetchSavedVaults(); fetchEarnPositionsForVault(); }}
+                    earnPositions={yieldVaultPositions}
+                    onSetVault={(p) => {
+                      setYieldVaultCfg(prev => ({ ...prev, selectedPositions: [p.mint] }));
+                      setMsgs(prev => prev.filter(x => x.id !== m.id));
+                      push("ai", "__YIELD_VAULT_PANEL__");
+                    }}
+                  />
                 ) : <div dangerouslySetInnerHTML={{ __html:fmt(m.text) }} />}
                 {pendingDirectAction && m.role === "ai" && m.id === msgs[msgs.length - 1]?.id && (
                   <div style={{ display:"flex", gap:8, marginTop:14 }}>
