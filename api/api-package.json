@@ -1,0 +1,10 @@
+{
+  "name": "chatfi-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0",
+    "tweetnacl": "^1.0.3"
+  }
+}
