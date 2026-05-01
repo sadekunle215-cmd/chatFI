@@ -8,6 +8,10 @@
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "functions": {
+    "api/yield-vault.js": {
+      "memory": 1024,
+      "maxDuration": 60
+    },
     "api/multiply.js": {
       "memory": 1024,
       "maxDuration": 30
