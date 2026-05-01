@@ -1,5 +1,7 @@
 // api/yield-vault.js
 // Yield Vault — CRUD + Cron Watcher merged into one file
+
+export const config = { runtime: "nodejs20.x" };
 //
 // Routes:
 //   GET  /api/yield-vault?wallet=xxx          → fetch active vaults for wallet
