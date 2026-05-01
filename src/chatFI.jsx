@@ -4770,14 +4770,17 @@ function JupChatInner() {
       earnArr.forEach(e => {
         // Jupiter Earn /positions returns { token: { symbol, address, decimals }, underlyingBalance, underlyingAssets, shares }
         // e.token is the primary field — e.asset is a fallback for older response shapes.
-        const tok = e.token || e.asset || {};
-        const sym = (tok.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
+        const jlTok = e.token || e.asset || {};
+        const underlying = jlTok.asset || e.underlyingToken || {};
+        const sym = (underlying.symbol || jlTok.symbol || e.assetSymbol || e.symbol || "").toUpperCase();
         if (!sym) return;
-        const dec = tok.decimals ?? e.decimals ?? 6;
-        // underlyingBalance is already human-readable; underlyingAssets is the raw integer — match normaliseEarnPos logic
+        // Use underlying asset decimals for amount conversion
+        const dec = underlying.decimals ?? jlTok.decimals ?? e.decimals ?? 6;
+        // Both fields are raw on-chain integers — always divide by decimals
         const ub  = parseFloat(e.underlyingBalance || 0);
         const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
-        const amount = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
+        const divisor = Math.pow(10, dec);
+        const amount = ub > 0 ? ub / divisor : (ua > 0 ? ua / divisor : 0);
         const shares = parseFloat(e.shares || 0);
         if (amount > 0 || shares > 0) {
           map[sym] = { amount, amountRaw: ua, shares, decimals: dec };
@@ -4807,24 +4810,30 @@ function JupChatInner() {
         else if (!Array.isArray(positions)) positions = [];
       }
       const normalised = positions.map((p) => {
-        // p.token is primary field per Jupiter API; p.asset is fallback
-        const tok = p.token || {};
-        const asset = p.asset || p.underlyingToken || {};
-        const rawSym = (tok.symbol || asset.symbol || p.assetSymbol || p.symbol || "").toUpperCase();
-        // Strip "jl" prefix from jlToken symbols, skip generic "EARN" label
-        const sym = rawSym === "EARN" ? (tok.name || asset.name || "").replace(/^jl/i, "") || rawSym
+        // Per Jupiter API docs: p.token is the jlToken (receipt token); p.token.asset is the underlying
+        const jlTok = p.token || {};
+        const underlying = jlTok.asset || p.asset || p.underlyingToken || {};
+        // Symbol: prefer underlying asset symbol, strip jl prefix from jlToken symbol as fallback
+        const rawSym = (underlying.symbol || jlTok.symbol || p.assetSymbol || p.symbol || "").toUpperCase();
+        const sym = rawSym === "EARN" ? (underlying.name || jlTok.name || "").replace(/^jl/i, "") || rawSym
           : rawSym.startsWith("JL") ? rawSym.slice(2) : rawSym;
-        const mint = p.assetMint || tok.address || asset.address || p.underlyingToken?.address || p.mint || null;
-        const dec = tok.decimals ?? asset.decimals ?? p.decimals ?? 6;
+        // mint = underlying asset address; jlMint = jlToken address
+        const mint = jlTok.assetAddress || underlying.address || p.assetMint || p.mint || null;
+        const jlMint = jlTok.address || jlTok.id || null;
+        // Decimals: use underlying asset decimals for amount conversion
+        const dec = underlying.decimals ?? jlTok.decimals ?? p.decimals ?? 6;
+        const divisor = Math.pow(10, dec);
+        // underlyingAssets and underlyingBalance are raw on-chain integers (strings from API) — always divide
         const ub = parseFloat(p.underlyingBalance || 0);
         const ua = parseFloat(p.underlyingAssets || p.underlying_assets || p.amount || p.balance || p.depositedAmount || 0);
-        const amount = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
+        const ubHuman = ub > 0 ? ub / divisor : 0;
+        const uaHuman = ua > 0 ? ua / divisor : 0;
+        const amount = ubHuman > 0 ? ubHuman : uaHuman;
         const shares = parseFloat(p.shares || 0);
-        const apy = p.apy ?? p.supplyApy ?? p.currentApy ?? null;
+        const apy = jlTok.totalRate ?? jlTok.supplyRate ?? p.apy ?? p.supplyApy ?? p.currentApy ?? null;
         const earned = p.earnedAmount ?? p.yieldEarned ?? p.interestEarned ?? p.accruedInterest ?? null;
-        const jlMint = tok.address || tok.id || null;
-        const logo = tok.logoURI || asset.logoURI || `https://img.jup.ag/tokens/${mint}`;
-        return { sym, mint, jlMint, dec, amount, shares, apy, earned, logo, name: tok.name || asset.name || `Jupiter Earn ${sym}`, raw: p };
+        const logo = underlying.logo_url || underlying.logoURI || jlTok.logoURI || `https://img.jup.ag/tokens/${mint}`;
+        return { sym, mint, jlMint, dec, amount, shares, apy, earned, logo, name: underlying.name || jlTok.name || `Jupiter Earn ${sym}`, raw: p };
       }).filter((p) => p.mint && (p.amount > 0 || p.shares > 0));
       setYieldVaultPositions(normalised);
     } catch (e) { console.error("[YieldVault] fetchEarnPositionsForVault:", e.message); }
@@ -5675,11 +5684,12 @@ function JupChatInner() {
         ? (underlyingTok.symbol || e.assetSymbol || tok.name?.replace(/^jl/i, "") || "")
         : (rawSym.startsWith("jl") ? rawSym.slice(2) : rawSym);  // "jlUSDG" → "USDG"
 
-      const dec = underlyingTok.decimals ?? tok.decimals ?? e.decimals ?? 6;
-      // underlyingBalance is already human-readable; underlyingAssets is the raw integer
+      const dec = underlyingTok.decimals ?? tok.asset?.decimals ?? tok.decimals ?? e.decimals ?? 6;
+      // underlyingAssets and underlyingBalance are always raw on-chain integers — always divide
       const ub      = parseFloat(e.underlyingBalance || 0);
       const ua      = parseFloat(e.underlyingAssets  || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
-      const amount  = ub > 0 ? ub : (ua > 1e6 ? ua / Math.pow(10, dec) : ua);
+      const divisor = Math.pow(10, dec);
+      const amount  = ub > 0 ? ub / divisor : ua / divisor;
       const amountRaw = ua; // keep raw for the withdraw body
       return {
         _type:   "earn",
