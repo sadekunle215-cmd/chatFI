@@ -4798,63 +4798,81 @@ function JupChatInner() {
     if (!walletFull) return;
     setYieldVaultLoading(true);
     try {
-      // jupFetch proxy — injects x-api-key; ?users= per Jupiter docs
       const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`);
-      // Normalise response shape — matches fetchEarnUserPositions logic
+
+      // Jupiter returns a flat array of positions
       let positions = Array.isArray(earnRaw) ? earnRaw
-        : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
-        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || null;
-      // Handle { "WALLET_ADDRESS": [...] } or nested object shapes
+        : earnRaw?.data || earnRaw?.positions || earnRaw?.items || [];
+
+      // Handle { "WALLET_ADDRESS": [...] } shape
       if (!Array.isArray(positions) || positions.length === 0) {
         const vals = Object.values(earnRaw || {});
-        const flat = vals.flatMap(v => Array.isArray(v) ? v : (v && typeof v === "object" ? Object.values(v).flatMap(vv => Array.isArray(vv) ? vv : []) : []));
+        const flat = vals.flatMap(v => Array.isArray(v) ? v : []);
         if (flat.length > 0) positions = flat;
-        else if (!Array.isArray(positions)) positions = [];
+        else positions = [];
       }
+
       const normalised = positions.map((p) => {
-        // Per Jupiter API docs: p.token is the jlToken (receipt token); p.token.asset is the underlying
-        const jlTok = p.token || {};
-        const underlying = jlTok.asset || p.asset || p.underlyingToken || {};
-        // Symbol: prefer underlying asset symbol, strip jl prefix from jlToken symbol as fallback
-        const rawSym = (underlying.symbol || jlTok.symbol || p.assetSymbol || p.symbol || "").toUpperCase();
-        const sym = rawSym === "EARN" ? (underlying.name || jlTok.name || "").replace(/^jl/i, "") || rawSym
-          : rawSym.startsWith("JL") ? rawSym.slice(2) : rawSym;
-        // mint = underlying asset address; jlMint = jlToken address
-        const mint = jlTok.assetAddress || underlying.address || p.assetMint || p.mint || null;
-        const jlMint = jlTok.address || jlTok.id || null;
-        // Decimals: use underlying asset decimals for amount conversion
-        const dec = underlying.decimals ?? jlTok.decimals ?? p.decimals ?? 6;
+        // Per Jupiter docs: p.token is the underlying asset (SOL, USDC, etc.)
+        const tok = p.token || {};
+
+        // Symbol — strip jl prefix if present
+        const rawSym = (tok.symbol || p.symbol || "").toUpperCase();
+        const sym = rawSym.startsWith("JL") ? rawSym.slice(2) : rawSym;
+
+        // Mint address of underlying asset
+        const mint = tok.address || tok.id || p.assetMint || null;
+
+        // Decimals from token metadata
+        const dec = tok.decimals ?? 6;
         const divisor = Math.pow(10, dec);
-        // Log raw API fields so we can see exactly what Jupiter returns
-        console.log("[YieldVault] raw position fields:", {
-          underlyingBalance: p.underlyingBalance,
-          underlyingAssets: p.underlyingAssets,
-          amount: p.amount,
-          balance: p.balance,
-          depositedAmount: p.depositedAmount,
-          shares: p.shares,
-          dec,
-        });
-        // underlyingBalance — raw on-chain integer, divide by decimals
-        const ub = parseFloat(p.underlyingBalance || 0);
-        const ubHuman = ub > 0 ? ub / divisor : 0;
-        // underlyingAssets — raw on-chain integer, divide by decimals
-        const ua = parseFloat(p.underlyingAssets || p.underlying_assets || 0);
-        const uaHuman = ua > 0 ? ua / divisor : 0;
-        // fallback: p.amount / p.balance / p.depositedAmount — check if raw or human
-        const rawFallback = parseFloat(p.amount || p.balance || p.depositedAmount || 0);
-        // If fallback looks like a raw int (>= 1000 and no decimal part typical of human amounts), divide it
-        const fallback = rawFallback >= 1000 && Number.isInteger(rawFallback) ? rawFallback / divisor : rawFallback;
-        const amount = ubHuman > 0 ? ubHuman : uaHuman > 0 ? uaHuman : fallback;
-        // shares is the most reliable signal — Jupiter zeroes this on full withdrawal.
-        // Use a dust threshold of 1000 raw share units to ignore leftover rounding dust.
-        const shares = parseFloat(p.shares || p.sharesAmount || p.shareAmount || 0);
+
+        // ── AMOUNT ──────────────────────────────────────────────────────────────
+        // underlyingAssets = user's balance IN the protocol (principal + interest)
+        // This is a raw integer — divide by decimals to get human amount
+        // underlyingBalance = wallet balance (NOT deposit) — ignore for display
+        const ua = parseFloat(p.underlyingAssets ?? 0);
+        const amount = ua > 0 ? ua / divisor : 0;
+
+        // ── SHARES ──────────────────────────────────────────────────────────────
+        // shares = raw jlToken balance. Position is active if shares > dust (1000)
+        const shares = parseFloat(p.shares ?? 0);
         const hasActivePosition = shares > 1000;
-        const apy = jlTok.totalRate ?? jlTok.supplyRate ?? p.apy ?? p.supplyApy ?? p.currentApy ?? null;
-        const earned = p.earnedAmount ?? p.yieldEarned ?? p.interestEarned ?? p.accruedInterest ?? null;
-        const logo = underlying.logo_url || underlying.logoURI || jlTok.logoURI || `https://img.jup.ag/tokens/${mint}`;
-        return { sym, mint, jlMint, dec, amount, shares, hasActivePosition, apy, earned, logo, name: underlying.name || jlTok.name || `Jupiter Earn ${sym}`, raw: p };
-      }).filter((p) => p.mint && p.hasActivePosition);
+
+        // ── APY ─────────────────────────────────────────────────────────────────
+        // Comes from token metadata — basis points (e.g. 41500 = 4.15%)
+        const apy = tok.totalRate ?? tok.supplyRate ?? null;
+
+        // ── EARNED ──────────────────────────────────────────────────────────────
+        // Not available in /positions — use /earnings endpoint separately if needed
+        const earned = null;
+
+        // ── LOGO ────────────────────────────────────────────────────────────────
+        const logo = tok.logoURI || tok.logo_url || `https://img.jup.ag/tokens/${mint}`;
+
+        console.log("[YieldVault] normalised position:", {
+          sym, mint, dec, shares, ua, amount, apy,
+          raw_underlyingAssets: p.underlyingAssets,
+          raw_underlyingBalance: p.underlyingBalance,
+          raw_shares: p.shares,
+        });
+
+        return {
+          sym,
+          mint,
+          jlMint: null,
+          dec,
+          amount,
+          shares,
+          hasActivePosition,
+          apy,
+          earned,
+          logo,
+          name: tok.name || `Jupiter Earn ${sym}`,
+          raw: p,
+        };
+      }).filter(p => p.mint && p.hasActivePosition);
+
       setYieldVaultPositions(normalised);
     } catch (e) { console.error("[YieldVault] fetchEarnPositionsForVault:", e.message); }
     setYieldVaultLoading(false);
