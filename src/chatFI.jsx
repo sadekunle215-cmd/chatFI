@@ -3813,24 +3813,11 @@ function JupChatInner() {
     } catch {}
 
     // ── 7. Earn positions ─────────────────────────────────────────────────────
-    // Try direct fetch first — the earn positions endpoint is publicly readable
-    // and going through the proxy fails silently when API key is missing.
-    try {
-      const earnRes = await fetch(JUP_EARN_API + "/positions?wallets=" + walletAddress);
-      if (!earnRes.ok) throw new Error("not ok");
-      const earn = await earnRes.json();
-      if (!earn || earn.error) throw new Error("empty");
-      let earnArr = Array.isArray(earn) ? earn
-        : earn.data || earn.positions || earn.earnPositions || earn.result || earn.items || earn.balances || [];
-      if (!Array.isArray(earnArr)) {
-        earnArr = Object.values(earn).filter(v => v && typeof v === "object" && !Array.isArray(v));
-      }
-      if (earnArr.length) results.earnPositions = earnArr;
-    } catch {}
-    // Proxy fallback
+    // Use jupFetch proxy — injects x-api-key required by Jupiter Earn API.
+    // Query param is ?users= per official Jupiter docs (not ?wallets=).
     if (!results.earnPositions?.length) {
       try {
-        const earn = await jupFetch(JUP_EARN_API + "/positions?wallets=" + walletAddress);
+        const earn = await jupFetch(JUP_EARN_API + "/positions?users=" + walletAddress);
         if (earn && !earn.error) {
           let earnArr = Array.isArray(earn) ? earn
             : earn.data || earn.positions || earn.earnPositions || earn.result || earn.items || earn.balances || [];
@@ -4767,9 +4754,8 @@ function JupChatInner() {
   const fetchEarnUserPositions = async () => {
     if (!walletFull) return;
     try {
-      // Direct fetch — same pattern as fetchPortfolioData (NOT jupFetch proxy)
-      const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-      const earnRaw = await earnRes.json();
+      // jupFetch proxy — injects x-api-key; ?users= per Jupiter docs
+      const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`);
       let earnArr = Array.isArray(earnRaw) ? earnRaw
         : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
         || earnRaw?.result || earnRaw?.items || earnRaw?.balances || null;
@@ -4807,8 +4793,8 @@ function JupChatInner() {
     if (!walletFull) return;
     setYieldVaultLoading(true);
     try {
-      const res = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-      const earnRaw = await res.json();
+      // jupFetch proxy — injects x-api-key; ?users= per Jupiter docs
+      const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`);
       // Normalise response shape — matches fetchEarnUserPositions logic
       let positions = Array.isArray(earnRaw) ? earnRaw
         : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
@@ -5710,8 +5696,7 @@ function JupChatInner() {
     };
 
     try {
-      const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`);
-      const earnRaw = await earnRes.json();
+      const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`);
       let earnArr = Array.isArray(earnRaw) ? earnRaw
         : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
         || earnRaw?.result || earnRaw?.items || earnRaw?.balances || null;
@@ -6428,7 +6413,7 @@ function JupChatInner() {
           const idleSOL  = balances.SOL  || 0;
           const solPrice = live.SOL || 0;
           const idleUSD  = idleUSDC + idleSOL * solPrice;
-          const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${address}`).then(r=>r.json()).catch(()=>null);
+          const earnRes = await jupFetch(`${JUP_EARN_API}/positions?users=${address}`).catch(()=>null);
           const earnArr = Array.isArray(earnRes) ? earnRes : (earnRes?.data || Object.values(earnRes||{}).flatMap(v=>Array.isArray(v)?v:[]));
           const activeEarn = (earnArr || []).filter(e => parseFloat(e.underlyingBalance||e.underlyingAssets||0) > 0);
           if (activeEarn.length > 0) {
@@ -7349,7 +7334,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                 const idleSOL  = balances.SOL  || 0;
                 const solPrice = live.SOL || 0;
                 const idleUSD  = idleUSDC + idleSOL * solPrice;
-                const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${reownAddress}`).then(r=>r.json()).catch(()=>null);
+                const earnRes = await jupFetch(`${JUP_EARN_API}/positions?users=${reownAddress}`).catch(()=>null);
                 const earnArr = Array.isArray(earnRes) ? earnRes : (earnRes?.data || Object.values(earnRes||{}).flatMap(v=>Array.isArray(v)?v:[]));
                 const activeEarn = (earnArr || []).filter(e => parseFloat(e.underlyingBalance||e.underlyingAssets||0) > 0);
                 if (activeEarn.length > 0) {
@@ -7444,7 +7429,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                 const idleSOL  = balances.SOL  || 0;
                 const solPrice = live.SOL || 0;
                 const idleUSD  = idleUSDC + idleSOL * solPrice;
-                const earnRes = await fetch(`${JUP_EARN_API}/positions?wallets=${address}`).then(r=>r.json()).catch(()=>null);
+                const earnRes = await jupFetch(`${JUP_EARN_API}/positions?users=${address}`).catch(()=>null);
                 const earnArr = Array.isArray(earnRes) ? earnRes : (earnRes?.data || Object.values(earnRes||{}).flatMap(v=>Array.isArray(v)?v:[]));
                 const activeEarn = (earnArr || []).filter(e => parseFloat(e.underlyingBalance||e.underlyingAssets||0) > 0);
                 if (activeEarn.length > 0) {
@@ -7708,7 +7693,7 @@ Order: \`${orderKey.slice(0,20)}…\`
 
         const [portRes, earnRes, recurRes] = await Promise.allSettled([
           fetch(`${JUP_PORTFOLIO}/positions/${walletFull}`).then(r=>r.json()),
-          fetch(`${JUP_EARN_API}/positions?wallets=${walletFull}`).then(r=>r.json()),
+          jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`),
           fetch(`${JUP_RECUR_BASE}/getRecurringOrders?user=${walletFull}&orderStatus=active`).then(r=>r.json()),
         ]);
 
