@@ -23,7 +23,7 @@
   },
   "crons": [
     {
-      "path": "/api/yield-vault-watcher",
+      "path": "/api/yield-vault?cron=1",
       "schedule": "*/5 * * * *"
     }
   ]
