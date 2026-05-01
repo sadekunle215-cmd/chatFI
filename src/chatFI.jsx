@@ -4803,7 +4803,6 @@ function JupChatInner() {
     const inviteCode = generateInviteCode();
 
     setSendStatus("signing");
-    setShowSend(false);
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
       // Server receives our inviteCode, derives Keypair.fromSeed(SHA-256("invite:"+code)),
@@ -4837,6 +4836,7 @@ function JupChatInner() {
       const inviteLink = `https://jup.ag/send?code=${inviteCode}`;
       setSendLink(inviteLink);
       setSendStatus("done");
+      setShowSend(false);
       push("ai",
         `Send confirmed ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n` +
         `**Invite link:**\n\`${inviteLink}\`\n\n` +
