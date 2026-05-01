@@ -4775,6 +4775,17 @@ function JupChatInner() {
     return Keypair.fromSeed(new Uint8Array(hashBuffer));
   };
 
+  const checkBalance = (token, amount, label) => {
+    if (!portfolio || !walletFull) return true;
+    const sym = token?.toUpperCase();
+    const bal = portfolio[sym] ?? 0;
+    if (amount > 0 && bal < amount) {
+      push("ai", `Insufficient balance for ${label}. You have **${bal.toFixed(4)} ${sym}** but need **${amount} ${sym}**.`);
+      return false;
+    }
+    return true;
+  };
+
   const doSend = async (cfgOverride) => {
     const { token, amount, mint } = cfgOverride || sendCfg;
     if (!amount || parseFloat(amount) <= 0) return;
