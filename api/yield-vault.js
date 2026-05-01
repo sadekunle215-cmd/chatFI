@@ -68,7 +68,7 @@ const bytesToB64 = (bytes) => {
 // ── Fetch live Jupiter Earn position value ────────────────────────────────────
 async function fetchEarnPositionValue(walletAddress, earnMint) {
   try {
-    const res = await fetch(`${JUP_EARN_API}/positions?wallets=${walletAddress}`);
+    const res = await fetch(`${JUP_EARN_API}/positions?users=${walletAddress}`);
     if (!res.ok) throw new Error(`Earn API ${res.status}`);
     const data = await res.json();
     let positions = Array.isArray(data)
@@ -83,10 +83,11 @@ async function fetchEarnPositionValue(walletAddress, earnMint) {
         p.token?.address === earnMint
     );
     if (!pos) return null;
-    const dec = pos.asset?.decimals ?? pos.token?.decimals ?? pos.decimals ?? 6;
-    const ub = parseFloat(pos.underlyingBalance || 0);
-    const ua = parseFloat(pos.underlyingAssets || pos.underlying_assets || pos.amount || 0);
-    const currentAmount = ub > 0 ? ub : ua > 1e6 ? ua / Math.pow(10, dec) : ua;
+    const dec = pos.token?.decimals ?? pos.asset?.decimals ?? pos.decimals ?? 6;
+    // underlyingAssets = raw integer of user's balance in protocol (principal + interest)
+    // underlyingBalance = wallet balance (NOT deposit) — ignore
+    const ua = parseFloat(pos.underlyingAssets ?? 0);
+    const currentAmount = ua > 0 ? ua / Math.pow(10, dec) : 0;
     return { currentAmount, decimals: dec, apy: pos.apy ?? pos.supplyApy ?? null, raw: pos };
   } catch (e) {
     console.error(`[YieldVault] fetchEarnPositionValue error:`, e.message);
