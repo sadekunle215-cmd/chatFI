@@ -5218,7 +5218,7 @@ function JupChatInner() {
     try {
       const data = await jupFetch(`${JUP_EARN_API}/deposit`, {
         method: "POST",
-        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw },
+        body: { signer: walletFull, asset: vault.assetMint, amount: amountRaw },
       });
       if (!data?.transaction) throw new Error(data?.error?.message || data?.error || `Earn deposit API returned: ${JSON.stringify(data).slice(0, 200)}`);
 
@@ -5267,7 +5267,7 @@ function JupChatInner() {
     try {
       const data = await jupFetch(`${JUP_EARN_API}/withdraw`, {
         method: "POST",
-        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw },
+        body: { signer: walletFull, asset: vault.assetMint, amount: amountRaw },
       });
       if (!data?.transaction) throw new Error(data?.error?.message || data?.error || `Earn withdraw API returned: ${JSON.stringify(data).slice(0, 200)}`);
 
