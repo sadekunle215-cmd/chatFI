@@ -2235,10 +2235,10 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                 })()}
 
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12 }}>
-                  {vault.vaultMode === "dca"
-                    ? [{label:"DCA Swaps",value:vaultStats?.betsPlaced||0,color:"#f6ad55"},{label:"Swapped",value:`$${(vaultStats?.winningsRecycled||0).toFixed(3)}`,color:T.teal}]
-                    : [{label:"Auto-bets",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Recycled",value:`$${(vaultStats?.winningsRecycled||0).toFixed(3)}`,color:T.teal}]
-                  }.map(s=>(
+                  {(vault.vaultMode === "dca"
+                    ? [{label:"DCA Swaps",value:vaultStats?.betsPlaced||0,color:"#f6ad55"},{label:"Swapped",value:"$"+((vaultStats?.winningsRecycled||0).toFixed(3)),color:T.teal}]
+                    : [{label:"Auto-bets",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Recycled",value:"$"+((vaultStats?.winningsRecycled||0).toFixed(3)),color:T.teal}]
+                  ).map(s=>(
                     <div key={s.label} style={{ background:"rgba(0,0,0,0.25)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
                       <div style={{ fontSize:9, color:T.text3, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:3 }}>{s.label}</div>
                       <div style={{ fontSize:13, fontWeight:700, color:s.color }}>{s.value}</div>
@@ -2248,11 +2248,11 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                   {!editingCfg ? (
                     <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-                      {vault.vaultMode === "dca"
-                        ? [`Target: ${vault.dcaToken||"SOL"}`,`Threshold: $${vault.dcaThreshold||5}`]
-                        : [`Min edge ${vault.minEdge}%`,`Max $${vault.maxBet}/bet`,vault.category?vault.category.charAt(0).toUpperCase()+vault.category.slice(1):"All markets"]
-                      }.map(tag=>(
-                        <span key={tag} style={{ fontSize:10, color:T.text3, background:T.surface, border:`1px solid ${T.border}`, borderRadius:20, padding:"2px 8px" }}>{tag}</span>
+                      {(vault.vaultMode === "dca"
+                        ? ["Target: "+(vault.dcaToken||"SOL"),"Threshold: $"+(vault.dcaThreshold||5)]
+                        : ["Min edge "+(vault.minEdge)+"%","Max $"+(vault.maxBet)+"/bet",vault.category?vault.category.charAt(0).toUpperCase()+vault.category.slice(1):"All markets"]
+                      ).map(tag=>(
+                        <span key={tag} style={{ fontSize:10, color:T.text3, background:T.surface, border:"1px solid "+T.border, borderRadius:20, padding:"2px 8px" }}>{tag}</span>
                       ))}
                       <button onClick={()=>{ setLiveEdge(String(vault.minEdge)); setLiveMaxBet(String(vault.maxBet)); setLiveDcaToken(vault.dcaToken||"SOL"); setLiveDcaThreshold(String(vault.dcaThreshold||5)); setEditingCfg(true); }} style={{ fontSize:10, color:T.accent, background:"transparent", border:`1px solid ${T.accent}40`, borderRadius:20, padding:"2px 8px", cursor:"pointer", fontWeight:600 }}>✎ Adjust</button>
                     </div>
@@ -2414,23 +2414,13 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
               {/* Deposit amount */}
               <div style={{ marginBottom:10 }}>
                 <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Deposit Token</div>
-                <div style={{ display:"flex", gap:5, marginBottom:10, flexWrap:"wrap" }}>
-                  {[
-                    { id:"USDC", label:"USDC", apy: earnVaults?.find(v=>v.token==="USDC")?.apyDisplay||"~5%", note:"Stable, low risk" },
-                    { id:"SOL",  label:"SOL",  apy: earnVaults?.find(v=>v.token==="SOL")?.apyDisplay||"~8%",  note:"Higher APY" },
-                    { id:"JLP",  label:"JLP",  apy: earnVaults?.find(v=>v.token==="JLP")?.apyDisplay||"~12%", note:"Highest APY" },
-                  ].map(opt=>{
-                    const active = (cfg.depositToken||"USDC")===opt.id;
-                    return (
-                      <button key={opt.id} onClick={()=>setCfg(c=>({...c,depositToken:opt.id}))}
-                        style={{ flex:1, minWidth:"80px", padding:"8px 0", border:`1px solid ${active?T.accent:T.border}`, borderRadius:9, background:active?T.accentBg:T.surface, color:active?T.accent:T.text3, fontSize:11, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
-                        <div style={{ fontSize:12 }}>{opt.label}</div>
-                        <div style={{ fontSize:10, opacity:0.8 }}>{opt.apy}</div>
-                      </button>
-                    );
-                  })}
+                <div style={{ display:"flex", gap:5, marginBottom:10 }}>
+                  <div style={{ flex:1, padding:"8px 0", border:`1px solid ${T.accent}`, borderRadius:9, background:T.accentBg, color:T.accent, fontSize:11, fontWeight:700, textAlign:"center" }}>
+                    <div style={{ fontSize:12 }}>USDC</div>
+                    <div style={{ fontSize:10, opacity:0.8 }}>{earnVaults?.find(v=>v.token==="USDC")?.apyDisplay||"~5%"}</div>
+                  </div>
                 </div>
-                <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Deposit Amount ({cfg.depositToken||"USDC"})</div>
+                <div style={{ fontSize:11, color:T.text3, marginBottom:5, fontWeight:600, textTransform:"uppercase", letterSpacing:"0.06em" }}>Deposit Amount (USDC)</div>
                 <div style={{ display:"flex", gap:6 }}>
                   <input type="number" min="10" step="10" value={cfg.depositAmount} onChange={e=>setCfg(c=>({...c,depositAmount:e.target.value}))} placeholder="100" style={{ flex:1, padding:"9px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.surface, color:T.text1, fontSize:14, outline:"none" }}/>
                   {["50","100","500"].map(v=><button key={v} onClick={()=>setCfg(c=>({...c,depositAmount:v}))} style={{ padding:"9px 12px", border:`1px solid ${cfg.depositAmount===v?T.accent:T.border}`, borderRadius:8, background:cfg.depositAmount===v?T.accentBg:T.surface, color:cfg.depositAmount===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>)}
