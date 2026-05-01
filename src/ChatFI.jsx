@@ -5216,16 +5216,18 @@ function JupChatInner() {
     push("ai", `Depositing **${amount} ${vault.token}** into ${vault.name}…`);
 
     try {
-      const res = await fetch(`${JUP_EARN_API}/deposit`, {
+      const data = await jupFetch(`${JUP_EARN_API}/deposit`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 }),
+        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 },
       });
-      if (!res.ok) throw new Error(`Earn deposit API ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      const data = await res.json();
-      if (!data?.transaction) throw new Error("No transaction returned from earn deposit API.");
+      if (!data?.transaction) throw new Error(data?.error?.message || data?.error || "No transaction returned from earn deposit API.");
 
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
+      try {
+        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
+        tx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal */ }
       const signedTx = await provider.signTransaction(tx);
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
@@ -5263,16 +5265,18 @@ function JupChatInner() {
     push("ai", `Withdrawing **${amount} ${vault.token}** from ${vault.name}…`);
 
     try {
-      const res = await fetch(`${JUP_EARN_API}/withdraw`, {
+      const data = await jupFetch(`${JUP_EARN_API}/withdraw`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 }),
+        body: { owner: walletFull, mint: vault.assetMint, amount: amountRaw, slippageBps: 50 },
       });
-      if (!res.ok) throw new Error(`Earn withdraw API ${res.status}: ${(await res.text()).slice(0, 200)}`);
-      const data = await res.json();
-      if (!data?.transaction) throw new Error("No transaction returned from earn withdraw API.");
+      if (!data?.transaction) throw new Error(data?.error?.message || data?.error || "No transaction returned from earn withdraw API.");
 
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
+      try {
+        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
+        tx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal */ }
       const signedTx = await provider.signTransaction(tx);
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
