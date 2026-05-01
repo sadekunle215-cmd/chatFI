@@ -2942,6 +2942,127 @@ function JupChatInner() {
     });
   };
 
+  // ── On-chain trade fetch — pulls last 20 txs, parses swap diffs ─────────────
+  // Build a reverse mint→symbol map from TOKEN_MINTS for quick lookup
+  const MINT_TO_SYM = Object.fromEntries(Object.entries(TOKEN_MINTS).map(([sym, mint]) => [mint, sym]));
+  const WSOL_MINT   = "So11111111111111111111111111111111111111112";
+
+  const fetchOnChainTrades = async (wallet) => {
+    if (!wallet) return [];
+    try {
+      const rpc = SOLANA_RPC;
+
+      // Step 1: get last 20 confirmed signatures for the wallet
+      const sigRes = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1,
+          method: "getSignaturesForAddress",
+          params: [wallet, { limit: 20, commitment: "confirmed" }],
+        }),
+      });
+      const sigData = await sigRes.json();
+      const sigs = (sigData?.result || []).filter(s => !s.err).map(s => s.signature);
+      if (!sigs.length) return [];
+
+      // Step 2: fetch each parsed transaction (batched with Promise.allSettled)
+      const txResults = await Promise.allSettled(
+        sigs.map(sig =>
+          fetch(rpc, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0", id: 1,
+              method: "getTransaction",
+              params: [sig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" }],
+            }),
+          }).then(r => r.json())
+        )
+      );
+
+      // Step 3: parse each tx — detect swaps by diffing pre/post token balances
+      const trades = [];
+      for (let i = 0; i < txResults.length; i++) {
+        if (txResults[i].status !== "fulfilled") continue;
+        const tx = txResults[i].value?.result;
+        if (!tx || tx.meta?.err) continue;
+
+        const blockTime  = tx.blockTime ? tx.blockTime * 1000 : Date.now();
+        const meta       = tx.meta;
+        const accountKeys = tx.transaction?.message?.accountKeys?.map(k =>
+          typeof k === "string" ? k : k.pubkey
+        ) || [];
+
+        // Build token balance maps: mint → { pre, post, decimals }
+        const balMap = {};
+        const preBalances  = meta?.preTokenBalances  || [];
+        const postBalances = meta?.postTokenBalances || [];
+
+        for (const b of preBalances) {
+          const mint = b.mint;
+          if (!balMap[mint]) balMap[mint] = { pre: 0, post: 0, decimals: b.uiTokenAmount?.decimals ?? 6 };
+          // Only count balances owned by the wallet
+          if (accountKeys[b.accountIndex] === wallet || b.owner === wallet) {
+            balMap[mint].pre += b.uiTokenAmount?.uiAmount || 0;
+          }
+        }
+        for (const b of postBalances) {
+          const mint = b.mint;
+          if (!balMap[mint]) balMap[mint] = { pre: 0, post: 0, decimals: b.uiTokenAmount?.decimals ?? 6 };
+          if (accountKeys[b.accountIndex] === wallet || b.owner === wallet) {
+            balMap[mint].post += b.uiTokenAmount?.uiAmount || 0;
+          }
+        }
+
+        // SOL balance diff (lamports → SOL), ignoring fee
+        const fee        = (meta?.fee || 0) / 1e9;
+        const preSol     = (meta?.preBalances?.[0]  || 0) / 1e9;
+        const postSol    = (meta?.postBalances?.[0] || 0) / 1e9;
+        const solDiff    = parseFloat((postSol - preSol + fee).toFixed(6)); // fee-adjusted
+
+        // Include SOL in the diff map if it moved meaningfully
+        if (Math.abs(solDiff) > 0.0001) {
+          balMap[WSOL_MINT] = { pre: preSol, post: postSol + fee, decimals: 9 };
+        }
+
+        // Find tokens that decreased (sold) and increased (bought)
+        const sold   = [];
+        const bought = [];
+        for (const [mint, { pre, post }] of Object.entries(balMap)) {
+          const diff = parseFloat((post - pre).toFixed(9));
+          if (diff < -0.000001) sold.push({ mint, amount: Math.abs(diff), sym: MINT_TO_SYM[mint] || mint.slice(0, 6) });
+          if (diff >  0.000001) bought.push({ mint, amount: diff,         sym: MINT_TO_SYM[mint] || mint.slice(0, 6) });
+        }
+
+        // Only record if we see both a sold and a bought side — i.e. a real swap
+        if (!sold.length || !bought.length) continue;
+
+        // Pick the largest movement on each side as the primary from/to
+        sold.sort((a, b) => b.amount - a.amount);
+        bought.sort((a, b) => b.amount - a.amount);
+        const fromSide = sold[0];
+        const toSide   = bought[0];
+
+        trades.push({
+          type:   "swap",
+          source: "onchain",
+          sig:    sigs[i],
+          ts:     blockTime,
+          from:   fromSide.sym,
+          to:     toSide.sym,
+          amount: parseFloat(fromSide.amount.toFixed(6)),
+          out:    parseFloat(toSide.amount.toFixed(6)),
+        });
+      }
+
+      return trades;
+    } catch (err) {
+      console.warn("[fetchOnChainTrades] error:", err);
+      return [];
+    }
+  };
+
   // ── Price Alert polling — checks every 30s ────────────────────────────────────
   useEffect(() => {
     if (alertIntervalRef.current) clearInterval(alertIntervalRef.current);
@@ -4805,6 +4926,21 @@ function JupChatInner() {
   //  3. POST craft-send with inviteSigner + sender + amount + mint
   //  4. Partially sign tx with inviteKeypair, then wallet signs
   //  5. Broadcast; share invite link so recipient claims via Jupiter Mobile
+  // ── Safe base64 helpers (atob/btoa — no Buffer dependency) ─────────────────
+  const b64ToBytes = (b64) => {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  };
+  const bytesToB64 = (bytes) => {
+    let s = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk)
+      s += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    return btoa(s);
+  };
+
   // ── Invite code helpers — must match Jupiter's exact spec ───────────────────
   // Ref: https://developers.jup.ag/docs/send/invite-code
   //
@@ -4904,7 +5040,8 @@ function JupChatInner() {
       // STEP 5: Sign with BOTH invite keypair AND sender wallet — Jupiter requires both signatures.
       // Per docs: transaction.sign([sender, recipient]) where recipient = inviteKeypair.
       if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
-      const tx = VersionedTransaction.deserialize(Buffer.from(unsignedTxB64, "base64"));
+      // Use b64ToBytes (atob-based) — avoids Buffer which may not be loaded yet in browser
+      const tx = VersionedTransaction.deserialize(b64ToBytes(unsignedTxB64));
 
       // First: invite keypair signs (this is the "recipient" slot in Jupiter's terminology)
       tx.sign([inviteKeypair]);
@@ -4913,15 +5050,15 @@ function JupChatInner() {
       const signedTx = await provider.signTransaction(tx);
 
       // STEP 6: Broadcast via Connection — same as doDirectSend
-      const connection = new Connection(SOLANA_RPC, "confirmed");
+      const connection   = new Connection(SOLANA_RPC, "confirmed");
       const blockhashInfo = await connection.getLatestBlockhashAndContext({ commitment: "confirmed" });
-      const signature = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 0 });
+      const signature    = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 0 });
       if (!signature) throw new Error("Transaction failed to send.");
 
       push("ai", `Send sent — confirming on-chain…`);
       const confirmation = await connection.confirmTransaction({
         signature,
-        blockhash: blockhashInfo.value.blockhash,
+        blockhash:           blockhashInfo.value.blockhash,
         lastValidBlockHeight: blockhashInfo.value.lastValidBlockHeight,
       }, "confirmed");
       if (confirmation.value.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
@@ -5263,22 +5400,6 @@ function JupChatInner() {
     const text = await res.text();
     try { return { ok: res.ok, status: res.status, data: JSON.parse(text) }; }
     catch { return { ok: false, status: res.status, data: { error: `Server error (${res.status}): ${text.slice(0, 200)}` } }; }
-  };
-
-  // ── Safe base64 decode → Uint8Array (atob+charCodeAt breaks on large txs) ────
-  const b64ToBytes = (b64) => {
-    const bin = atob(b64);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  };
-  // Safe Uint8Array → base64 (spread crashes on large arrays > 65k bytes)
-  const bytesToB64 = (bytes) => {
-    let s = "";
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk)
-      s += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    return btoa(s);
   };
 
   // ── Resolve real on-chain vaultId from mint addresses ───────────────────────
@@ -8692,20 +8813,34 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       // ── SHOW_TRADE_JOURNAL ─────────────────────────────────────────────────
       } else if (action === "SHOW_TRADE_JOURNAL") {
         const period = actionData?.period || "all";
-        const now = Date.now();
+        const now    = Date.now();
         const cutoff = period === "today" ? now - 86400000 : period === "week" ? now - 604800000 : 0;
-        const trades = tradeJournal.filter(t => t.ts >= cutoff);
-        if (!trades.length) {
-          push("ai", text + "\n\nNo trades recorded yet. Your swaps and limit orders will appear here automatically.");
+
+        push("ai", text + "\n\n⏳ Fetching your on-chain transaction history…");
+
+        // Fetch on-chain swaps (last 20 txs) and merge with local journal
+        const onChain    = walletFull ? await fetchOnChainTrades(walletFull) : [];
+        const localSigs  = new Set(tradeJournal.map(t => t.sig).filter(Boolean));
+        const newOnChain = onChain.filter(t => !localSigs.has(t.sig));
+        const merged = [...tradeJournal, ...newOnChain]
+          .filter(t => t.ts >= cutoff)
+          .sort((a, b) => b.ts - a.ts)
+          .slice(0, 50);
+
+        if (!merged.length) {
+          push("ai", "No trades found — make your first swap and it'll appear here automatically.");
         } else {
-          const lines = trades.slice(0, 50).map((t, i) => {
-            const d = new Date(t.ts).toLocaleDateString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
-            if (t.type === "swap") return `${i+1}. **${t.from}→${t.to}** — ${t.amount} ${t.from} → ~${t.out} ${t.to}  ·  ${d}`;
-            if (t.type === "limit") return `${i+1}. **Limit** ${t.direction === "below" ? "buy" : "sell"} ${t.amount} ${t.token} @ $${t.targetPrice}  ·  ${d}`;
+          const lines = merged.map((t, i) => {
+            const d   = new Date(t.ts).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+            const tag = t.source === "onchain" ? " 🔗" : "";
+            if (t.type === "swap")   return `${i+1}. **${t.from}→${t.to}** — ${t.amount} ${t.from} → ~${t.out} ${t.to}${tag}  ·  ${d}`;
+            if (t.type === "limit")  return `${i+1}. **Limit** ${t.direction === "below" ? "buy" : "sell"} ${t.amount} ${t.token} @ $${t.targetPrice}  ·  ${d}`;
             if (t.type === "basket") return `${i+1}. **Basket** — ${t.summary}  ·  ${d}`;
             return `${i+1}. ${t.type} — ${d}`;
           }).join("\n");
-          push("ai", text + `\n\n**Trade Journal** (${trades.length} trades${period !== "all" ? `, ${period}` : ""}):\n${lines}`);
+          const onChainCount = merged.filter(t => t.source === "onchain").length;
+          const note = onChainCount > 0 ? ` · 🔗 = fetched from chain` : "";
+          push("ai", `**Trade Journal** — ${merged.length} trades${period !== "all" ? `, ${period}` : ""}${note}:\n${lines}`);
         }
 
       // ── SWAP_ALL_WALLET — swap every token in wallet (except excluded) ────────
@@ -9442,17 +9577,30 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               const period = stepData.period || "all";
               const now    = Date.now();
               const cutoff = period === "today" ? now - 86400000 : period === "week" ? now - 604800000 : 0;
-              const trades = tradeJournal.filter(t => t.ts >= cutoff);
-              if (!trades.length) {
-                push("ai", "No trades in journal yet — your swaps will appear here automatically.");
+
+              push("ai", "⏳ Fetching your on-chain transaction history…");
+
+              const onChain    = walletFull ? await fetchOnChainTrades(walletFull) : [];
+              const localSigs  = new Set(tradeJournal.map(t => t.sig).filter(Boolean));
+              const newOnChain = onChain.filter(t => !localSigs.has(t.sig));
+              const merged = [...tradeJournal, ...newOnChain]
+                .filter(t => t.ts >= cutoff)
+                .sort((a, b) => b.ts - a.ts)
+                .slice(0, 50);
+
+              if (!merged.length) {
+                push("ai", "No trades found — make your first swap and it'll appear here automatically.");
               } else {
-                const lines = trades.slice(0, 50).map((t, i) => {
-                  const d = new Date(t.ts).toLocaleDateString("en-US", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
-                  if (t.type === "swap")   return `${i+1}. **${t.from}→${t.to}** — ${t.amount} → ~${t.out}  ·  ${d}`;
+                const lines = merged.map((t, i) => {
+                  const d   = new Date(t.ts).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+                  const tag = t.source === "onchain" ? " 🔗" : "";
+                  if (t.type === "swap")   return `${i+1}. **${t.from}→${t.to}** — ${t.amount} ${t.from} → ~${t.out} ${t.to}${tag}  ·  ${d}`;
                   if (t.type === "basket") return `${i+1}. **Basket** — ${t.summary}  ·  ${d}`;
                   return `${i+1}. ${t.type}  ·  ${d}`;
                 }).join("\n");
-                push("ai", `**Trade Journal** (${trades.length} trades):\n${lines}`);
+                const onChainCount = merged.filter(t => t.source === "onchain").length;
+                const note = onChainCount > 0 ? ` · 🔗 = fetched from chain` : "";
+                push("ai", `**Trade Journal** — ${merged.length} trades${note}:\n${lines}`);
               }
 
             // ── SHOW_ROUTE ──────────────────────────────────────────────────────
