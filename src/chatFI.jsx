@@ -2033,6 +2033,8 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
   const [editingCfg, setEditingCfg] = useState(false);
   const [liveEdge, setLiveEdge] = useState(vault?.minEdge || "8");
   const [liveMaxBet, setLiveMaxBet] = useState(vault?.maxBet || "5");
+  const [liveDcaToken, setLiveDcaToken] = useState(vault?.dcaToken || cfg.dcaToken || "SOL");
+  const [liveDcaThreshold, setLiveDcaThreshold] = useState(String(vault?.dcaThreshold || cfg.dcaThreshold || "5"));
   // Auto-DCA mode: "predict" (original) | "dca" (buy token when yield hits threshold)
   const [vaultMode, setVaultMode] = useState(cfg.vaultMode || "predict");
   const [dcaToken, setDcaToken] = useState(cfg.dcaToken || "SOL");
@@ -2157,11 +2159,12 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
     { Icon: IcLock,    txt: "Principal never leaves Lend — only yield is at risk", key:"lock" },
   ];
 
-  const logTypeColor = { deposit:"#68d391", bet:T.accent, win:T.accent, sweep:T.teal, error:"#f28484" };
+  const logTypeColor = { deposit:"#68d391", bet:T.accent, dca:"#f6ad55", win:T.accent, sweep:T.teal, error:"#f28484" };
   const LogIcon = ({ type }) => {
     const style = { color: logTypeColor[type]||T.text2, flexShrink:0 };
     if (type==="deposit") return <span style={style}><IcDeposit/></span>;
     if (type==="bet")     return <span style={style}><IcBolt/></span>;
+    if (type==="dca")     return <span style={style}><IcRecycle/></span>;
     if (type==="win")     return <span style={style}><IcTrophy/></span>;
     if (type==="sweep")   return <span style={style}><IcRecycle/></span>;
     if (type==="error")   return <span style={style}><IcClose/></span>;
@@ -2197,6 +2200,7 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                     <div style={{ width:8, height:8, borderRadius:"50%", background:vault.status==="active"?T.accent:"#4d6a7a", boxShadow:vault.status==="active"?`0 0 8px ${T.accent}`:"none" }}/>
                     <span style={{ fontSize:12, fontWeight:700, color:vault.status==="active"?T.accent:T.text3, textTransform:"uppercase", letterSpacing:"0.06em" }}>{vault.status==="active"?(isBetting?"Scanning…":"Active"):"Paused"}</span>
+                    <span style={{ fontSize:10, color:vault.vaultMode==="dca"?"#f6ad55":T.teal, background:vault.vaultMode==="dca"?"rgba(246,173,85,0.12)":"rgba(56,189,248,0.1)", border:`1px solid ${vault.vaultMode==="dca"?"rgba(246,173,85,0.3)":"rgba(56,189,248,0.2)"}`, borderRadius:20, padding:"1px 7px", fontWeight:700, letterSpacing:"0.04em" }}>{vault.vaultMode==="dca"?"↻ Auto-DCA":"◎ Predict"}</span>
                   </div>
                   <span style={{ fontSize:10, color:T.text3 }}>Day {ageDays}</span>
                 </div>
@@ -2208,8 +2212,33 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                     </div>
                   ))}
                 </div>
+
+                {/* DCA mode: progress bar towards threshold */}
+                {vault.vaultMode === "dca" && (() => {
+                  const thresh = parseFloat(vault.dcaThreshold || 5);
+                  const pct    = Math.min(100, (accruedEst / thresh) * 100);
+                  const target = vault.dcaToken || "SOL";
+                  return (
+                    <div style={{ marginBottom:10, background:"rgba(0,0,0,0.2)", borderRadius:8, padding:"10px 12px" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                        <span style={{ fontSize:11, color:"#f6ad55", fontWeight:700 }}>DCA into {target}</span>
+                        <span style={{ fontSize:11, color:T.text2 }}>${accruedEst.toFixed(3)} / ${thresh} threshold</span>
+                      </div>
+                      <div style={{ height:6, borderRadius:3, background:"rgba(255,255,255,0.08)", overflow:"hidden" }}>
+                        <div style={{ height:"100%", width:`${pct}%`, borderRadius:3, background: pct >= 100 ? "#c7f284" : "#f6ad55", transition:"width 0.5s ease", boxShadow: pct >= 100 ? "0 0 8px #c7f28480" : "none" }}/>
+                      </div>
+                      <div style={{ fontSize:9, color:T.text3, marginTop:4 }}>
+                        {pct >= 100 ? "⚡ Threshold hit — swap pending next scan" : `${pct.toFixed(0)}% to next DCA swap`}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12 }}>
-                  {[{label:"Auto-bets",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Recycled",value:`$${(vaultStats?.winningsRecycled||0).toFixed(3)}`,color:T.teal}].map(s=>(
+                  {vault.vaultMode === "dca"
+                    ? [{label:"DCA Swaps",value:vaultStats?.betsPlaced||0,color:"#f6ad55"},{label:"Swapped",value:`$${(vaultStats?.winningsRecycled||0).toFixed(3)}`,color:T.teal}]
+                    : [{label:"Auto-bets",value:vaultStats?.betsPlaced||0,color:T.accent},{label:"Recycled",value:`$${(vaultStats?.winningsRecycled||0).toFixed(3)}`,color:T.teal}]
+                  }.map(s=>(
                     <div key={s.label} style={{ background:"rgba(0,0,0,0.25)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
                       <div style={{ fontSize:9, color:T.text3, textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:3 }}>{s.label}</div>
                       <div style={{ fontSize:13, fontWeight:700, color:s.color }}>{s.value}</div>
@@ -2219,46 +2248,81 @@ function YieldVaultPanel({ open, onClose, vault, vaultStats, vaultLog, cfg, setC
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                   {!editingCfg ? (
                     <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-                      {[`Min edge ${vault.minEdge}%`,`Max $${vault.maxBet}/bet`,vault.category?vault.category.charAt(0).toUpperCase()+vault.category.slice(1):"All markets"].map(tag=>(
+                      {vault.vaultMode === "dca"
+                        ? [`Target: ${vault.dcaToken||"SOL"}`,`Threshold: $${vault.dcaThreshold||5}`]
+                        : [`Min edge ${vault.minEdge}%`,`Max $${vault.maxBet}/bet`,vault.category?vault.category.charAt(0).toUpperCase()+vault.category.slice(1):"All markets"]
+                      }.map(tag=>(
                         <span key={tag} style={{ fontSize:10, color:T.text3, background:T.surface, border:`1px solid ${T.border}`, borderRadius:20, padding:"2px 8px" }}>{tag}</span>
                       ))}
-                      <button onClick={()=>{ setLiveEdge(String(vault.minEdge)); setLiveMaxBet(String(vault.maxBet)); setEditingCfg(true); }} style={{ fontSize:10, color:T.accent, background:"transparent", border:`1px solid ${T.accent}40`, borderRadius:20, padding:"2px 8px", cursor:"pointer", fontWeight:600 }}>✎ Adjust</button>
+                      <button onClick={()=>{ setLiveEdge(String(vault.minEdge)); setLiveMaxBet(String(vault.maxBet)); setLiveDcaToken(vault.dcaToken||"SOL"); setLiveDcaThreshold(String(vault.dcaThreshold||5)); setEditingCfg(true); }} style={{ fontSize:10, color:T.accent, background:"transparent", border:`1px solid ${T.accent}40`, borderRadius:20, padding:"2px 8px", cursor:"pointer", fontWeight:600 }}>✎ Adjust</button>
                     </div>
                   ) : (
-                    <div style={{ background:T.surface, border:`1px solid ${T.accent}30`, borderRadius:10, padding:"12px 14px", marginTop:4 }}>
+                    <div style={{ background:T.surface, border:`1px solid ${T.accent}30`, borderRadius:10, padding:"12px 14px", marginTop:4, width:"100%" }}>
                       <div style={{ fontSize:11, fontWeight:700, color:T.accent, marginBottom:10, textTransform:"uppercase", letterSpacing:"0.06em" }}>Adjust Live Settings</div>
 
-                      {/* Edge slider */}
-                      <div style={{ marginBottom:10 }}>
-                        <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
-                          <span style={{ fontSize:11, color:T.text3, fontWeight:600 }}>Min Edge</span>
-                          <span style={{ fontSize:12, color:T.accent, fontWeight:700 }}>{liveEdge}%</span>
+                      {vault.vaultMode === "dca" ? (<>
+                        {/* DCA target token */}
+                        <div style={{ marginBottom:10 }}>
+                          <div style={{ fontSize:11, color:T.text3, fontWeight:600, marginBottom:6 }}>DCA Target Token</div>
+                          <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                            {["SOL","JUP","BONK","WIF","JTO","PYTH"].map(t=>(
+                              <button key={t} onClick={()=>setLiveDcaToken(t)} style={{ padding:"6px 12px", borderRadius:8, border:`1px solid ${liveDcaToken===t?T.accent:T.border}`, background:liveDcaToken===t?T.accentBg:T.bg, color:liveDcaToken===t?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>{t}</button>
+                            ))}
+                          </div>
                         </div>
-                        <input type="range" min="1" max="30" step="1" value={liveEdge} onChange={e=>setLiveEdge(e.target.value)}
-                          style={{ width:"100%", accentColor:T.accent, cursor:"pointer" }}/>
-                        <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, gap:4 }}>
-                          {["3","5","8","12","20"].map(v=>(
-                            <button key={v} onClick={()=>setLiveEdge(v)} style={{ flex:1, padding:"4px 0", border:`1px solid ${liveEdge===v?T.accent:T.border}`, borderRadius:6, background:liveEdge===v?T.accentBg:T.bg, color:liveEdge===v?T.accent:T.text3, fontSize:11, fontWeight:600, cursor:"pointer" }}>{v}%</button>
-                          ))}
+                        {/* DCA threshold */}
+                        <div style={{ marginBottom:12 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+                            <span style={{ fontSize:11, color:T.text3, fontWeight:600 }}>Yield Threshold (USD)</span>
+                            <span style={{ fontSize:12, color:"#f6ad55", fontWeight:700 }}>${liveDcaThreshold}</span>
+                          </div>
+                          <div style={{ display:"flex", gap:5, flexWrap:"wrap" }}>
+                            {["1","2","5","10","20","50"].map(v=>(
+                              <button key={v} onClick={()=>setLiveDcaThreshold(v)} style={{ flex:1, padding:"7px 0", border:`1px solid ${liveDcaThreshold===v?"#f6ad55":T.border}`, borderRadius:8, background:liveDcaThreshold===v?"rgba(246,173,85,0.12)":T.bg, color:liveDcaThreshold===v?"#f6ad55":T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>
+                            ))}
+                          </div>
+                          <input type="number" min="0.5" step="0.5" value={liveDcaThreshold} onChange={e=>setLiveDcaThreshold(e.target.value)} style={{ width:"100%", marginTop:6, padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, outline:"none", boxSizing:"border-box" }}/>
+                          <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>When yield ≥ this, auto-swap into {liveDcaToken}. Lower = more frequent, smaller swaps.</div>
                         </div>
-                        <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Higher = fewer but sharper bets.</div>
-                      </div>
-
-                      {/* Max bet */}
-                      <div style={{ marginBottom:12 }}>
-                        <div style={{ fontSize:11, color:T.text3, fontWeight:600, marginBottom:5 }}>Max Bet Per Market (USDC)</div>
-                        <div style={{ display:"flex", gap:5 }}>
-                          <input type="number" min="1" step="1" value={liveMaxBet} onChange={e=>setLiveMaxBet(e.target.value)}
-                            style={{ flex:1, padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, outline:"none" }}/>
-                          {["2","5","10","25"].map(v=>(
-                            <button key={v} onClick={()=>setLiveMaxBet(v)} style={{ padding:"7px 10px", border:`1px solid ${liveMaxBet===v?T.accent:T.border}`, borderRadius:8, background:liveMaxBet===v?T.accentBg:T.bg, color:liveMaxBet===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>
-                          ))}
+                      </>) : (<>
+                        {/* Edge slider */}
+                        <div style={{ marginBottom:10 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+                            <span style={{ fontSize:11, color:T.text3, fontWeight:600 }}>Min Edge</span>
+                            <span style={{ fontSize:12, color:T.accent, fontWeight:700 }}>{liveEdge}%</span>
+                          </div>
+                          <input type="range" min="1" max="30" step="1" value={liveEdge} onChange={e=>setLiveEdge(e.target.value)}
+                            style={{ width:"100%", accentColor:T.accent, cursor:"pointer" }}/>
+                          <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, gap:4 }}>
+                            {["3","5","8","12","20"].map(v=>(
+                              <button key={v} onClick={()=>setLiveEdge(v)} style={{ flex:1, padding:"4px 0", border:`1px solid ${liveEdge===v?T.accent:T.border}`, borderRadius:6, background:liveEdge===v?T.accentBg:T.bg, color:liveEdge===v?T.accent:T.text3, fontSize:11, fontWeight:600, cursor:"pointer" }}>{v}%</button>
+                            ))}
+                          </div>
+                          <div style={{ fontSize:10, color:T.text3, marginTop:4 }}>Higher = fewer but sharper bets.</div>
                         </div>
-                      </div>
+                        {/* Max bet */}
+                        <div style={{ marginBottom:12 }}>
+                          <div style={{ fontSize:11, color:T.text3, fontWeight:600, marginBottom:5 }}>Max Bet Per Market (USDC)</div>
+                          <div style={{ display:"flex", gap:5 }}>
+                            <input type="number" min="1" step="1" value={liveMaxBet} onChange={e=>setLiveMaxBet(e.target.value)}
+                              style={{ flex:1, padding:"7px 10px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, outline:"none" }}/>
+                            {["2","5","10","25"].map(v=>(
+                              <button key={v} onClick={()=>setLiveMaxBet(v)} style={{ padding:"7px 10px", border:`1px solid ${liveMaxBet===v?T.accent:T.border}`, borderRadius:8, background:liveMaxBet===v?T.accentBg:T.bg, color:liveMaxBet===v?T.accent:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>${v}</button>
+                            ))}
+                          </div>
+                        </div>
+                      </>)}
 
                       <div style={{ display:"flex", gap:6 }}>
                         <button onClick={()=>setEditingCfg(false)} style={{ flex:1, padding:"8px 0", borderRadius:8, border:`1px solid ${T.border}`, background:T.bg, color:T.text3, fontSize:12, fontWeight:600, cursor:"pointer" }}>Cancel</button>
-                        <button onClick={()=>{ onUpdateVault?.({ minEdge: liveEdge, maxBet: liveMaxBet }); setEditingCfg(false); }} style={{ flex:2, padding:"8px 0", borderRadius:8, border:"none", background:T.accentBg, color:T.accent, fontSize:12, fontWeight:700, cursor:"pointer" }}>✓ Save Changes</button>
+                        <button onClick={()=>{
+                          if (vault.vaultMode === "dca") {
+                            onUpdateVault?.({ dcaToken: liveDcaToken, dcaThreshold: liveDcaThreshold });
+                          } else {
+                            onUpdateVault?.({ minEdge: liveEdge, maxBet: liveMaxBet });
+                          }
+                          setEditingCfg(false);
+                        }} style={{ flex:2, padding:"8px 0", borderRadius:8, border:"none", background:T.accentBg, color:T.accent, fontSize:12, fontWeight:700, cursor:"pointer" }}>✓ Save Changes</button>
                       </div>
                     </div>
                   )}
@@ -2665,6 +2729,9 @@ function JupChatInner() {
   const [yieldVaultCfg, setYieldVaultCfg] = useState({ depositAmount: "100", minEdge: "8", maxBet: "5", category: null, vaultMode: "predict", dcaToken: "SOL", dcaThreshold: "5", depositToken: "USDC" });
   const yieldVaultIntervalRef  = useRef(null);
   const yieldVaultSweepRef     = useRef(null); // separate 15-min sweep interval
+  const yieldVaultLiveRef      = useRef(null); // always-current vault snapshot (avoids stale closure)
+  const yieldVaultStatsLiveRef = useRef(null); // always-current stats snapshot
+  const yieldVaultBettingRef   = useRef(false); // mirror of yieldVaultBetting (avoids stale closure)
 
   // ── Jupiter Studio state ─────────────────────────────────────────────────────
   const [showStudio, setShowStudio]         = useState(false);
@@ -5070,6 +5137,7 @@ function JupChatInner() {
     const elapsedYrs = (Date.now() - (vault.depositedAt || Date.now())) / (365 * 24 * 3600 * 1000);
     const raw = vault.depositAmount * (vault.earnApy || 0.05) * elapsedYrs;
     return Math.max(0, raw - (stats?.betsPlaced || 0) * (vault.maxBet || 5) * 0.5);
+
   };
 
   // ── placePredBet — used by Yield Vault auto-bet loop ────────────────────────
@@ -5217,19 +5285,26 @@ function JupChatInner() {
   };
 
   const startYieldVaultLoop = (vaultInit, statsInit) => {
+    // Keep live refs updated so the interval tick always reads current config
+    yieldVaultLiveRef.current      = vaultInit;
+    yieldVaultStatsLiveRef.current = statsInit;
     if (yieldVaultIntervalRef.current) clearInterval(yieldVaultIntervalRef.current);
     const tick = async () => {
-      if (!vaultInit || vaultInit.status !== "active" || yieldVaultBetting) return;
-      const accrued = estimateAccruedYield(vaultInit, statsInit);
+      // Always read the freshest vault + stats from refs (avoids stale closure)
+      const vaultCur = yieldVaultLiveRef.current;
+      const statsCur = yieldVaultStatsLiveRef.current;
+      if (!vaultCur || vaultCur.status !== "active" || yieldVaultBettingRef.current) return;
+      const accrued = estimateAccruedYield(vaultCur, statsCur);
 
       // ── AUTO-DCA MODE ────────────────────────────────────────────────────────
       // When yield hits the user's threshold, swap accrued yield into chosen token
-      if (vaultInit.vaultMode === "dca") {
-        const threshold = parseFloat(vaultInit.dcaThreshold || "5");
+      if (vaultCur.vaultMode === "dca") {
+        const threshold = parseFloat(vaultCur.dcaThreshold || "5");
         if (accrued < threshold) return; // not enough yield yet
-        const swapToken = (vaultInit.dcaToken || "SOL").toUpperCase();
+        const swapToken = (vaultCur.dcaToken || "SOL").toUpperCase();
         const swapAmt = accrued.toFixed(2);
         try {
+          yieldVaultBettingRef.current = true;
           setYieldVaultBetting(true);
           // Resolve output mint
           let toMint = TOKEN_MINTS[swapToken] || tokenCacheRef.current[swapToken];
@@ -5237,13 +5312,13 @@ function JupChatInner() {
             const res = await resolveToken(swapToken);
             toMint = res?.mint;
           }
-          if (!toMint) { setYieldVaultBetting(false); return; }
+          if (!toMint) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
           const fromMint = TOKEN_MINTS.USDC;
           const amtRaw = Math.floor(parseFloat(swapAmt) * 1e6);
           const orderRes = await jupFetch(`${JUP_SWAP_ORDER}?inputMint=${fromMint}&outputMint=${toMint}&amount=${amtRaw}&taker=${walletFull}`);
-          if (!orderRes?.transaction) { setYieldVaultBetting(false); return; }
+          if (!orderRes?.transaction) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
           const provider = getActiveProvider();
-          if (!provider) { setYieldVaultBetting(false); return; }
+          if (!provider) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
           const tx = VersionedTransaction.deserialize(b64ToBytes(orderRes.transaction));
           const signedTx = await provider.signTransaction(tx);
           const rpcRes = await jupFetch(SOLANA_RPC, {
@@ -5252,26 +5327,29 @@ function JupChatInner() {
           });
           const sig = rpcRes?.result;
           if (sig) {
-            const newStats = { ...statsInit, betsPlaced: (statsInit?.betsPlaced||0)+1, winningsRecycled: (statsInit?.winningsRecycled||0)+parseFloat(swapAmt), lastScanAt: Date.now() };
+            const newStats = { ...statsCur, betsPlaced: (statsCur?.betsPlaced||0)+1, winningsRecycled: (statsCur?.winningsRecycled||0)+parseFloat(swapAmt), lastScanAt: Date.now() };
+            yieldVaultStatsLiveRef.current = newStats;
             setYieldVaultStats(newStats);
             saveYieldVault(undefined, newStats);
-            setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "bet", detail: `Auto-DCA swapped $${swapAmt} USDC → ${swapToken} · threshold $${threshold}` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
+            setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "dca", detail: `Auto-DCA: $${swapAmt} USDC → ${swapToken} · threshold $${threshold} · [tx](https://solscan.io/tx/${sig})` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
             push("ai", `**Yield Vault Auto-DCA** — $${swapAmt} USDC yield swapped into **${swapToken}**. Principal still earning in Lend. [Solscan →](https://solscan.io/tx/${sig})`);
           }
         } catch (err) {
           setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "error", detail: `Auto-DCA failed: ${err?.message || "Unknown"}` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
         }
+        yieldVaultBettingRef.current = false;
         setYieldVaultBetting(false);
         return;
       }
 
       // ── PREDICT MODE (original) ───────────────────────────────────────────────
-      const maxBet  = Math.min(vaultInit.maxBet, accrued);
+      const maxBet  = Math.min(vaultCur.maxBet, accrued);
       if (maxBet < 1) return;
       try {
+        yieldVaultBettingRef.current = true;
         setYieldVaultBetting(true);
-        const { markets } = await fetchPredictionMarkets(vaultInit.category, null, 30);
-        if (!markets?.length) { setYieldVaultBetting(false); return; }
+        const { markets } = await fetchPredictionMarkets(vaultCur.category, null, 30);
+        if (!markets?.length) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
         const scored = [];
         for (const ev of markets) {
           for (const mk of (ev.markets || [])) {
@@ -5281,18 +5359,19 @@ function JupChatInner() {
             if (!yesPrice || !noPrice) continue;
             const impliedYes = yesPrice / (yesPrice + noPrice);
             const edge = Math.abs(impliedYes - 0.5) * 100;
-            if (edge < vaultInit.minEdge) continue;
+            if (edge < vaultCur.minEdge) continue;
             const side = impliedYes < 0.5 ? "no" : "yes";
             scored.push({ event: ev, market: mk, edge, side });
           }
         }
-        if (!scored.length) { setYieldVaultBetting(false); return; }
+        if (!scored.length) { yieldVaultBettingRef.current = false; setYieldVaultBetting(false); return; }
         scored.sort((a, b) => b.edge - a.edge);
         const best    = scored[0];
-        const betAmt  = Math.min(maxBet, vaultInit.maxBet).toFixed(2);
+        const betAmt  = Math.min(maxBet, vaultCur.maxBet).toFixed(2);
         const betResult = await placePredBet(best.market, best.side, betAmt);
         if (betResult?.success) {
-          const newStats = { ...statsInit, betsPlaced: (statsInit?.betsPlaced || 0) + 1, lastScanAt: Date.now() };
+          const newStats = { ...statsCur, betsPlaced: (statsCur?.betsPlaced || 0) + 1, lastScanAt: Date.now() };
+          yieldVaultStatsLiveRef.current = newStats;
           setYieldVaultStats(newStats);
           saveYieldVault(undefined, newStats);
           const evTitle = best.event.metadata?.title || best.event.title || "market";
@@ -5305,6 +5384,7 @@ function JupChatInner() {
       } catch (err) {
         setYieldVaultLog(prev => { const next = [{ ts: Date.now(), type: "error", detail: `Vault scan error: ${err?.message || "Unknown"}` }, ...prev.slice(0, 49)]; saveYieldVaultLog(next); return next; });
       }
+      yieldVaultBettingRef.current = false;
       setYieldVaultBetting(false);
     };
     tick();
@@ -5360,6 +5440,8 @@ function JupChatInner() {
       if (txResult?.meta?.err) throw new Error("Transaction landed but failed on-chain: " + JSON.stringify(txResult.meta.err));
       const newVault = { depositAmount: depositAmt, depositToken, minEdge: parseFloat(cfg.minEdge || "8"), maxBet: parseFloat(cfg.maxBet || "5"), category: cfg.category || null, vaultMode: cfg.vaultMode || "predict", dcaToken: cfg.dcaToken || "SOL", dcaThreshold: parseFloat(cfg.dcaThreshold || "5"), depositedAt: Date.now(), earnApy: targetVault.apy, status: "active", txSig: sig };
       const newStats = { accrued: 0, betsPlaced: 0, winningsRecycled: 0, currentApy: targetVault.apy, lastScanAt: null };
+      yieldVaultLiveRef.current      = newVault;
+      yieldVaultStatsLiveRef.current = newStats;
       setYieldVault(newVault);
       setYieldVaultStats(newStats);
       const initLog = [{ ts: Date.now(), type: "deposit", detail: `Deposited ${depositAmt} ${depositToken} at ${targetVault.apyDisplay} APY` }];
@@ -5375,6 +5457,7 @@ function JupChatInner() {
     setYieldVault(prev => {
       if (!prev) return prev;
       const next = { ...prev, status: prev.status === "active" ? "paused" : "active" };
+      yieldVaultLiveRef.current = next;
       saveYieldVault(next, undefined);
       if (next.status === "paused") { clearInterval(yieldVaultIntervalRef.current); clearInterval(yieldVaultSweepRef.current); }
       else { startYieldVaultLoop(next, yieldVaultStats); }
@@ -5441,12 +5524,23 @@ function JupChatInner() {
     }
   };
 
-  const updateYieldVaultCfg = ({ minEdge, maxBet }) => {
+  const updateYieldVaultCfg = ({ minEdge, maxBet, dcaToken, dcaThreshold }) => {
     setYieldVault(prev => {
       if (!prev) return prev;
-      const next = { ...prev, minEdge: parseFloat(minEdge) || prev.minEdge, maxBet: parseFloat(maxBet) || prev.maxBet };
+      const next = {
+        ...prev,
+        ...(minEdge      !== undefined ? { minEdge:      parseFloat(minEdge)      || prev.minEdge }      : {}),
+        ...(maxBet       !== undefined ? { maxBet:        parseFloat(maxBet)       || prev.maxBet }       : {}),
+        ...(dcaToken     !== undefined ? { dcaToken:      dcaToken                                 }      : {}),
+        ...(dcaThreshold !== undefined ? { dcaThreshold:  parseFloat(dcaThreshold) || prev.dcaThreshold } : {}),
+      };
+      yieldVaultLiveRef.current = next;
       saveYieldVault(next, undefined);
-      push("ai", `Yield Vault updated — Min edge: **${next.minEdge}%** · Max bet: **$${next.maxBet}**`);
+      if (prev.vaultMode === "dca") {
+        push("ai", `Yield Vault updated — DCA target: **${next.dcaToken}** · threshold: **$${next.dcaThreshold}**`);
+      } else {
+        push("ai", `Yield Vault updated — Min edge: **${next.minEdge}%** · Max bet: **$${next.maxBet}**`);
+      }
       return next;
     });
   };
