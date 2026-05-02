@@ -1960,6 +1960,52 @@ function MLLockCard({ lock, onClaim, claiming }) {
 }
 
 // ── Yield Vault Prompt Card ───────────────────────────────────────────────────
+// SVG icons used exclusively in yield vault UI
+const SvgZapSm = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+  </svg>
+);
+const SvgClose = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+  </svg>
+);
+const SvgRotate = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+  </svg>
+);
+const SvgShield = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+  </svg>
+);
+const SvgCheck = ({ size = 11, color = "#0d1117" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12"/>
+  </svg>
+);
+const SvgInfo = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+  </svg>
+);
+const SvgAlertTriangle = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>
+);
+const SvgRefresh = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+  </svg>
+);
+const SvgDot = ({ color }) => (
+  <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill={color}/></svg>
+);
+
 function YieldVaultPromptCard({ onSetVault }) {
   return (
     <div style={{
@@ -1969,7 +2015,9 @@ function YieldVaultPromptCard({ onSetVault }) {
       animation: "fadeUp 0.25s ease forwards", maxWidth: 480,
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #1a3a1a, #1a2e3a)", border: "1px solid #2d4a1a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>⚡</div>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #1a3a1a, #1a2e3a)", border: "1px solid #2d4a1a", display: "flex", alignItems: "center", justifyContent: "center", color: "#c7f284" }}>
+          <SvgZapSm />
+        </div>
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#c7f284" }}>Jupiter Earn Position Detected</div>
           <div style={{ fontSize: 11, color: "#4d6a7a", marginTop: 1 }}>Auto-rotate your yield into any token</div>
@@ -1983,9 +2031,9 @@ function YieldVaultPromptCard({ onSetVault }) {
           <span key={f} style={{ fontSize: 10, fontWeight: 600, color: "#68d391", background: "rgba(104,211,145,0.1)", border: "1px solid rgba(104,211,145,0.2)", borderRadius: 20, padding: "3px 9px" }}>{f}</span>
         ))}
       </div>
-      <button onClick={onSetVault} style={{ width: "100%", padding: "11px 0", background: "linear-gradient(135deg, #c7f284, #a8d456)", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, color: "#0d1117", cursor: "pointer", letterSpacing: 0.3, transition: "opacity 0.15s" }}
-        onMouseEnter={e => e.target.style.opacity = "0.85"} onMouseLeave={e => e.target.style.opacity = "1"}>
-        ⚡ Set Yield Vault
+      <button onClick={onSetVault} style={{ width: "100%", padding: "11px 0", background: "linear-gradient(135deg, #c7f284, #a8d456)", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, color: "#0d1117", cursor: "pointer", letterSpacing: 0.3, transition: "opacity 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}
+        onMouseEnter={e => e.currentTarget.style.opacity = "0.85"} onMouseLeave={e => e.currentTarget.style.opacity = "1"}>
+        <SvgZapSm /> Set Yield Vault
       </button>
     </div>
   );
@@ -2007,37 +2055,114 @@ function formatEarned(earned, sym) {
   return `+${n < 0.01 ? n.toFixed(6) : n.toFixed(4)} ${sym} earned`;
 }
 
+// ── Shared token logo component with robust fallback ─────────────────────────
+function TokenLogo({ logo, mint, sym, size = 32 }) {
+  const [src, setSrc] = useState(logo || null);
+  const fallbacks = [
+    logo,
+    mint ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mint}/logo.png` : null,
+    mint ? `https://img.jup.ag/tokens/${mint}` : null,
+  ].filter(Boolean);
+  const tryNext = (current) => {
+    const idx = fallbacks.indexOf(current);
+    if (idx < fallbacks.length - 1) setSrc(fallbacks[idx + 1]);
+    else setSrc(null); // show initials
+  };
+  if (!src) {
+    return (
+      <div style={{ width: size, height: size, borderRadius: "50%", background: "#1e2d3d", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.35, fontWeight: 700, color: "#4d6a7a", border: "1px solid #2d4a5a" }}>
+        {(sym || "?").slice(0, 2)}
+      </div>
+    );
+  }
+  return <img src={src} alt={sym} style={{ width: size, height: size, borderRadius: "50%", flexShrink: 0, objectFit: "cover", border: "1px solid #1e2d3d" }} onError={() => tryNext(src)} />;
+}
+
 // ── Yield Vault Setup Panel ───────────────────────────────────────────────────
 function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, status, onSave, jupFetch }) {
   if (!show) return null;
+
+  // Split positions into: already vaulted (show read-only / top-up), and available (selectable)
+  const vaultedPositions   = positions.filter(p => p.isVaulted);
+  const availablePositions = positions.filter(p => !p.isVaulted);
+
+  // Top-up: if a vaulted position has new deposits, offer to update the vault's tracked amount
+  const topUpPositions = vaultedPositions.filter(p => p.topUpAmount > 0.0001);
+
   const togglePosition = (mint) => {
     setCfg(c => ({ ...c, selectedPositions: c.selectedPositions.includes(mint) ? c.selectedPositions.filter(m => m !== mint) : [...c.selectedPositions, mint] }));
   };
+
   return (
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", marginBottom: 8, animation: "fadeUp 0.22s ease forwards" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${T.border}`, background: "linear-gradient(135deg, #0d1a0d, #0f1e2a)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 18 }}>⚡</span>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(199,242,132,0.08)", border: "1px solid rgba(199,242,132,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: T.accent, flexShrink: 0 }}>
+            <SvgZapSm />
+          </div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: T.accent }}>Yield Vault Setup</div>
             <div style={{ fontSize: 11, color: T.text3 }}>Select positions · Set threshold · Choose target token</div>
           </div>
         </div>
-        <button onClick={onClose} style={{ background: "none", border: "none", color: T.text3, cursor: "pointer", fontSize: 18, padding: 4 }}>✕</button>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: T.text3, cursor: "pointer", padding: 6, display: "flex", alignItems: "center", justifyContent: "center" }}><SvgClose /></button>
       </div>
       <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
         {/* Step 1 */}
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: T.text3, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>Step 1 — Your Jupiter Earn Positions</div>
           {loading && <div style={{ textAlign: "center", padding: 20, color: T.text3, fontSize: 13 }}><span className="spinner" style={{ display: "inline-block", marginRight: 8 }} />Fetching live positions from Jupiter…</div>}
-          {!loading && positions.length === 0 && <div style={{ textAlign: "center", padding: 16, color: T.text3, fontSize: 13, background: T.bg, borderRadius: 10, border: `1px solid ${T.border}` }}>No active Jupiter Earn positions found.</div>}
-          {!loading && positions.map((pos) => {
+
+          {/* Already-vaulted positions — shown read-only (greyed out) */}
+          {!loading && vaultedPositions.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: T.text3, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>Already in a Vault</div>
+              {vaultedPositions.map((pos) => {
+                const apyStr = formatAPY(pos.apy);
+                return (
+                  <div key={pos.mint} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 13px", borderRadius: 10, border: `1px solid ${T.border}`, background: T.bg, marginBottom: 6, opacity: 0.55 }}>
+                    <TokenLogo logo={pos.logo} mint={pos.mint} sym={pos.sym} size={32} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{pos.sym} Earn</span>
+                        {apyStr && <span style={{ fontSize: 10, fontWeight: 700, color: "#68d391", background: "rgba(104,211,145,0.12)", borderRadius: 5, padding: "1px 6px" }}>{apyStr} APY</span>}
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: T.accent, background: "rgba(199,242,132,0.1)", borderRadius: 5, padding: "1px 6px", border: "1px solid rgba(199,242,132,0.2)" }}><SvgDot color={T.accent} /> VAULTED</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: T.text2 }}>
+                        {pos.amount.toFixed(4)} {pos.sym} deposited
+                        {pos.topUpAmount > 0.0001 && (
+                          <span style={{ color: "#68d391", marginLeft: 6 }}>+{pos.topUpAmount.toFixed(4)} new</span>
+                        )}
+                      </div>
+                    </div>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke={T.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  </div>
+                );
+              })}
+              {/* Top-up notice */}
+              {topUpPositions.length > 0 && (
+                <div style={{ background: "rgba(199,242,132,0.05)", border: "1px solid rgba(199,242,132,0.15)", borderRadius: 8, padding: "9px 12px", marginBottom: 6, fontSize: 12, color: T.text2, lineHeight: 1.6, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                  <span style={{ color: T.accent, flexShrink: 0, marginTop: 1 }}><SvgInfo /></span>
+                  You've added new deposits to {topUpPositions.map(p => p.sym).join(", ")}. Your existing vault will automatically pick up the new balance — no action needed.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Available positions — selectable for new vault */}
+          {!loading && availablePositions.length === 0 && vaultedPositions.length === 0 && (
+            <div style={{ textAlign: "center", padding: 16, color: T.text3, fontSize: 13, background: T.bg, borderRadius: 10, border: `1px solid ${T.border}` }}>No active Jupiter Earn positions found.</div>
+          )}
+          {!loading && availablePositions.length === 0 && vaultedPositions.length > 0 && (
+            <div style={{ textAlign: "center", padding: 12, color: T.text3, fontSize: 12, background: T.bg, borderRadius: 10, border: `1px solid ${T.border}` }}>All your earn positions already have a Yield Vault active.</div>
+          )}
+          {!loading && availablePositions.map((pos) => {
             const selected = cfg.selectedPositions.includes(pos.mint);
             const apyStr = formatAPY(pos.apy);
             const earnedStr = formatEarned(pos.earned, pos.sym);
             return (
               <div key={pos.mint} onClick={() => togglePosition(pos.mint)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 13px", borderRadius: 10, cursor: "pointer", border: `1px solid ${selected ? T.accent : T.border}`, background: selected ? "rgba(199,242,132,0.06)" : T.bg, marginBottom: 6, transition: "all 0.15s" }}>
-                <img src={pos.logo} alt={pos.sym} style={{ width: 32, height: 32, borderRadius: "50%", flexShrink: 0 }} onError={e => { e.target.onerror = null; e.target.src = `https://img.jup.ag/tokens/${pos.mint}`; }} />
+                <TokenLogo logo={pos.logo} mint={pos.mint} sym={pos.sym} size={32} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{pos.sym} Earn</span>
@@ -2075,20 +2200,22 @@ function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, statu
         {/* Summary */}
         {cfg.selectedPositions.length > 0 && cfg.thresholdUSD && cfg.targetTokenSymbol && (
           <div style={{ background: "rgba(199,242,132,0.05)", border: "1px solid rgba(199,242,132,0.15)", borderRadius: 10, padding: "11px 13px" }}>
-            <div style={{ fontSize: 12, color: T.text2, lineHeight: 1.7 }}>
-              🔁 When your <strong style={{ color: T.accent }}>{cfg.selectedPositions.map(m => { const p = positions.find(pos => pos.mint === m); return p ? p.sym : m.slice(0, 6); }).join(", ")} Earn</strong> yield accumulates <strong style={{ color: T.accent }}>${cfg.thresholdUSD}+</strong>, it will automatically be withdrawn and swapped into <strong style={{ color: T.accent }}>{cfg.targetTokenSymbol}</strong>. Your principal stays deposited and keeps earning.
+            <div style={{ fontSize: 12, color: T.text2, lineHeight: 1.7, display: "flex", alignItems: "flex-start", gap: 7 }}>
+              <span style={{ color: T.accent, flexShrink: 0, marginTop: 2 }}><SvgRotate /></span>
+              <span>When your <strong style={{ color: T.accent }}>{cfg.selectedPositions.map(m => { const p = availablePositions.find(pos => pos.mint === m); return p ? p.sym : m.slice(0, 6); }).join(", ")} Earn</strong> yield accumulates <strong style={{ color: T.accent }}>${cfg.thresholdUSD}+</strong>, it will automatically be withdrawn and swapped into <strong style={{ color: T.accent }}>{cfg.targetTokenSymbol}</strong>. Your principal stays deposited and keeps earning.</span>
             </div>
           </div>
         )}
         {/* Error message — shows exact backend error on mobile */}
         {status?.startsWith("error:") && (
-          <div style={{ background: "rgba(220,53,69,0.08)", border: "1px solid rgba(220,53,69,0.3)", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#ff6b6b", lineHeight: 1.5 }}>
-            ⚠️ {status.slice(6)}
+          <div style={{ background: "rgba(220,53,69,0.08)", border: "1px solid rgba(220,53,69,0.3)", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#ff6b6b", lineHeight: 1.5, display: "flex", alignItems: "flex-start", gap: 8 }}>
+            <span style={{ flexShrink: 0, marginTop: 1 }}><SvgAlertTriangle /></span>
+            {status.slice(6)}
           </div>
         )}
         {/* Save button */}
-        <button onClick={onSave} disabled={status === "saving" || !cfg.selectedPositions.length || !cfg.thresholdUSD || !cfg.targetTokenMint} style={{ width: "100%", padding: "12px 0", background: status === "saving" ? T.border : !cfg.selectedPositions.length || !cfg.targetTokenMint ? "#1e2d3d" : "linear-gradient(135deg, #c7f284, #a8d456)", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, color: status === "saving" || !cfg.selectedPositions.length ? T.text3 : "#0d1117", cursor: status === "saving" || !cfg.selectedPositions.length ? "not-allowed" : "pointer", transition: "all 0.15s" }}>
-          {status === "saving" ? "Saving…" : `⚡ Activate Yield Vault${cfg.selectedPositions.length > 1 ? ` (${cfg.selectedPositions.length} positions)` : ""}`}
+        <button onClick={onSave} disabled={status === "saving" || !cfg.selectedPositions.length || !cfg.thresholdUSD || !cfg.targetTokenMint} style={{ width: "100%", padding: "12px 0", background: status === "saving" ? T.border : !cfg.selectedPositions.length || !cfg.targetTokenMint ? "#1e2d3d" : "linear-gradient(135deg, #c7f284, #a8d456)", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 700, color: status === "saving" || !cfg.selectedPositions.length ? T.text3 : "#0d1117", cursor: status === "saving" || !cfg.selectedPositions.length ? "not-allowed" : "pointer", transition: "all 0.15s", display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+          {status === "saving" ? "Saving…" : <><SvgZapSm /> Activate Yield Vault{cfg.selectedPositions.length > 1 ? ` (${cfg.selectedPositions.length} positions)` : ""}</>}
         </button>
       </div>
     </div>
@@ -2096,7 +2223,104 @@ function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, statu
 }
 
 // ── Yield Vault Tracker Panel ─────────────────────────────────────────────────
-function YieldVaultTracker({ show, onClose, vaults, onCancel, onRefresh, earnPositions = [], onSetVault }) {
+function VaultCard({ v, onCancel, onUpdate, jupFetch }) {
+  const [editing, setEditing] = useState(false);
+  const [editToken, setEditToken]       = useState({ sym: v.targetTokenSymbol, mint: v.targetTokenMint, decimals: v.targetTokenDecimals ?? 6 });
+  const [editThreshold, setEditThreshold] = useState(String(v.thresholdUSD));
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState(null);
+
+  const handleSave = async () => {
+    if (!editToken.mint) { setError("Pick a target token."); return; }
+    if (!parseFloat(editThreshold) || parseFloat(editThreshold) < 1) { setError("Threshold must be at least $1."); return; }
+    setSaving(true); setError(null);
+    const result = await onUpdate(v.id, { targetTokenSymbol: editToken.sym, targetTokenMint: editToken.mint, targetTokenDecimals: editToken.decimals, thresholdUSD: editThreshold });
+    setSaving(false);
+    if (result.success) setEditing(false);
+    else setError(result.error || "Update failed.");
+  };
+
+  const handleCancel = () => { setEditing(false); setError(null); setEditToken({ sym: v.targetTokenSymbol, mint: v.targetTokenMint, decimals: v.targetTokenDecimals ?? 6 }); setEditThreshold(String(v.thresholdUSD)); };
+
+  return (
+    <div style={{ background: T.bg, border: `1px solid ${editing ? T.accent : T.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8, transition: "border-color 0.15s" }}>
+      {/* Header row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: editing ? 12 : 10 }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{v.earnSymbol} Earn → {editing ? <span style={{ color: T.accent }}>{editToken.sym}</span> : v.targetTokenSymbol}</div>
+          <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>Threshold: <span style={{ color: editing ? T.accent : T.accent }}>${editing ? editThreshold || "—" : v.thresholdUSD}</span></div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: v.status === "active" ? "rgba(104,211,145,0.12)" : "rgba(77,106,122,0.15)", color: v.status === "active" ? "#68d391" : T.text3, border: `1px solid ${v.status === "active" ? "rgba(104,211,145,0.2)" : T.border}` }}>
+            {v.status === "active" ? <><SvgDot color="#68d391" /> ACTIVE</> : v.status.toUpperCase()}
+          </span>
+          {v.status === "active" && !editing && (
+            <button onClick={() => setEditing(true)} title="Edit vault" style={{ background: "rgba(199,242,132,0.08)", border: `1px solid rgba(199,242,132,0.2)`, borderRadius: 7, color: T.accent, cursor: "pointer", padding: "4px 7px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Edit mode */}
+      {editing ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: T.text3, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>Target Token</div>
+            <TokenPicker value={editToken.sym} onSelect={(sym, mint, decimals) => setEditToken({ sym, mint, decimals })} jupFetch={jupFetch} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: T.text3, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>Trigger Threshold (USD)</div>
+            <div style={{ position: "relative" }}>
+              <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: T.text3, fontSize: 13, fontWeight: 600, pointerEvents: "none" }}>$</span>
+              <input type="number" min="1" step="1" value={editThreshold} onChange={e => setEditThreshold(e.target.value)} style={{ width: "100%", padding: "9px 12px 9px 26px", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text1, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+            </div>
+            <div style={{ display: "flex", gap: 5, marginTop: 7 }}>
+              {["5", "10", "25", "50", "100"].map(v => (
+                <button key={v} onClick={() => setEditThreshold(v)} style={{ padding: "3px 9px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: editThreshold === v ? T.accentBg : T.bg, border: `1px solid ${editThreshold === v ? T.accent : T.border}`, color: editThreshold === v ? T.accent : T.text2, cursor: "pointer" }}>${v}</button>
+              ))}
+            </div>
+          </div>
+          {error && (
+            <div style={{ display: "flex", alignItems: "center", gap: 7, background: "rgba(220,53,69,0.08)", border: "1px solid rgba(220,53,69,0.3)", borderRadius: 8, padding: "8px 11px", fontSize: 12, color: "#ff6b6b" }}>
+              <SvgAlertTriangle /> {error}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleCancel} style={{ flex: 1, padding: "9px 0", background: "none", border: `1px solid ${T.border}`, borderRadius: 8, color: T.text2, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+            <button onClick={handleSave} disabled={saving} style={{ flex: 2, padding: "9px 0", background: saving ? T.border : "linear-gradient(135deg, #c7f284, #a8d456)", border: "none", borderRadius: 8, color: saving ? T.text3 : "#0d1117", fontSize: 12, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              {saving ? "Saving…" : <><SvgCheck size={12} color="#0d1117" /> Save Changes</>}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Stats */}
+          <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
+            <div style={{ flex: 1, background: T.surface, borderRadius: 8, padding: "8px 10px" }}>
+              <div style={{ fontSize: 10, color: T.text3, marginBottom: 2 }}>Times Triggered</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: T.text1 }}>{v.swapCount || 0}</div>
+            </div>
+            <div style={{ flex: 1, background: T.surface, borderRadius: 8, padding: "8px 10px" }}>
+              <div style={{ fontSize: 10, color: T.text3, marginBottom: 2 }}>Total Rotated</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: T.accent }}>${(v.totalSwapped || 0).toFixed(2)}</div>
+            </div>
+          </div>
+          {v.lastTriggeredAt && (
+            <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>
+              Last swap: {new Date(v.lastTriggeredAt).toLocaleDateString()} · {v.lastTxSig && <a href={`https://solscan.io/tx/${v.lastTxSig}`} target="_blank" rel="noreferrer" style={{ color: T.accent, marginLeft: 4, textDecoration: "none" }}>View tx →</a>}
+            </div>
+          )}
+          {v.status === "active" && (
+            <button onClick={() => onCancel(v.id)} style={{ width: "100%", padding: "8px 0", background: "none", border: `1px solid ${T.redBd}`, borderRadius: 8, color: T.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel Vault</button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefresh, earnPositions = [], onSetVault, jupFetch }) {
   if (!show) return null;
   const configuredMints = new Set((vaults || []).map((v) => v.earnMint));
   const unconfigured = (earnPositions || []).filter((p) => p.mint && !configuredMints.has(p.mint));
@@ -2105,12 +2329,14 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onRefresh, earnPos
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", marginBottom: 8, animation: "fadeUp 0.22s ease forwards" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${T.border}`, background: "linear-gradient(135deg, #0d1a0d, #0f1e2a)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 16 }}>⚡</span>
+          <div style={{ width: 28, height: 28, borderRadius: 7, background: "rgba(199,242,132,0.08)", border: "1px solid rgba(199,242,132,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: T.accent, flexShrink: 0 }}>
+            <SvgZapSm />
+          </div>
           <span style={{ fontSize: 14, fontWeight: 700, color: T.accent }}>My Yield Vaults</span>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={onRefresh} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text2, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}>Refresh</button>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: T.text3, cursor: "pointer", fontSize: 18, padding: 4 }}>✕</button>
+          <button onClick={onRefresh} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.text2, fontSize: 11, padding: "4px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 5 }}><SvgRefresh /> Refresh</button>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: T.text3, cursor: "pointer", padding: 6, display: "flex", alignItems: "center", justifyContent: "center" }}><SvgClose /></button>
         </div>
       </div>
       <div style={{ padding: "14px 16px" }}>
@@ -2119,33 +2345,7 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onRefresh, earnPos
         ) : (
           <>
             {vaults && vaults.map((v) => (
-              <div key={v.id} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{v.earnSymbol} Earn → {v.targetTokenSymbol}</div>
-                    <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>Threshold: <span style={{ color: T.accent }}>${v.thresholdUSD}</span></div>
-                  </div>
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: v.status === "active" ? "rgba(104,211,145,0.12)" : "rgba(77,106,122,0.15)", color: v.status === "active" ? "#68d391" : T.text3, border: `1px solid ${v.status === "active" ? "rgba(104,211,145,0.2)" : T.border}` }}>{v.status === "active" ? "● ACTIVE" : v.status.toUpperCase()}</span>
-                </div>
-                <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
-                  <div style={{ flex: 1, background: T.surface, borderRadius: 8, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 10, color: T.text3, marginBottom: 2 }}>Times Triggered</div>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: T.text1 }}>{v.swapCount || 0}</div>
-                  </div>
-                  <div style={{ flex: 1, background: T.surface, borderRadius: 8, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 10, color: T.text3, marginBottom: 2 }}>Total Rotated</div>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: T.accent }}>${(v.totalSwapped || 0).toFixed(2)}</div>
-                  </div>
-                </div>
-                {v.lastTriggeredAt && (
-                  <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>
-                    Last swap: {new Date(v.lastTriggeredAt).toLocaleDateString()} · {v.lastTxSig && <a href={`https://solscan.io/tx/${v.lastTxSig}`} target="_blank" rel="noreferrer" style={{ color: T.accent, marginLeft: 4, textDecoration: "none" }}>View tx →</a>}
-                  </div>
-                )}
-                {v.status === "active" && (
-                  <button onClick={() => onCancel(v.id)} style={{ width: "100%", padding: "8px 0", background: "none", border: `1px solid ${T.redBd}`, borderRadius: 8, color: T.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel Vault</button>
-                )}
-              </div>
+              <VaultCard key={v.id} v={v} onCancel={onCancel} onUpdate={onUpdate} jupFetch={jupFetch} />
             ))}
             {unconfigured.length > 0 && (
               <>
@@ -2156,7 +2356,7 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onRefresh, earnPos
                   <div key={p.mint} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        {p.logo && <img src={p.logo} alt={p.sym} style={{ width: 24, height: 24, borderRadius: "50%", background: T.surface }} onError={(e) => { e.target.style.display = "none"; }} />}
+                        {p.logo && <TokenLogo logo={p.logo} mint={p.mint} sym={p.sym} size={24} />}
                         <div>
                           <div style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{p.sym} Earn</div>
                           <div style={{ fontSize: 11, color: T.text3, marginTop: 1 }}>{p.amount > 0 ? `${p.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${p.sym} deposited` : "Position active"}</div>
@@ -2167,7 +2367,7 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onRefresh, earnPos
                     {p.apy != null && (
                       <div style={{ fontSize: 11, color: T.teal, marginBottom: 8 }}>APY: {(p.apy / 100).toFixed(2)}%</div>
                     )}
-                    <button onClick={() => onSetVault && onSetVault(p)} style={{ width: "100%", padding: "8px 0", background: T.accent, border: "none", borderRadius: 8, color: "#0d1117", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⚡ Set Yield Vault</button>
+                    <button onClick={() => onSetVault && onSetVault(p)} style={{ width: "100%", padding: "8px 0", background: T.accent, border: "none", borderRadius: 8, color: "#0d1117", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><SvgZapSm /> Set Yield Vault</button>
                   </div>
                 ))}
               </>
@@ -4828,7 +5028,15 @@ function JupChatInner() {
     if (!walletFull) return;
     setYieldVaultLoading(true);
     try {
-      const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`);
+      // Fetch earn positions and saved vaults in parallel
+      const [earnRaw, vaultRes] = await Promise.all([
+        jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`),
+        fetch(`/api/yield-vault?wallet=${walletFull}`).then(r => r.json()).catch(() => ({ vaults: [] })),
+      ]);
+
+      // Build a map of earnMint → saved vault for already-configured positions
+      const savedVaults = vaultRes?.vaults || [];
+      const vaultByMint = new Map(savedVaults.map(v => [v.earnMint, v]));
 
       // Jupiter returns a flat array of positions
       let positions = Array.isArray(earnRaw) ? earnRaw
@@ -4878,10 +5086,21 @@ function JupChatInner() {
         const earned = null;
 
         // ── LOGO ────────────────────────────────────────────────────────────────
-        const logo = tok.logoURI || tok.logo_url || `https://img.jup.ag/tokens/${mint}`;
+        // Try multiple sources; component will handle onerror fallback to coin symbol
+        const logo = tok.logoURI || tok.logo_url || tok.image ||
+          (mint ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mint}/logo.png` : null);
+
+        // ── VAULT STATUS ─────────────────────────────────────────────────────────
+        // Check if this mint already has an active vault configured
+        const existingVault = mint ? vaultByMint.get(mint) : null;
+        const isVaulted = !!(existingVault && existingVault.status === "active");
+        // The vault's deposited amount at setup time (used for top-up delta display)
+        const vaultedAmount = existingVault ? (existingVault.depositedAmount || 0) : 0;
+        // If total deposited > vaulted amount, the difference is a new top-up
+        const topUpAmount = isVaulted && amount > vaultedAmount ? amount - vaultedAmount : 0;
 
         console.log("[YieldVault] normalised position:", {
-          sym, mint, dec, shares, ua, amount, apy,
+          sym, mint, dec, shares, ua, amount, apy, isVaulted, vaultedAmount, topUpAmount,
           raw_underlyingAssets: p.underlyingAssets,
           raw_underlyingBalance: p.underlyingBalance,
           raw_shares: p.shares,
@@ -4899,6 +5118,11 @@ function JupChatInner() {
           earned,
           logo,
           name: tok.name || `Jupiter Earn ${sym}`,
+          // Vault status fields
+          isVaulted,        // true = already has an active vault
+          vaultedAmount,    // amount that was vaulted at setup
+          topUpAmount,      // any new deposit beyond vaulted amount
+          existingVaultId: existingVault?.id || null,
           raw: p,
         };
       }).filter(p => p.mint && p.hasActivePosition);
@@ -4920,6 +5144,8 @@ function JupChatInner() {
     for (const earnMint of selectedPositions) {
       const pos = yieldVaultPositions.find((p) => p.mint === earnMint);
       if (!pos) continue;
+      // Skip positions that already have an active vault — they don't need a new one
+      if (pos.isVaulted) { saved++; continue; }
       try {
         let priceUSD = 1;
         try {
@@ -4930,7 +5156,6 @@ function JupChatInner() {
         const res = await fetch("/api/yield-vault", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // Fix 3: targetTokenDecimals fallback to 6 (USDC default) instead of undefined
           body: JSON.stringify({ wallet: walletFull, earnPositionId: earnMint, earnSymbol: pos.sym, earnMint, earnJlMint: pos.jlMint, depositedAmount: pos.amount, depositedValueUSD: pos.amount * priceUSD, thresholdUSD: parseFloat(thresholdUSD), targetTokenSymbol, targetTokenMint, targetTokenDecimals: targetTokenDecimals ?? 6 }),
         });
         const data = await res.json();
@@ -4945,10 +5170,10 @@ function JupChatInner() {
       }
     }
     setYieldVaultStatus("done");
-    // Fix 2: only close panel on success — keep open on failure so user can retry
+    // Only close panel on success — keep open on failure so user can retry
     if (saved > 0) {
       setShowYieldVault(false);
-      push("ai", `✅ **Yield Vault active** on ${saved} position${saved > 1 ? "s" : ""}!\n\nWhenever your ${selectedPositions.length > 1 ? "selected earn positions" : yieldVaultPositions.find((p) => p.mint === selectedPositions[0])?.sym + " Earn position"} accumulate **$${thresholdUSD}+ in yield**, it will automatically be withdrawn and swapped into **${targetTokenSymbol}**.\n\nNo further action needed. Type *"show my yield vault"* to track your positions.`);
+      push("ai", `**Yield Vault active** on ${saved} position${saved > 1 ? "s" : ""}!\n\nWhenever your ${selectedPositions.length > 1 ? "selected earn positions" : yieldVaultPositions.find((p) => p.mint === selectedPositions[0])?.sym + " Earn position"} accumulate **$${thresholdUSD}+ in yield**, it will automatically be withdrawn and swapped into **${targetTokenSymbol}**.\n\nNo further action needed. Type *"show my yield vault"* to track your positions.`);
       fetchSavedVaults();
     } else { push("ai", "Failed to save Yield Vault. Please try again."); }
     setYieldVaultStatus(null);
@@ -4971,6 +5196,25 @@ function JupChatInner() {
       const data = await res.json();
       if (data.success) { push("ai", "Yield Vault cancelled. Your earn position is untouched."); fetchSavedVaults(); }
     } catch {}
+  };
+
+  const updateYieldVault = async (vaultId, { targetTokenSymbol, targetTokenMint, targetTokenDecimals, thresholdUSD }) => {
+    if (!walletFull) return { success: false, error: "No wallet" };
+    try {
+      const res = await fetch("/api/yield-vault", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: vaultId, wallet: walletFull, targetTokenSymbol, targetTokenMint, targetTokenDecimals: targetTokenDecimals ?? 6, thresholdUSD: parseFloat(thresholdUSD) }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchSavedVaults();
+        return { success: true };
+      }
+      return { success: false, error: data.error || "Update failed" };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
   };
 
   // ── Shared tx helper ─────────────────────────────────────────────────────────
@@ -10609,8 +10853,10 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     onClose={() => setMsgs(prev => prev.filter(x => x.id !== m.id))}
                     vaults={yieldVaultSaved}
                     onCancel={cancelYieldVault}
+                    onUpdate={updateYieldVault}
                     onRefresh={() => { fetchSavedVaults(); fetchEarnPositionsForVault(); }}
                     earnPositions={yieldVaultPositions}
+                    jupFetch={jupFetch}
                     onSetVault={(p) => {
                       setYieldVaultCfg(prev => ({ ...prev, selectedPositions: [p.mint] }));
                       setMsgs(prev => prev.filter(x => x.id !== m.id));
@@ -11673,8 +11919,10 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             onClose={() => setShowYieldVaultTracker(false)}
             vaults={yieldVaultSaved}
             onCancel={cancelYieldVault}
+            onUpdate={updateYieldVault}
             onRefresh={() => { fetchSavedVaults(); fetchEarnPositionsForVault(); }}
             earnPositions={yieldVaultPositions}
+            jupFetch={jupFetch}
             onSetVault={(p) => {
               setYieldVaultCfg(prev => ({ ...prev, selectedPositions: [p.mint] }));
               setShowYieldVaultTracker(false);
