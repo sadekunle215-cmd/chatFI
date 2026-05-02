@@ -8678,6 +8678,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           }
           setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || {}, solBalance: ((pData?.walletBalances?.SOL) || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices });
           setPortfolioLoading(false);
+          fetchEarnPositionsForVault();
         }
 
       } else if (action === "SHOW_SWAP") {
@@ -10229,6 +10230,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               }
               setPortfolioData({ ...pData, wallet: walletFull, walletBalances: pData?.walletBalances || {}, solBalance: ((pData?.walletBalances?.SOL) || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices2 });
               setPortfolioLoading(false);
+              fetchEarnPositionsForVault();
 
             // ── FETCH_TOKEN_INFO ────────────────────────────────────────────────
             } else if (stepAction === "FETCH_TOKEN_INFO") {
