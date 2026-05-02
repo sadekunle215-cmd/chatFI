@@ -2396,13 +2396,27 @@ function BestYieldPanel({ msgText, earnVaults, earnLoading, onClose, onDeposit, 
             ? (byMint[v.assetMint]?.amount > 0)
             : false;
 
-          // Find ANY position the user has in a lower-APY vault (same or different token)
-          // so we can offer migration to this higher-APY vault
+          // Find a position the user has in a DIFFERENT vault that has lower APY than this one.
+          // Prefer same-token vaults first (e.g. USDC → better USDC vault), then any lower-APY vault
+          // including cross-token stablecoin migrations (e.g. USDG → USDC).
+          const allUserEntries = Object.values(byMint).filter(p => p.amount > 0 && p.mint !== v.assetMint);
           const sourceEntry = !inThisVault
-            ? Object.values(byMint).find(p => p.amount > 0 && p.mint !== v.assetMint && (() => {
-                const sourceVault = (earnVaults || []).find(ev => ev.assetMint === p.mint);
-                return !sourceVault || sourceVault.apy < v.apy;
-              })())
+            ? (() => {
+                // 1. Same token, different vault (higher priority)
+                const sameToken = allUserEntries.find(p => {
+                  const srcVault = (earnVaults || []).find(ev => ev.assetMint === p.mint);
+                  const srcApy = srcVault?.apy ?? 0;
+                  const isSameToken = (srcVault?.token || p.sym || "").toUpperCase() === (v.token || "").toUpperCase();
+                  return isSameToken && srcApy < v.apy;
+                });
+                if (sameToken) return sameToken;
+                // 2. Any vault with lower APY (e.g. USDG → USDC if USDC has better APY)
+                return allUserEntries.find(p => {
+                  const srcVault = (earnVaults || []).find(ev => ev.assetMint === p.mint);
+                  const srcApy = srcVault?.apy ?? 0;
+                  return srcApy < v.apy;
+                });
+              })()
             : null;
           const sourceVault = sourceEntry
             ? (earnVaults || []).find(ev => ev.assetMint === sourceEntry.mint)
@@ -2426,7 +2440,7 @@ function BestYieldPanel({ msgText, earnVaults, earnLoading, onClose, onDeposit, 
                     {inThisVault
                       ? `${displayPos.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${v.token} deposited`
                       : canMigrate
-                        ? `${sourceEntry.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${sourceEntry.sym} in lower-APY vault`
+                        ? `${sourceEntry.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${sourceEntry.sym} @ ${sourceVault ? sourceVault.apy.toFixed(2) + "% → migrate for +" + (v.apy - (sourceVault?.apy || 0)).toFixed(2) + "%" : "lower APY"}`
                         : v.utilization != null ? `${v.utilization}% utilization` : "Jupiter Lend"}
                   </div>
                 </div>
