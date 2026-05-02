@@ -5296,6 +5296,15 @@ function JupChatInner() {
     if (saved > 0) {
       setShowYieldVault(false);
       if (!telegramLinked) setShowTelegramPrompt(true);
+      // Notify user on Telegram if linked
+      if (telegramLinked) {
+        const pos = yieldVaultPositions.find((p) => p.mint === selectedPositions[0]);
+        fetch("/api/yield-vault?action=notify-vault-created", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet: walletFull, earnSymbol: pos?.sym || "Earn", targetTokenSymbol, thresholdUSD }),
+        }).catch(() => {});
+      }
       push("ai", `**Yield Vault active** on ${saved} position${saved > 1 ? "s" : ""}!\n\nWhenever your ${selectedPositions.length > 1 ? "selected earn positions" : yieldVaultPositions.find((p) => p.mint === selectedPositions[0])?.sym + " Earn position"} accumulate **$${thresholdUSD}+ in yield**, it will automatically be withdrawn and swapped into **${targetTokenSymbol}**.\n\nNo further action needed. Type *"show my yield vault"* to track your positions.`);
       fetchSavedVaults();
     } else { push("ai", "Failed to save Yield Vault. Please try again."); }
@@ -5315,9 +5324,21 @@ function JupChatInner() {
   const cancelYieldVault = async (vaultId) => {
     if (!walletFull) return;
     try {
+      const vault = yieldVaultSaved.find(v => v.id === vaultId);
       const res = await fetch(`/api/yield-vault?id=${vaultId}&wallet=${walletFull}`, { method: "DELETE" });
       const data = await res.json();
-      if (data.success) { push("ai", "Yield Vault cancelled. Your earn position is untouched."); fetchSavedVaults(); }
+      if (data.success) {
+        push("ai", "Yield Vault cancelled. Your earn position is untouched.");
+        fetchSavedVaults();
+        // Notify on Telegram if linked
+        if (telegramLinked && vault) {
+          fetch("/api/yield-vault?action=notify-vault-cancelled", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ wallet: walletFull, earnSymbol: vault.earnSymbol }),
+          }).catch(() => {});
+        }
+      }
     } catch {}
   };
 
@@ -5340,6 +5361,15 @@ function JupChatInner() {
       const data = await res.json();
       if (data.success) {
         fetchSavedVaults();
+        // Notify on Telegram if linked
+        if (telegramLinked) {
+          const vault = yieldVaultSaved.find(v => v.id === vaultId);
+          fetch("/api/yield-vault?action=notify-vault-updated", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ wallet: walletFull, earnSymbol: vault?.earnSymbol, targetTokenSymbol, thresholdUSD }),
+          }).catch(() => {});
+        }
         return { success: true };
       }
       return { success: false, error: data.error || "Update failed" };
