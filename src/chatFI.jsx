@@ -12787,7 +12787,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   {/* ── Yield Rotator — better APY migration banners ── */}
                   <YieldRotatorPlugin
                     walletFull={walletFull}
-                    earnPositions={portfolioData?.earnPositions || []}
+                    earnPositions={yieldVaultPositions.length ? yieldVaultPositions : (portfolioData?.earnPositions || [])}
                     jupFetch={jupFetch}
                     getActiveProvider={getActiveProvider}
                     push={push}
