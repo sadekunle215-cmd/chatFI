@@ -8,16 +8,10 @@
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "functions": {
-    "api/yield-vault.js": {
-      "memory": 1024,
-      "maxDuration": 60
-    },
-    "api/jupiter.js": {
-      "memory": 512,
-      "maxDuration": 30
-    }
+    "api/yield-vault.js": { "memory": 1024, "maxDuration": 60 },
+    "api/jupiter.js": { "memory": 512, "maxDuration": 30 }
   },
   "crons": [
-    { "path": "/api/yield-vault?cron=rotator", "schedule": "*/5 * * * *" }
+    { "path": "/api/yield-vault?cron=rotator", "schedule": "0 * * * *" }
   ]
 }
