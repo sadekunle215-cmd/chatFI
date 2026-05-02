@@ -15,8 +15,10 @@ import { PrivyProvider, usePrivy, useWallets, useSolanaWallets } from "@privy-io
 // ── Plugins (add new feature files here) ─────────────────────────────────────
 // import ExamplePlugin, { suggestionGroup as exampleSuggestions } from "./plugins/ExamplePlugin";
 // To activate: 1) uncomment import above  2) add exampleSuggestions to PLUGIN_SUGGESTION_GROUPS below
+import YieldRotatorPlugin, { suggestionGroup as yieldRotatorSuggestions } from "./plugins/YieldRotatorPlugin";
 const PLUGIN_SUGGESTION_GROUPS = [
   // exampleSuggestions,
+  yieldRotatorSuggestions,
 ];
 
 // ── SVG Icon Components ─────────────────────────────────────────────────────
@@ -12781,6 +12783,18 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       </div>
                     ) : null;
                   })()}
+
+                  {/* ── Yield Rotator — better APY migration banners ── */}
+                  <YieldRotatorPlugin
+                    walletFull={walletFull}
+                    earnPositions={portfolioData?.earnPositions || []}
+                    jupFetch={jupFetch}
+                    getActiveProvider={getActiveProvider}
+                    push={push}
+                    T={T}
+                    isMobile={isMobile}
+                    onMigrationDone={() => fetchPortfolio()}
+                  />
 
                   {/* ── Prediction Positions ── */}
                   {(portfolioData.predPositions||[]).length > 0 && (
