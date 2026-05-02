@@ -5762,11 +5762,12 @@ function JupChatInner() {
         : (rawSym.startsWith("jl") ? rawSym.slice(2) : rawSym);  // "jlUSDG" → "USDG"
 
       const dec = underlyingTok.decimals ?? tok.asset?.decimals ?? tok.decimals ?? e.decimals ?? 6;
-      // underlyingAssets and underlyingBalance are always raw on-chain integers — always divide
+      // underlyingBalance is already a human-readable decimal (per Jupiter API docs, e.g. "17.72")
+      // underlyingAssets is the raw on-chain integer — divide by decimals
       const ub      = parseFloat(e.underlyingBalance || 0);
       const ua      = parseFloat(e.underlyingAssets  || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
       const divisor = Math.pow(10, dec);
-      const amount  = ub > 0 ? ub / divisor : ua / divisor;
+      const amount  = ub > 0 ? ub : ua / divisor;
       const amountRaw = ua; // keep raw for the withdraw body
       return {
         _type:   "earn",
