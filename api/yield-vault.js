@@ -358,6 +358,164 @@ async function runWatcher(req, res) {
   }
 }
 
+// ── Yield Rotator: fetch all Jupiter Earn pools ───────────────────────────────
+async function fetchAllEarnPools() {
+  try {
+    const res = await fetch("https://lend-api.jup.ag/api/v1/markets", {
+      headers: { "Content-Type": "application/json", ...(process.env.JUP_API_KEY ? { "x-api-key": process.env.JUP_API_KEY } : {}) },
+    });
+    if (!res.ok) throw new Error(`Markets API ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data) ? data : data?.markets || data?.data || [];
+  } catch (e) {
+    console.error("[YieldRotator] fetchAllEarnPools error:", e.message);
+    return [];
+  }
+}
+
+// ── Yield Rotator: fetch earn positions for a wallet ──────────────────────────
+async function fetchEarnPositionsForWallet(wallet) {
+  try {
+    const res = await fetch(`https://lend-api.jup.ag/api/v1/positions?users=${wallet}`, {
+      headers: { "Content-Type": "application/json", ...(process.env.JUP_API_KEY ? { "x-api-key": process.env.JUP_API_KEY } : {}) },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : data?.data || data?.positions || [];
+  } catch { return []; }
+}
+
+// ── Yield Rotator: find best pool for each position ───────────────────────────
+function findBestPool(positions, allPools) {
+  const ops = [];
+  for (const pos of positions) {
+    const posMint   = pos.asset?.mint || pos.mint || pos.tokenMint || pos.assetMint || "";
+    const posSym    = pos.asset?.symbol || pos.assetSymbol || pos.symbol || posMint.slice(0, 6);
+    const posApy    = parseFloat(pos.supplyApy ?? pos.apy ?? pos.lendingApy ?? pos.rate ?? 0);
+    const posAmt    = parseFloat(pos.underlyingBalance ?? pos.underlyingAssets ?? pos.depositedAmount ?? pos.amount ?? 0);
+    const posPoolId = pos.planId || pos.poolId || pos.marketId || "";
+    if (posAmt <= 0) continue;
+
+    let bestPool = null, bestApy = posApy;
+    for (const pool of allPools) {
+      const poolApy = parseFloat(pool.supplyApy ?? pool.apy ?? pool.lendingApy ?? pool.rate ?? 0);
+      const poolId  = pool.planId || pool.id || pool.poolId || "";
+      if (poolId && posPoolId && poolId === posPoolId) continue;
+      if (poolApy > bestApy) { bestApy = poolApy; bestPool = pool; }
+    }
+
+    if (bestPool) {
+      ops.push({
+        posSym, posApy, posPoolId,
+        bestSym: bestPool.asset?.symbol || bestPool.mint?.slice(0, 6) || "?",
+        bestApy,
+        apyGap: bestApy - posApy,
+        isCrossAsset: (bestPool.asset?.mint || bestPool.mint || "") !== posMint,
+      });
+    }
+  }
+  return ops.sort((a, b) => b.apyGap - a.apyGap);
+}
+
+// ── Yield Rotator cron watcher ────────────────────────────────────────────────
+async function runRotatorWatcher(req, res) {
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const log = [];
+  const startTime = Date.now();
+
+  try {
+    const db = getDb();
+
+    // 1. Fetch all live pools once
+    const allPools = await fetchAllEarnPools();
+    if (!allPools.length) return res.status(200).json({ message: "No pools returned — skipping", log });
+
+    // 2. Get all wallets that have Telegram linked (reuse chatfi_users collection)
+    const usersSnap = await db.collection("chatfi_users").where("telegramChatId", "!=", "").get();
+    if (usersSnap.empty) return res.status(200).json({ message: "No Telegram-linked users", log });
+
+    log.push(`Checking ${usersSnap.docs.length} wallet(s) against ${allPools.length} pool(s)`);
+
+    let alertsSent = 0;
+
+    for (const userDoc of usersSnap.docs) {
+      const user = userDoc.data();
+      const { wallet, telegramChatId } = user;
+      if (!wallet || !telegramChatId) continue;
+
+      try {
+        const positions = await fetchEarnPositionsForWallet(wallet);
+        if (!positions.length) continue;
+
+        const ops = findBestPool(positions, allPools);
+        if (!ops.length) { log.push(`[${wallet.slice(0, 8)}] No better pool found`); continue; }
+
+        const best = ops[0];
+
+        // Check rotator state doc to avoid spam-alerting same pool
+        const rotatorRef = db.collection("yield_rotators").doc(wallet.slice(0, 32));
+        const rotatorSnap = await rotatorRef.get();
+        const rotatorData = rotatorSnap.exists ? rotatorSnap.data() : {};
+
+        // Skip if we already alerted for this same target pool within the last hour
+        const lastAlertPool = rotatorData.lastAlertPool || "";
+        const lastAlertAt   = rotatorData.lastAlertAt ? new Date(rotatorData.lastAlertAt).getTime() : 0;
+        const ONE_HOUR_MS   = 60 * 60 * 1000;
+        if (lastAlertPool === best.bestSym && (Date.now() - lastAlertAt) < ONE_HOUR_MS) {
+          log.push(`[${wallet.slice(0, 8)}] Already alerted for ${best.bestSym} — skipping`);
+          continue;
+        }
+
+        // Send Telegram alert (reuse existing sendTelegramMessage)
+        const msg =
+          `📈 <b>Better Yield Found! — ChatFi</b>\n\n` +
+          `Your <b>${best.posSym} Earn</b> is at <b>${best.posApy.toFixed(2)}% APY</b>.\n\n` +
+          `Better pool available: <b>${best.bestSym} Earn</b> at <b>${best.bestApy.toFixed(2)}% APY</b>` +
+          (best.isCrossAsset ? ` <i>(swap required)</i>` : ``) + `.\n\n` +
+          `Potential gain: <b>+${best.apyGap.toFixed(2)}%</b> more APY 🚀\n\n` +
+          `Open ChatFi to migrate with one tap 👇`;
+
+        const markup = {
+          inline_keyboard: [[
+            { text: "🔄 Migrate Now", url: `${APP_URL}` },
+          ]],
+        };
+        await sendTelegramMessage(telegramChatId, msg, markup);
+        alertsSent++;
+
+        // Persist state
+        await rotatorRef.set({
+          wallet,
+          lastAlertPool: best.bestSym,
+          lastAlertAt:   new Date().toISOString(),
+        }, { merge: true });
+
+        log.push(`[${wallet.slice(0, 8)}] Alert sent — ${best.posSym} ${best.posApy.toFixed(2)}% → ${best.bestSym} ${best.bestApy.toFixed(2)}%`);
+        await sleep(300);
+      } catch (e) {
+        log.push(`[${wallet.slice(0, 8)}] ERROR: ${e.message}`);
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      checked:    usersSnap.docs.length,
+      alertsSent,
+      pools:      allPools.length,
+      elapsed:    `${Date.now() - startTime}ms`,
+      log,
+    });
+
+  } catch (err) {
+    console.error("[YieldRotatorWatcher]", err);
+    return res.status(500).json({ error: err.message, log });
+  }
+}
+
 // ── Telegram: notify vault created ───────────────────────────────────────────
 async function handleNotifyVaultCreated(req, res) {
   const { wallet, earnSymbol, targetTokenSymbol, thresholdUSD } = req.body;
@@ -565,6 +723,11 @@ export default async function handler(req, res) {
   // Cron watcher — GET ?cron=1
   if (req.method === "GET" && req.query.cron === "1") {
     return runWatcher(req, res);
+  }
+
+  // Yield Rotator cron — GET ?cron=rotator
+  if (req.method === "GET" && req.query.cron === "rotator") {
+    return runRotatorWatcher(req, res);
   }
 
   // Telegram magic link — POST ?action=link-telegram
