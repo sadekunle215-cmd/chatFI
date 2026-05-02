@@ -5230,8 +5230,11 @@ function JupChatInner() {
       }).filter(p => p.mint && p.hasActivePosition);
 
       setYieldVaultPositions(normalised);
+      setYieldVaultLoading(false);
+      return normalised;
     } catch (e) { console.error("[YieldVault] fetchEarnPositionsForVault:", e.message); }
     setYieldVaultLoading(false);
+    return [];
   };
 
   // ── Yield Vault — save config ─────────────────────────────────────────────
@@ -6110,137 +6113,34 @@ function JupChatInner() {
   };
 
   // ── Fetch open Lend positions ─────────────────────────────────────────────────
-  // Earn positions: MUST use direct fetch() — jupFetch proxy strips/transforms earn response.
+  // Earn positions: sourced from the Yield Vault system (fetchEarnPositionsForVault)
+  // which already handles normalisation, API key injection, and shape variance.
   // Borrow/Multiply positions: Jupiter Borrow REST API is "Coming Soon" (SDK-only for now).
   const fetchLendPositions = async () => {
     if (!walletFull) { push("ai", "Connect your wallet first to view your Lend positions."); return; }
     setLendPosLoading(true);
     setShowLendPos(true);
 
-    // 1. Earn positions — Jupiter Earn /positions API
-    // Real response shape: { token: { address, symbol, decimals, name }, underlyingAssets, underlyingBalance, shares }
-    // We normalise every position into a consistent shape so the render never needs to guess field names.
-    let earnPositions = [];
-    const normaliseEarnPos = (e) => {
-      // Jupiter Earn positions API: e.token = jlToken receipt (symbol "Earn", address = jlToken mint)
-      // e.assetMint (top-level) = the REAL underlying asset mint (USDG, USDC, SOL, etc.)
-      // e.asset (if present) = underlying asset descriptor with symbol/decimals
-      const tok           = e.token || {};
-      const underlyingTok = e.asset || e.underlyingToken || {};
-
-      // jlToken (receipt) address — do NOT use as the underlying asset mint
-      const jlMint = tok.address || tok.id || null;
-      // Underlying mint — prefer explicit fields; never fall back to jlToken address
-      const mint = e.assetMint || e.asset?.address || e.underlyingToken?.address || e.mint || null;
-
-      // Underlying symbol — prefer e.asset.symbol; strip "jl" prefix from jlToken symbols ("jlUSDG"→"USDG")
-      const rawSym = underlyingTok.symbol || tok.symbol || e.assetSymbol || e.symbol || "";
-      const sym = rawSym.toLowerCase() === "earn"
-        ? (underlyingTok.symbol || e.assetSymbol || tok.name?.replace(/^jl/i, "") || "")
-        : (rawSym.startsWith("jl") ? rawSym.slice(2) : rawSym);  // "jlUSDG" → "USDG"
-
-      const dec = underlyingTok.decimals ?? tok.asset?.decimals ?? tok.decimals ?? e.decimals ?? 6;
-      // underlyingAssets and underlyingBalance are always raw on-chain integers — always divide
-      const ub      = parseFloat(e.underlyingBalance || 0);
-      const ua      = parseFloat(e.underlyingAssets  || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
-      const divisor = Math.pow(10, dec);
-      const amount  = ub > 0 ? ub / divisor : ua / divisor;
-      const amountRaw = ua; // keep raw for the withdraw body
-      return {
-        _type:   "earn",
-        _sym:    sym,
-        _mint:   mint,
-        _jlMint: jlMint,
-        _dec:    dec,
-        _amt:   amount,
-        _amtRaw: amountRaw,
-        _name:  underlyingTok.name || (sym ? `Jupiter Lend ${sym}` : null) || tok.name || e.name || "Jupiter Lend",
-        _logoUrl: underlyingTok.logoURI || underlyingTok.logo_url || tok.logoURI || tok.logo_url || tok.icon || e.logoUrl || "",
-        ...e,   // keep raw fields for any other consumers
-      };
-    };
-
-    try {
-      const earnRaw = await jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`);
-      let earnArr = Array.isArray(earnRaw) ? earnRaw
-        : earnRaw?.data || earnRaw?.positions || earnRaw?.earnPositions
-        || earnRaw?.result || earnRaw?.items || earnRaw?.balances || null;
-      // If still not an array (or is empty), try Object.values to handle wallet-keyed responses
-      // like { "WALLET_ADDRESS": [...positions...] } — also flattens array-valued props
-      // NOTE: also check earnArr.length === 0 so we retry even if the named-key fallback returned []
-      if (!Array.isArray(earnArr) || earnArr.length === 0) {
-        const vals = Object.values(earnRaw);
-        const flat = vals.flatMap(v =>
-          Array.isArray(v) ? v :
-          (v && typeof v === "object" ? [v] : [])
-        );
-        if (flat.length > 0) earnArr = flat;
-        else if (!Array.isArray(earnArr)) earnArr = [];
-      }
-      earnPositions = earnArr
-        .map(normaliseEarnPos)
-        .filter(e => e._amt > 0 || parseFloat(e.shares || 0) > 0);
-
-      // ── Repair pass: positions still missing mint/sym → cross-ref /tokens endpoint ──
-      const needsRepair = earnPositions.some(p => !p._mint || !p._sym);
-      if (needsRepair) {
-        try {
-          const tokData = await jupFetch(`${JUP_EARN_API}/tokens`);
-          const tokArr  = Array.isArray(tokData) ? tokData : (tokData?.data || []);
-          earnPositions = earnPositions.map(pos => {
-            if (pos._mint && pos._sym) return pos;
-            const match = tokArr.find(t =>
-              (pos._jlMint && (
-                t.mint === pos._jlMint || t.address === pos._jlMint ||
-                t.jlToken?.address === pos._jlMint || t.receiptMint === pos._jlMint
-              )) ||
-              (pos._sym && (t.asset?.symbol || t.symbol || "").toUpperCase() === pos._sym.toUpperCase())
-            );
-            if (!match) return pos;
-            return {
-              ...pos,
-              _mint: pos._mint || match.asset?.address || match.address || null,
-              _sym:  pos._sym  || match.asset?.symbol  || match.symbol  || pos._sym,
-              _dec:  pos._dec  ?? match.asset?.decimals ?? match.decimals ?? 6,
-            };
-          });
-        } catch {}
-      }
-    } catch {}
-
-    // 1b. Portfolio API fallback — only used when /positions returns nothing
-    // Normalised the same way so the render stays identical
-    if (!earnPositions.length) {
-      try {
-        const portRes  = await fetch(`${JUP_PORTFOLIO}/positions/${walletFull}`);
-        const portData = await portRes.json();
-        const allEl    = Array.isArray(portData) ? portData : (portData?.data || portData?.elements || portData?.positions || []);
-        const earnEls  = allEl.filter(el => {
-          const s = ((el.label || "") + (el.platformId || "") + (el.name || "")).toLowerCase();
-          return s.includes("earn") || s.includes("lend") || s.includes("vault") || s.includes("yield");
-        });
-        earnPositions = earnEls.flatMap(el => {
-          const assets = el.data?.assets || el.data?.positions || [];
-          const toPos  = (a) => normaliseEarnPos({
-            _fromPortfolio: true,
-            token: {
-              symbol:   a.symbol   || a.name   || el.name || "",
-              address:  a.address  || a.mint   || null,
-              decimals: a.decimals || 6,
-              name:     a.name     || el.name  || "",
-              logoURI:  a.logoURI  || a.icon   || "",
-            },
-            underlyingAssets: a.underlyingAssets || a.amount || a.value || el.value,
-            underlyingBalance: 0,
-            shares: a.shares || 0,
-            value: a.value ?? el.value,
-          });
-          return assets.length ? assets.map(toPos) : [toPos({
-            symbol: el.name || el.label || "", value: el.value
-          })];
-        }).filter(e => e._amt > 0 || parseFloat(e.value || 0) > 0);
-      } catch {}
-    }
+    // 1. Earn positions — reuse the Yield Vault system instead of a separate fetch.
+    // fetchEarnPositionsForVault() populates yieldVaultPositions with correctly normalised
+    // positions (sym, mint, dec, amount, shares, logo, apy). We map those fields to the
+    // _-prefixed shape the lend positions render expects.
+    const _freshPositions = await fetchEarnPositionsForVault();
+    const earnPositions = (_freshPositions || []).map(p => ({
+      _type:    "earn",
+      _sym:     p.sym,
+      _mint:    p.mint,
+      _jlMint:  p.jlMint || null,
+      _dec:     p.dec,
+      _amt:     p.amount,
+      _amtRaw:  p.amount * Math.pow(10, p.dec),
+      _name:    p.name || `Jupiter Lend ${p.sym}`,
+      _logoUrl: p.logo || "",
+      // keep original fields available for withdraw modal
+      ...p.raw,
+      assetMint: p.mint,
+      shares:    p.shares,
+    }));
 
     // 2. Borrow/Multiply positions — via /api/lend-positions (uses @jup-ag/lend-read SDK)
     let borrowPositions = [];
@@ -7370,12 +7270,22 @@ function JupChatInner() {
       const _rpcUrl = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
       const _conn   = new Connection(_rpcUrl, "confirmed");
       const _start  = Date.now();
+      let _confirmed = false;
       while (Date.now() - _start < 30000) {
         const _res = await _conn.getSignatureStatuses([signature], { searchTransactionHistory: true });
         const _st  = _res?.value?.[0];
         if (_st?.err) throw new Error("Transaction failed on-chain: " + JSON.stringify(_st.err));
-        if (_st?.confirmationStatus === "confirmed" || _st?.confirmationStatus === "finalized") break;
+        if (_st?.confirmationStatus === "confirmed" || _st?.confirmationStatus === "finalized") { _confirmed = true; break; }
         await new Promise(r => setTimeout(r, 1500));
+      }
+      // Guard: if loop exited due to timeout (not confirmation), treat as failure
+      if (!_confirmed) {
+        const _finalRes = await _conn.getSignatureStatuses([signature], { searchTransactionHistory: true });
+        const _finalSt  = _finalRes?.value?.[0];
+        if (!_finalSt) throw new Error(`Transaction not found on-chain after 30s. It may have been dropped. Check Solscan: ${signature}`);
+        if (_finalSt.err) throw new Error("Transaction failed on-chain: " + JSON.stringify(_finalSt.err));
+        if (_finalSt.confirmationStatus !== "confirmed" && _finalSt.confirmationStatus !== "finalized")
+          throw new Error(`Transaction timed out without confirmation. Check Solscan: ${signature}`);
       }
       setSwapStatus("done");
       // v2 outAmount field
