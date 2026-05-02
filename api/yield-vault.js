@@ -342,6 +342,81 @@ async function runWatcher(req, res) {
           const nextPingMins = Math.ceil(nextPingMs / 60000);
           vaultLog.push(`Pending harvest — next ping in ~${nextPingMins} min`);
         }
+
+        // ── APY Migration Check — once per hour ──────────────────────────────
+        const APY_CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+        const lastApyCheckAt = vault.lastApyCheckAt ? new Date(vault.lastApyCheckAt).getTime() : 0;
+        if (now - lastApyCheckAt >= APY_CHECK_INTERVAL_MS) {
+          try {
+            const earnTokensRes = await fetch(`${JUP_EARN_API}/tokens`);
+            if (earnTokensRes.ok) {
+              const earnTokensData = await earnTokensRes.json();
+              const allVaults = Array.isArray(earnTokensData) ? earnTokensData : (earnTokensData?.data || []);
+              if (allVaults.length > 0) {
+                const parseRate = (raw) => {
+                  const n = parseFloat(raw || 0);
+                  if (!n || n <= 0) return 0;
+                  return n > 100 ? n / 100 : n;
+                };
+                // Find current vault APY
+                const currentVaultData = allVaults.find(v =>
+                  (v.asset?.address || v.assetMint || v.mint || v.address) === vault.earnMint
+                );
+                const currentApy = currentVaultData
+                  ? (parseRate(currentVaultData.totalRate) || parseRate(currentVaultData.supplyRate))
+                  : (position.apy ? parseFloat(position.apy) : null);
+
+                // Find best APY vault for the same asset type
+                // Group by base asset symbol to find better vaults for the same token
+                const currentSymbol = currentVaultData?.asset?.symbol || vault.earnSymbol || "";
+                const sameAssetVaults = allVaults.filter(v => {
+                  const sym = v.asset?.symbol || v.symbol || "";
+                  return sym && sym.toLowerCase() === currentSymbol.toLowerCase();
+                });
+                const bestVault = sameAssetVaults.reduce((best, v) => {
+                  const apy = parseRate(v.totalRate) || parseRate(v.supplyRate);
+                  return apy > (best?.apy || 0) ? { ...v, apy } : best;
+                }, null);
+
+                const bestApy = bestVault?.apy || 0;
+                const APY_IMPROVEMENT_THRESHOLD = 0.5; // alert only if improvement > 0.5%
+
+                if (
+                  currentApy !== null &&
+                  bestApy > 0 &&
+                  bestApy - currentApy > APY_IMPROVEMENT_THRESHOLD &&
+                  (bestVault?.asset?.address || bestVault?.assetMint) !== vault.earnMint
+                ) {
+                  // Better vault found — send Telegram alert
+                  const userSnap = await db.collection("chatfi_users").where("wallet", "==", vault.wallet).limit(1).get();
+                  if (!userSnap.empty && userSnap.docs[0].data().telegramChatId) {
+                    const chatId = userSnap.docs[0].data().telegramChatId;
+                    const bestMint = bestVault?.asset?.address || bestVault?.assetMint || bestVault?.mint || "";
+                    const migrateUrl = `${APP_URL}/?action=migrate&asset=${encodeURIComponent(currentSymbol)}&vault=${encodeURIComponent(bestMint)}`;
+                    const message =
+                      `📈 <b>Better Yield Found — ChatFi</b>\n\n` +
+                      `A higher APY vault is available for your <b>${currentSymbol}</b> position.\n\n` +
+                      `Current APY: <b>${currentApy.toFixed(2)}%</b>\n` +
+                      `Best available: <b>${bestApy.toFixed(2)}%</b>\n\n` +
+                      `Tap below to review and migrate 👇`;
+                    const replyMarkup = {
+                      inline_keyboard: [[
+                        { text: "🔀 Review Migration", url: migrateUrl },
+                      ]],
+                    };
+                    await sendTelegramMessage(chatId, message, replyMarkup);
+                    vaultLog.push(`APY migration alert sent: ${currentApy.toFixed(2)}% → ${bestApy.toFixed(2)}%`);
+                  }
+                } else {
+                  vaultLog.push(`APY check: current=${currentApy !== null ? currentApy.toFixed(2) + "%" : "unknown"}, best=${bestApy.toFixed(2)}% — no migration needed`);
+                }
+                await doc.ref.update({ lastApyCheckAt: new Date().toISOString() });
+              }
+            }
+          } catch (apyErr) {
+            vaultLog.push(`APY check error: ${apyErr.message}`);
+          }
+        }
       } catch (vaultErr) {
         vaultLog.push(`ERROR: ${vaultErr.message}`);
         await doc.ref.update({ lastError: vaultErr.message, lastErrorAt: new Date().toISOString() }).catch(() => {});
