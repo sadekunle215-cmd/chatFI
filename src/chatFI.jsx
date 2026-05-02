@@ -2241,7 +2241,7 @@ function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, statu
 }
 
 // ── Yield Vault Tracker Panel ─────────────────────────────────────────────────
-function VaultCard({ v, onCancel, onUpdate, jupFetch, onConnectTelegram, telegramLinked }) {
+function VaultCard({ v, earnPos, onCancel, onUpdate, jupFetch, onConnectTelegram, telegramLinked }) {
   const [editing, setEditing] = useState(false);
   const [editToken, setEditToken]       = useState({ sym: v.targetTokenSymbol, mint: v.targetTokenMint, decimals: v.targetTokenDecimals ?? 6 });
   const [editThreshold, setEditThreshold] = useState(String(v.thresholdUSD));
@@ -2313,6 +2313,25 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch, onConnectTelegram, telegra
         </div>
       ) : (
         <>
+          {/* Earn Position */}
+          {earnPos && (
+            <div style={{ background: T.surface, borderRadius: 8, padding: "8px 10px", marginBottom: 10 }}>
+              <div style={{ fontSize: 10, color: T.text3, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Your Earn Position</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: T.text1 }}>
+                  {earnPos.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} {earnPos.sym}
+                </div>
+                {earnPos.apy != null && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#68d391", background: "rgba(104,211,145,0.12)", borderRadius: 5, padding: "2px 7px", border: "1px solid rgba(104,211,145,0.2)" }}>
+                    {(earnPos.apy / 100).toFixed(2)}% APY
+                  </span>
+                )}
+              </div>
+              {earnPos.earned != null && (
+                <div style={{ fontSize: 11, color: "#68d391", marginTop: 3 }}>+{earnPos.earned.toFixed(6)} {earnPos.sym} earned</div>
+              )}
+            </div>
+          )}
           {/* Stats */}
           <div style={{ display: "flex", gap: 12, marginBottom: 10 }}>
             <div style={{ flex: 1, background: T.surface, borderRadius: 8, padding: "8px 10px" }}>
@@ -2506,9 +2525,12 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefres
                 </div>
               </div>
             ))}
-            {vaults && vaults.map((v) => (
-              <VaultCard key={v.id} v={v} onCancel={onCancel} onUpdate={onUpdate} jupFetch={jupFetch} onConnectTelegram={onConnectTelegram} telegramLinked={telegramLinked} />
-            ))}
+            {vaults && vaults.map((v) => {
+              const earnPos = (earnPositions || []).find(p => p.mint === v.earnMint);
+              return (
+                <VaultCard key={v.id} v={v} earnPos={earnPos} onCancel={onCancel} onUpdate={onUpdate} jupFetch={jupFetch} onConnectTelegram={onConnectTelegram} telegramLinked={telegramLinked} />
+              );
+            })}
             {unconfigured.length > 0 && (
               <>
                 {vaults && vaults.length > 0 && (
