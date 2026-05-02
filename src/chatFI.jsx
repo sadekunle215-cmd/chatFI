@@ -3769,18 +3769,24 @@ function JupChatInner() {
     // label="Wallet" → token balances with USD values
     // label="LimitOrder","DCA","Staked","LiquidityPool","Leverage" → DeFi positions
     try {
-      const portRes = await fetch("https://api.jup.ag/portfolio/v1/positions/" + walletAddress)
-        .then(r => r.json());
+      const portRaw = await fetch("https://api.jup.ag/portfolio/v1/positions/" + walletAddress);
+      if (!portRaw.ok) {
+        console.warn("[ChatFi Portfolio] API returned", portRaw.status, portRaw.statusText);
+      }
+      const portRes = await portRaw.json();
 
       if (portRes && !portRes.error) {
         results.portfolioElements = portRes.elements || [];
         results.portfolioTokenInfo = portRes.tokenInfo || {};
 
         // Debug: log all element labels/platformIds to console so we can see what the API returns
+        console.log("[ChatFi Portfolio] elements count:", results.portfolioElements.length);
         if (portRes.elements?.length) {
           console.log("[JupChat Portfolio] elements:", portRes.elements.map(e => ({
             label: e.label, platformId: e.platformId, name: e.name, value: e.value
           })));
+        } else {
+          console.log("[ChatFi Portfolio] No elements returned — wallet may have no DeFi positions");
         }
 
         // Extract logos from tokenInfo for any tokens we still don't have logos for
@@ -3850,7 +3856,8 @@ function JupChatInner() {
             _fromPortfolio: true, label: el.label,
             symbol: a.symbol || a.name || el.name || "Token",
             value: a.value ?? el.value,
-            underlyingAssets: a.underlyingAssets || a.amount || a.balance || a.depositedAmount || a.value,
+            underlyingBalance: a.underlyingBalance || 0,
+            underlyingAssets: a.underlyingAssets || a.underlyingBalance || a.amount || a.balance || a.depositedAmount || a.value,
             shares: a.shares || 0,
             asset: { decimals: a.decimals ?? a.asset?.decimals ?? 6 },
           }));
@@ -12133,7 +12140,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     }, 0);
                     const perpUsd = (portfolioData.perpPositions || []).reduce((sum, p) => sum + parseFloat(p.sizeUsd || 0), 0);
                     const earnUsd = (portfolioData.earnPositions || []).reduce((sum, e) => {
-                      const ua = parseFloat(e.underlyingAssets || e.underlying_assets || 0);
+                      const ua = parseFloat(e.underlyingBalance || e.underlyingAssets || e.underlying_assets || 0);
                       const sym = e.asset?.symbol || e.assetSymbol || "?";
                       return sum + (ua > 1e6 ? ua / Math.pow(10, e.asset?.decimals ?? 6) : ua) * (portfolioData.prices?.[sym] || 0);
                     }, 0);
@@ -12329,28 +12336,45 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   )}
 
                   {/* ── DeFi Positions ── */}
-                  {portfolioData.defi?.positions?.length > 0 && (
-                    <div>
-                      <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
-                        <SvgZap size={13} color="#63b3ed"/>
-                        <span style={{ fontSize:11, fontWeight:700, color:"#63b3ed", letterSpacing:"0.08em", textTransform:"uppercase" }}>DeFi Positions</span>
-                        <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{portfolioData.defi.positions.length}</span>
+                  {/* ── Other DeFi Positions (catch-all from Jupiter Portfolio API) ── */}
+                  {(() => {
+                    const knownLabels = new Set(["wallet"]);
+                    const isEarn = (el) => { const s = ((el.label||"")+(el.platformId||"")+(el.name||"")).toLowerCase(); return s.includes("earn")||s.includes("lend")||s.includes("vault")||s.includes("yield"); };
+                    const isLock = (el) => { const s = ((el.label||"")+(el.platformId||"")).toLowerCase(); return s.includes("lock")||s.includes("vest"); };
+                    const isLP   = (el) => el.label==="LiquidityPool"||el.type==="liquidity-position"||["orca","raydium","meteora"].some(p=>el.platformId?.includes(p));
+                    const isPerp = (el) => el.platformId==="jupiter-perps"||el.name?.toLowerCase().includes("perp");
+                    const otherEls = (portfolioData.portfolioElements||[]).filter(el => {
+                      const label = (el.label||"").toLowerCase();
+                      return !knownLabels.has(label) && parseFloat(el.value||0) > 0
+                        && !isEarn(el) && !isLock(el) && !isLP(el) && !isPerp(el);
+                    });
+                    if (!otherEls.length) return null;
+                    return (
+                      <div>
+                        <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
+                          <SvgZap size={13} color="#63b3ed"/>
+                          <span style={{ fontSize:11, fontWeight:700, color:"#63b3ed", letterSpacing:"0.08em", textTransform:"uppercase" }}>DeFi Positions</span>
+                          <span style={{ fontSize:10, color:T.text3, background:T.border, borderRadius:8, padding:"1px 6px" }}>{otherEls.length}</span>
+                        </div>
+                        <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                          {otherEls.map((el, i) => (
+                            <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
+                              <div>
+                                <div style={{ color:T.text2, fontWeight:600 }}>{el.name || el.label || el.platformId || "Position"}</div>
+                                {el.platformId && <div style={{ fontSize:10, color:T.text3, marginTop:2 }}>{el.platformId}</div>}
+                              </div>
+                              <span style={{ fontWeight:600, color:T.text1 }}>${parseFloat(el.value).toFixed(2)}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                        {portfolioData.defi.positions.slice(0,5).map((p, i) => (
-                          <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
-                            <span style={{ color:T.text2 }}>{p.platform || p.type || "Position"}</span>
-                            <span style={{ fontWeight:600, color:T.text1 }}>{p.value ? `$${parseFloat(p.value).toFixed(2)}` : "—"}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {/* ── Earn Positions ── */}
                   {(() => {
                     const earnPos = (portfolioData.earnPositions||[]).filter(e => {
-                      const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
+                      const ua  = parseFloat(e.underlyingBalance || e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
                       const sh  = parseFloat(e.shares || 0);
                       const val = parseFloat(e.value || 0);
                       return ua > 0 || sh > 0 || val > 0;
@@ -12365,7 +12389,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                           {earnPos.slice(0,5).map((e, i) => {
                             const sym = e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
-                            const ua  = parseFloat(e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
+                            const ua  = parseFloat(e.underlyingBalance || e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
                             const dec = e.asset?.decimals ?? e.decimals ?? 6;
                             const amt = ua > 1e6 ? (ua/Math.pow(10,dec)).toFixed(4)
                                       : ua > 0   ? ua.toFixed(4)
