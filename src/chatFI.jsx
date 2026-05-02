@@ -5266,9 +5266,10 @@ function JupChatInner() {
   // Flow per Jupiter docs:
   //  1. Generate a 12-char invite code client-side
   //  2. Derive a Keypair from SHA-256 of invite code → this is the inviteSigner
-  //  3. POST craft-send with inviteSigner + sender + amount + mint
-  //  4. Partially sign tx with inviteKeypair, then wallet signs
-  //  5. Broadcast; share invite link so recipient claims via Jupiter Mobile
+  //  3. POST inviteSigner pubkey (NOT raw code) + sender + amount + mint to server
+  //  4. Server calls craft-send, returns raw unsigned tx + blockhash
+  //  5. Client signs with invite keypair first, then sender wallet signs
+  //  6. Broadcast; share invite link so recipient claims via Jupiter Mobile
   // ── Safe base64 helpers (atob/btoa — no Buffer dependency) ─────────────────
   const b64ToBytes = (b64) => {
     const bin = atob(b64);
@@ -5289,12 +5290,21 @@ function JupChatInner() {
   //
   // Base58 alphabet (same as Bitcoin/Solana — no 0, O, I, l)
   const BASE58_CHARS = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+  // Precomputed O(1) lookup map — matches reference impl, avoids indexOf returning -1
+  const BASE58_MAP = (() => {
+    const map = new Uint8Array(256).fill(255);
+    for (let i = 0; i < BASE58_CHARS.length; i++)
+      map[BASE58_CHARS.charCodeAt(i)] = i;
+    return map;
+  })();
+
   const binaryToBase58 = (uint8array) => {
     const result = [];
     for (const byte of uint8array) {
       let carry = byte;
       for (let j = 0; j < result.length; ++j) {
-        const x = (BASE58_CHARS.indexOf(result[j]) << 8) + carry;
+        const x = (BASE58_MAP[result[j].charCodeAt(0)] << 8) + carry;
         result[j] = BASE58_CHARS[x % 58];
         carry = (x / 58) | 0;
       }
@@ -5318,12 +5328,11 @@ function JupChatInner() {
   const inviteCodeToKeypair = async (code) => {
     const data      = new TextEncoder().encode("invite:" + code);
     const hashBuf   = await crypto.subtle.digest("SHA-256", data);
-    const privKey32 = new Uint8Array(hashBuf); // 32-byte private key seed
+    const privKey32 = new Uint8Array(hashBuf);
 
-    // Derive the ed25519 public key from the private key seed.
-    // Keypair.fromSeed does this internally, so we can use it to get the pubkey bytes.
+    // Keypair.fromSeed derives the ed25519 pubkey internally — use it to extract pubkey bytes
     const tempKeypair = Keypair.fromSeed(privKey32);
-    const pubKey32    = tempKeypair.publicKey.toBytes();  // 32-byte public key
+    const pubKey32    = tempKeypair.publicKey.toBytes();
 
     // Build full 64-byte Solana secret key: [privKey32 | pubKey32]
     const secretKey64 = new Uint8Array(64);
@@ -5353,6 +5362,7 @@ function JupChatInner() {
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
     if (!mint) { push("ai", `Could not resolve mint for **${token}**. Try searching the token first.`); return; }
     if (!checkBalance(token, parseFloat(amount), "this send")) return;
+    if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
 
     const decimals  = token === "SOL" ? 9 : (tokenDecimalsRef.current[token.toUpperCase()] ?? 6);
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
@@ -5360,48 +5370,50 @@ function JupChatInner() {
     // STEP 1: Generate invite code client-side (Jupiter spec: 13 random bytes → base58 → 12 chars)
     const inviteCode = generateInviteCode();
 
-    // STEP 2 & 3: Derive the 64-byte secret key and build Solana Keypair (the inviteSigner)
-    // Per Jupiter docs, the public key of this keypair is what gets passed to craft-send.
-    const inviteKeypair      = await inviteCodeToKeypair(inviteCode);
-    // inviteCode is sent to server — server derives inviteSigner pubkey and partially signs
+    // STEP 2: Derive keypair from invite code client-side.
+    // Send only the pubkey to the server — raw inviteCode never leaves the browser.
+    const inviteKeypair   = await inviteCodeToKeypair(inviteCode);
+    const inviteSignerPub = inviteKeypair.publicKey.toBase58();
 
     setSendStatus("signing");
     setSendErr(null);
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
-      // STEP 4: POST inviteCode to server — server derives the keypair, calls Jupiter
-      // craft-send, partially signs with the invite keypair, and returns partiallySignedTx.
-      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
+      // STEP 3: POST inviteSigner pubkey to server.
+      // Server calls Jupiter craft-send and returns the raw unsigned tx + blockhash.
       const serverRes = await fetch("/api/send", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint, inviteCode }),
+        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint, inviteSigner: inviteSignerPub }),
       });
       const serverData = await serverRes.json();
       if (serverData.error) throw new Error(serverData.error);
-      // Server returns partiallySignedTx (already signed by invite keypair)
-      const partialTxB64 = serverData.partiallySignedTx;
-      if (!partialTxB64) throw new Error("No transaction returned from server.");
 
-      // STEP 5: Deserialize the partially-signed tx and have the sender wallet sign it.
-      const tx = VersionedTransaction.deserialize(b64ToBytes(partialTxB64));
+      const { tx: txB64, blockhash, lastValidBlockHeight } = serverData;
+      if (!txB64) throw new Error("No transaction returned from server.");
+      if (!blockhash || !lastValidBlockHeight) throw new Error("Server did not return blockhash metadata.");
 
-      // Sender wallet signs (invite keypair slot already filled by server)
-      const signedTx = await provider.signTransaction(tx);
+      // STEP 4: Sign with invite keypair first, then sender wallet.
+      // Both signatures are required by Jupiter Send.
+      const tx = VersionedTransaction.deserialize(b64ToBytes(txB64));
+      tx.sign([inviteKeypair]);                           // invite keypair signs first
+      const signedTx = await provider.signTransaction(tx); // sender wallet signs second
 
-      // STEP 6: Broadcast via Connection — same as doDirectSend
-      const connection   = new Connection(SOLANA_RPC, "confirmed");
-      const blockhashInfo = await connection.getLatestBlockhashAndContext({ commitment: "confirmed" });
-      const signature    = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 0 });
+      // STEP 5: Broadcast
+      const connection = new Connection(SOLANA_RPC, "confirmed");
+      const signature  = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 0 });
       if (!signature) throw new Error("Transaction failed to send.");
 
       push("ai", `Send sent — confirming on-chain…`);
+
+      // STEP 6: Confirm using the blockhash from the server (same one baked into the tx)
       const confirmation = await connection.confirmTransaction({
         signature,
-        blockhash:           blockhashInfo.value.blockhash,
-        lastValidBlockHeight: blockhashInfo.value.lastValidBlockHeight,
+        blockhash,
+        lastValidBlockHeight,
       }, "confirmed");
       if (confirmation.value.err) throw new Error(`Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+
       const inviteLink = `https://jup.ag/send?code=${inviteCode}`;
       setSendLink(inviteLink);
       setSendStatus("done");
