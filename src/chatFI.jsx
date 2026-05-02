@@ -6046,61 +6046,6 @@ function JupChatInner() {
     }
   };
 
-  // ── Jupiter Earn — Migrate: withdraw from one vault, deposit into another ─────
-  const handleMigrateEarn = async ({ fromVault, toVault, amount }) => {
-    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
-    const provider = getActiveProvider();
-    if (!provider?.signTransaction) { push("ai", "Wallet provider not found. Please reconnect."); return; }
-
-    push("ai", `Migrating **${amount} ${fromVault.token}** → **${toVault.token}** (${toVault.apyDisplay} APY)…`);
-    try {
-      // Step 1: Withdraw from current vault
-      const fromDecimals = fromVault.assetDecimals ?? 6;
-      const withdrawRaw = Math.floor(parseFloat(amount) * Math.pow(10, fromDecimals)).toString();
-      const withdrawData = await jupFetch(`${JUP_EARN_API}/withdraw`, {
-        method: "POST",
-        body: { signer: walletFull, asset: fromVault.assetMint, amount: withdrawRaw },
-      });
-      if (!withdrawData?.transaction) throw new Error(withdrawData?.error?.message || "Withdraw failed");
-      const withdrawTx = VersionedTransaction.deserialize(b64ToBytes(withdrawData.transaction));
-      const signedWithdraw = await provider.signTransaction(withdrawTx);
-      const withdrawRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedWithdraw.serialize()), { encoding: "base64", skipPreflight: true }] },
-      });
-      if (!withdrawRes?.result) throw new Error(withdrawRes?.error?.message || "Withdraw tx failed");
-
-      push("ai", `✅ Withdrawn from ${fromVault.token} vault. Depositing into ${toVault.token}…`);
-
-      // Step 2: Deposit into new vault (brief delay for chain settlement)
-      await new Promise(r => setTimeout(r, 3000));
-      const toDecimals = toVault.assetDecimals ?? 6;
-      const depositRaw = Math.floor(parseFloat(amount) * Math.pow(10, toDecimals)).toString();
-      const depositData = await jupFetch(`${JUP_EARN_API}/deposit`, {
-        method: "POST",
-        body: { signer: walletFull, asset: toVault.assetMint, amount: depositRaw },
-      });
-      if (!depositData?.transaction) throw new Error(depositData?.error?.message || "Deposit failed");
-      const depositTx = VersionedTransaction.deserialize(b64ToBytes(depositData.transaction));
-      const signedDeposit = await provider.signTransaction(depositTx);
-      const depositRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedDeposit.serialize()), { encoding: "base64", skipPreflight: true }] },
-      });
-      if (!depositRes?.result) throw new Error(depositRes?.error?.message || "Deposit tx failed");
-
-      push("ai",
-        `✅ **Migration complete!** Now earning **${toVault.apyDisplay} APY** on ${toVault.token}\n\n` +
-        `[View on Solscan →](https://solscan.io/tx/${depositRes.result})`
-      );
-      const updated = await fetchSolanaBalances(walletFull);
-      setPortfolio(updated);
-      fetchEarnUserPositions();
-    } catch (err) {
-      push("ai", `Migration failed: ${err?.message || "Unknown error"}. You may need to retry.`);
-    }
-  };
-
   // ── Jupiter Multiply — calls /api/multiply serverless → signs → sends ────────
   const doMultiply = async () => {
     const { vault, colAmount, leverage } = multiplyPos;
@@ -12174,26 +12119,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               {!earnLoading && earnVaults.map((v) => {
                 const userPos = earnUserPositions[v.token?.toUpperCase()];
                 const hasPosition = userPos && userPos.amount > 0;
-
-                // Find if user has a position in a lower-APY vault to migrate FROM
-                // Same token first (USDC→USDC), then cross-token (USDG→USDC)
-                const byMint = earnUserPositions.__byMint || {};
-                const allUserEntries = Object.values(byMint).filter(p => p.amount > 0 && p.mint !== v.assetMint);
-                const migrateSource = !hasPosition
-                  ? (() => {
-                      const sameToken = allUserEntries.find(p => {
-                        const srcVault = earnVaults.find(ev => ev.assetMint === p.mint);
-                        return (srcVault?.token || p.sym || "").toUpperCase() === (v.token || "").toUpperCase() && (srcVault?.apy ?? 0) < v.apy;
-                      });
-                      if (sameToken) return sameToken;
-                      return allUserEntries.find(p => {
-                        const srcVault = earnVaults.find(ev => ev.assetMint === p.mint);
-                        return (srcVault?.apy ?? 0) < v.apy;
-                      });
-                    })()
-                  : null;
-                const migrateSourceVault = migrateSource ? earnVaults.find(ev => ev.assetMint === migrateSource.mint) : null;
-                const canMigrate = !!migrateSource && !hasPosition;
                 return (
                 <div key={v.id} className="vault-card"
                   style={{ padding:"14px 16px", border:`1px solid ${hasPosition ? T.green+"55" : T.border}`, borderRadius:10, marginBottom:10, background: hasPosition ? `${T.green}08` : T.bg, transition:"all 0.15s", cursor:"default" }}>
@@ -12206,9 +12131,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           <span style={{ fontSize:11, background:`${T.green}22`, color:T.green, border:`1px solid ${T.green}44`, borderRadius:6, padding:"2px 8px", fontWeight:700 }}>
                             {userPos.amount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:4})} {v.token}
                           </span>
-                        )}
-                        {canMigrate && (
-                          <span style={{ fontSize:10, fontWeight:700, padding:"2px 7px", borderRadius:20, background:"rgba(199,242,132,0.12)", color:T.accent, border:"1px solid rgba(199,242,132,0.3)" }}>BETTER APY</span>
                         )}
                       </div>
                       <div style={{ fontSize:12, color:T.text3, marginTop:2 }}>
@@ -12235,20 +12157,11 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       <div style={{ fontSize:22, fontWeight:800, color:T.green, lineHeight:1 }}>{v.apyDisplay}</div>
                       <div style={{ fontSize:10, color:T.text3, marginBottom:8, marginTop:2 }}>Total APY</div>
                       <div style={{ display:"flex", flexDirection:"column", gap:6, alignItems:"flex-end" }}>
-                        {canMigrate ? (
-                          <button
-                            onClick={() => handleMigrateEarn({ fromVault: migrateSourceVault || { assetMint: migrateSource.mint, token: migrateSource.sym, apy: 0, apyDisplay: "?%", assetDecimals: migrateSource.decimals }, toVault: v, amount: migrateSource.amount })}
-                            className="hov-btn"
-                            style={{ padding:"6px 16px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}>
-                            Migrate ({migrateSource.sym} → {v.token})
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => { setEarnDeposit({ vault:v, amount:"" }); setShowEarnDeposit(true); }} className="hov-btn"
-                            style={{ padding:"6px 16px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:600, cursor:"pointer" }}>
-                            Deposit
-                          </button>
-                        )}
+                        <button
+                          onClick={() => { setEarnDeposit({ vault:v, amount:"" }); setShowEarnDeposit(true); }} className="hov-btn"
+                          style={{ padding:"6px 16px", background:T.accent, border:"none", borderRadius:6, color:"#0d1117", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                          Deposit
+                        </button>
                         <button
                           onClick={() => { setEarnWithdraw({ vault:v, amount:"", positionAmount: userPos?.amount || 0 }); setShowEarnWithdraw(true); }} className="hov-btn"
                           style={{ padding:"5px 14px", background:"none", border:`1px solid ${hasPosition ? T.green+"66" : T.border}`, borderRadius:6, color: hasPosition ? T.green : T.text2, fontSize:11, cursor:"pointer" }}>
