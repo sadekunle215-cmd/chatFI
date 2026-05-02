@@ -549,7 +549,7 @@ const SUGGESTION_GROUPS = [
   {
     label: "Earn",
     color: "#68d391",
-    items: ["Earn", "Show earn vaults", "DCA $10 USDC into SOL daily", "Set Yield Vault", "My yield vaults"],
+    items: ["Earn", "Show earn vaults", "Find best yield", "Best yield for USDC", "Set Yield Vault", "My yield vaults"],
   },
   {
     label: "Tools",
@@ -2348,7 +2348,7 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch, onConnectTelegram, telegra
   );
 }
 
-function BestYieldPanel({ msgText, earnVaults, earnLoading, onClose, onDeposit }) {
+function BestYieldPanel({ msgText, earnVaults, earnLoading, onClose, onDeposit, onMigrate, earnUserPositions }) {
   const filterAsset = msgText && msgText.includes(":asset=") ? msgText.split(":asset=")[1] : null;
   const filtered = filterAsset
     ? (earnVaults || []).filter(v => v.token?.toUpperCase() === filterAsset.toUpperCase())
@@ -2368,27 +2368,64 @@ function BestYieldPanel({ msgText, earnVaults, earnLoading, onClose, onDeposit }
       <div style={{ padding: "14px 16px" }}>
         {earnLoading && <div style={{ textAlign: "center", padding: 20, color: T.text3, fontSize: 13 }}>Loading vaults…</div>}
         {!earnLoading && ranked.length === 0 && <div style={{ textAlign: "center", padding: 20, color: T.text3, fontSize: 13 }}>No vaults found{filterAsset ? ` for ${filterAsset}` : ""}.</div>}
-        {!earnLoading && ranked.map((v, i) => (
-          <div key={v.id || i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: i === 0 ? "rgba(199,242,132,0.06)" : T.bg, border: `1px solid ${i === 0 ? "rgba(199,242,132,0.2)" : T.border}`, borderRadius: 10, marginBottom: 6 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              {v.logoUrl && <img src={v.logoUrl} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover" }} onError={e => { e.target.style.display = "none"; }} />}
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: T.text1, display: "flex", alignItems: "center", gap: 6 }}>
-                  {v.token}
-                  {i === 0 && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(199,242,132,0.15)", color: T.accent, border: "1px solid rgba(199,242,132,0.3)" }}>BEST</span>}
+        {!earnLoading && ranked.map((v, i) => {
+          const userPos = (earnUserPositions || {})[v.token?.toUpperCase()];
+          const hasPosition = userPos && userPos.amount > 0;
+          // Check if user has an existing earn position in a DIFFERENT vault for same token
+          // (i.e. same token but different mint — means they can migrate)
+          const otherVaultForToken = hasPosition
+            ? ranked.find(ov => ov.token?.toUpperCase() === v.token?.toUpperCase() && ov.assetMint !== v.assetMint && (earnUserPositions || {})[ov.token?.toUpperCase()]?.amount > 0)
+            : null;
+          const canMigrate = hasPosition && otherVaultForToken;
+          return (
+            <div key={v.id || i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: i === 0 ? "rgba(199,242,132,0.06)" : T.bg, border: `1px solid ${i === 0 ? "rgba(199,242,132,0.2)" : T.border}`, borderRadius: 10, marginBottom: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+                {v.logoUrl && <img src={v.logoUrl} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: T.text1, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    {v.token}
+                    {i === 0 && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(199,242,132,0.15)", color: T.accent, border: "1px solid rgba(199,242,132,0.3)" }}>BEST</span>}
+                    {hasPosition && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(41,182,246,0.12)", color: "#29b6f6", border: "1px solid rgba(41,182,246,0.25)" }}>IN POSITION</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: T.text3, marginTop: 1 }}>
+                    {hasPosition ? `${userPos.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${v.token} deposited` : v.utilization != null ? `${v.utilization}% utilization` : "Jupiter Lend"}
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: T.text3, marginTop: 1 }}>{v.utilization != null ? `${v.utilization}% utilization` : "Jupiter Lend"}</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                <span style={{ fontSize: 15, fontWeight: 800, color: i === 0 ? T.accent : T.teal }}>{v.apyDisplay}</span>
+                {hasPosition ? (
+                  <span style={{ padding: "5px 10px", background: "rgba(41,182,246,0.08)", border: "1px solid rgba(41,182,246,0.2)", borderRadius: 7, color: "#29b6f6", fontSize: 11, fontWeight: 700 }}>Active</span>
+                ) : (
+                  <button
+                    onClick={() => {
+                      // Check if user has a position in the SAME token in any other vault → migrate
+                      const existingPos = Object.entries(earnUserPositions || {}).find(([sym, pos]) =>
+                        sym === v.token?.toUpperCase() && pos.amount > 0
+                      );
+                      if (existingPos) {
+                        // Find which vault they're currently in for this token
+                        const currentVault = ranked.find(rv =>
+                          rv.token?.toUpperCase() === v.token?.toUpperCase() &&
+                          rv.assetMint !== v.assetMint &&
+                          (earnUserPositions || {})[rv.token?.toUpperCase()]?.amount > 0
+                        );
+                        if (currentVault && onMigrate) {
+                          onMigrate({ fromVault: currentVault, toVault: v, amount: existingPos[1].amount });
+                        } else {
+                          onDeposit(v);
+                        }
+                      } else {
+                        onDeposit(v);
+                      }
+                    }}
+                    style={{ padding: "5px 10px", background: i === 0 ? T.accent : "rgba(199,242,132,0.1)", border: `1px solid ${i === 0 ? T.accent : "rgba(199,242,132,0.2)"}`, borderRadius: 7, color: i === 0 ? "#0d1117" : T.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
+                  >{canMigrate ? "Migrate" : "Deposit"}</button>
+                )}
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 15, fontWeight: 800, color: i === 0 ? T.accent : T.teal }}>{v.apyDisplay}</span>
-              <button
-                onClick={() => onDeposit(v)}
-                style={{ padding: "5px 10px", background: i === 0 ? T.accent : "rgba(199,242,132,0.1)", border: `1px solid ${i === 0 ? T.accent : "rgba(199,242,132,0.2)"}`, borderRadius: 7, color: i === 0 ? "#0d1117" : T.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
-              >Deposit</button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -6137,6 +6174,85 @@ function JupChatInner() {
       if (walletFull) fetchEarnUserPositions();
     } catch (err) {
       push("ai", `Earn withdraw failed: ${err?.message || "Unknown error"}. Please try again.`);
+    }
+  };
+
+  // ── Jupiter Earn — Migrate (withdraw from current vault, deposit into better one) ─
+  const doMigrateEarn = async ({ fromVault, toVault, amount }) => {
+    if (!walletFull) { push("ai", "Connect your wallet first."); return; }
+    const provider = getActiveProvider();
+    if (!provider?.signTransaction) { push("ai", "Wallet provider not found. Please reconnect."); return; }
+
+    push("ai", `Migrating **${amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${fromVault.token}** from ${fromVault.apyDisplay} APY → ${toVault.apyDisplay} APY…
+
+*Step 1: Withdrawing from current vault…*`);
+
+    try {
+      // Step 1 — Withdraw from current vault
+      const decimals = fromVault.assetDecimals ?? 6;
+      const amountRaw = Math.floor(amount * Math.pow(10, decimals)).toString();
+
+      const withdrawData = await jupFetch(`${JUP_EARN_API}/withdraw`, {
+        method: "POST",
+        body: { signer: walletFull, asset: fromVault.assetMint, amount: amountRaw },
+      });
+      if (!withdrawData?.transaction) throw new Error(withdrawData?.error?.message || withdrawData?.error || "Earn withdraw API returned no transaction");
+
+      const withdrawTx = VersionedTransaction.deserialize(b64ToBytes(withdrawData.transaction));
+      try {
+        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
+        withdrawTx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal */ }
+      const signedWithdraw = await provider.signTransaction(withdrawTx);
+      const withdrawRpc = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedWithdraw.serialize()), { encoding: "base64", skipPreflight: true }] },
+      });
+      const withdrawSig = withdrawRpc?.result;
+      if (!withdrawSig) throw new Error(withdrawRpc?.error?.message || "Withdraw transaction failed to send");
+      await confirmTxLanded(withdrawSig);
+
+      push("ai", `✅ *Withdrawn. Step 2: Depositing into ${toVault.name} at ${toVault.apyDisplay} APY…*`);
+
+      // Step 2 — Deposit into new vault
+      const depositDecimals = toVault.assetDecimals ?? 6;
+      const depositRaw = Math.floor(amount * Math.pow(10, depositDecimals)).toString();
+
+      const depositData = await jupFetch(`${JUP_EARN_API}/deposit`, {
+        method: "POST",
+        body: { signer: walletFull, asset: toVault.assetMint, amount: depositRaw },
+      });
+      if (!depositData?.transaction) throw new Error(depositData?.error?.message || depositData?.error || "Earn deposit API returned no transaction");
+
+      const depositTx = VersionedTransaction.deserialize(b64ToBytes(depositData.transaction));
+      try {
+        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
+        depositTx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal */ }
+      const signedDeposit = await provider.signTransaction(depositTx);
+      const depositRpc = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedDeposit.serialize()), { encoding: "base64", skipPreflight: true }] },
+      });
+      const depositSig = depositRpc?.result;
+      if (!depositSig) throw new Error(depositRpc?.error?.message || "Deposit transaction failed to send");
+
+      push("ai",
+        `✅ **Migration complete!**
+
+` +
+        `**${amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${toVault.token}** is now earning **${toVault.apyDisplay} APY** in ${toVault.name}.
+
+` +
+        `[Withdraw tx →](https://solscan.io/tx/${withdrawSig})  ·  [Deposit tx →](https://solscan.io/tx/${depositSig})`
+      );
+      const updated = await fetchSolanaBalances(walletFull);
+      setPortfolio(updated);
+      if (walletFull) fetchEarnUserPositions();
+    } catch (err) {
+      push("ai", `Migration failed: ${err?.message || "Unknown error"}. Your funds are safe — please try again.`);
     }
   };
 
@@ -11049,6 +11165,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           { label:"Swap", icon:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>, action:"swap tokens" },
                           { label:"Portfolio", icon:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>, action:"my portfolio" },
                           { label:"Earn", icon:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>, action:"earn yield" },
+                          { label:"Best Yield", icon:<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>, action:"find best yield" },
                         ].map(btn => (
                           <button key={btn.label}
                             onClick={() => send(btn.action)}
@@ -11070,12 +11187,16 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     msgText={m.text}
                     earnVaults={earnVaults}
                     earnLoading={earnLoading}
+                    earnUserPositions={earnUserPositions}
                     onClose={() => setMsgs(prev => prev.filter(x => x.id !== m.id))}
-                    onDeposit={(v) => {
-                      setYieldVaultCfg(prev => ({ ...prev, selectedPositions: v.assetMint ? [v.assetMint] : prev.selectedPositions }));
-                      fetchEarnPositionsForVault();
+                    onMigrate={({ fromVault, toVault, amount }) => {
                       setMsgs(prev => prev.filter(x => x.id !== m.id));
-                      push("ai", "__YIELD_VAULT_PANEL__");
+                      doMigrateEarn({ fromVault, toVault, amount });
+                    }}
+                    onDeposit={(v) => {
+                      setEarnDeposit({ vault: v, amount: "" });
+                      setShowEarnDeposit(true);
+                      setMsgs(prev => prev.filter(x => x.id !== m.id));
                     }}
                   />
                 ) : m.text?.startsWith("__YIELD_VAULT_PANEL__") ? (
