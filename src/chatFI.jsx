@@ -5361,34 +5361,29 @@ function JupChatInner() {
     // STEP 2 & 3: Derive the 64-byte secret key and build Solana Keypair (the inviteSigner)
     // Per Jupiter docs, the public key of this keypair is what gets passed to craft-send.
     const inviteKeypair      = await inviteCodeToKeypair(inviteCode);
-    const inviteSignerPubkey = inviteKeypair.publicKey.toBase58();
+    // inviteCode is sent to server — server derives inviteSigner pubkey and partially signs
 
     setSendStatus("signing");
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
-      // STEP 4: POST to server which calls Jupiter /send/v1/craft-send with inviteSigner pubkey.
-      // Server returns an UNSIGNED base64 transaction in the `tx` field (per Jupiter API spec).
+      // STEP 4: POST inviteCode to server — server derives the keypair, calls Jupiter
+      // craft-send, partially signs with the invite keypair, and returns partiallySignedTx.
+      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
       const serverRes = await fetch("/api/send", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint, inviteSignerPubkey }),
+        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint, inviteCode }),
       });
       const serverData = await serverRes.json();
       if (serverData.error) throw new Error(serverData.error);
-      // Jupiter API returns field named `tx` (not `partiallySignedTx`)
-      const unsignedTxB64 = serverData.tx;
-      if (!unsignedTxB64) throw new Error("No transaction returned from server.");
+      // Server returns partiallySignedTx (already signed by invite keypair)
+      const partialTxB64 = serverData.partiallySignedTx;
+      if (!partialTxB64) throw new Error("No transaction returned from server.");
 
-      // STEP 5: Sign with BOTH invite keypair AND sender wallet — Jupiter requires both signatures.
-      // Per docs: transaction.sign([sender, recipient]) where recipient = inviteKeypair.
-      if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
-      // Use b64ToBytes (atob-based) — avoids Buffer which may not be loaded yet in browser
-      const tx = VersionedTransaction.deserialize(b64ToBytes(unsignedTxB64));
+      // STEP 5: Deserialize the partially-signed tx and have the sender wallet sign it.
+      const tx = VersionedTransaction.deserialize(b64ToBytes(partialTxB64));
 
-      // First: invite keypair signs (this is the "recipient" slot in Jupiter's terminology)
-      tx.sign([inviteKeypair]);
-
-      // Second: sender wallet signs (adds the sender's signature slot)
+      // Sender wallet signs (invite keypair slot already filled by server)
       const signedTx = await provider.signTransaction(tx);
 
       // STEP 6: Broadcast via Connection — same as doDirectSend
