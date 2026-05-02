@@ -2348,6 +2348,52 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch, onConnectTelegram, telegra
   );
 }
 
+function BestYieldPanel({ msgText, earnVaults, earnLoading, onClose, onDeposit }) {
+  const filterAsset = msgText && msgText.includes(":asset=") ? msgText.split(":asset=")[1] : null;
+  const filtered = filterAsset
+    ? (earnVaults || []).filter(v => v.token?.toUpperCase() === filterAsset.toUpperCase())
+    : (earnVaults || []);
+  const ranked = [...filtered].sort((a, b) => b.apy - a.apy).slice(0, 8);
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", marginBottom: 8, animation: "fadeUp 0.22s ease forwards" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${T.border}`, background: "linear-gradient(135deg, #0d1a0d, #0f1e2a)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ width: 28, height: 28, borderRadius: 7, background: "rgba(199,242,132,0.08)", border: "1px solid rgba(199,242,132,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: T.accent, flexShrink: 0 }}>
+            <SvgZapSm />
+          </div>
+          <span style={{ fontSize: 14, fontWeight: 700, color: T.accent }}>Best Yield Vaults{filterAsset ? ` — ${filterAsset}` : ""}</span>
+        </div>
+        <button onClick={onClose} style={{ background: "none", border: "none", color: T.text3, cursor: "pointer", padding: 6, display: "flex", alignItems: "center", justifyContent: "center" }}><SvgClose /></button>
+      </div>
+      <div style={{ padding: "14px 16px" }}>
+        {earnLoading && <div style={{ textAlign: "center", padding: 20, color: T.text3, fontSize: 13 }}>Loading vaults…</div>}
+        {!earnLoading && ranked.length === 0 && <div style={{ textAlign: "center", padding: 20, color: T.text3, fontSize: 13 }}>No vaults found{filterAsset ? ` for ${filterAsset}` : ""}.</div>}
+        {!earnLoading && ranked.map((v, i) => (
+          <div key={v.id || i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: i === 0 ? "rgba(199,242,132,0.06)" : T.bg, border: `1px solid ${i === 0 ? "rgba(199,242,132,0.2)" : T.border}`, borderRadius: 10, marginBottom: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {v.logoUrl && <img src={v.logoUrl} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover" }} onError={e => { e.target.style.display = "none"; }} />}
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: T.text1, display: "flex", alignItems: "center", gap: 6 }}>
+                  {v.token}
+                  {i === 0 && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(199,242,132,0.15)", color: T.accent, border: "1px solid rgba(199,242,132,0.3)" }}>BEST</span>}
+                </div>
+                <div style={{ fontSize: 11, color: T.text3, marginTop: 1 }}>{v.utilization != null ? `${v.utilization}% utilization` : "Jupiter Lend"}</div>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 15, fontWeight: 800, color: i === 0 ? T.accent : T.teal }}>{v.apyDisplay}</span>
+              <button
+                onClick={() => onDeposit(v)}
+                style={{ padding: "5px 10px", background: i === 0 ? T.accent : "rgba(199,242,132,0.1)", border: `1px solid ${i === 0 ? T.accent : "rgba(199,242,132,0.2)"}`, borderRadius: 7, color: i === 0 ? "#0d1117" : T.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
+              >Deposit</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefresh, earnPositions = [], onSetVault, jupFetch, onConnectTelegram, telegramLinked, earnVaults = [], onFindBestYield }) {
   if (!show) return null;
   const configuredMints = new Set((vaults || []).map((v) => v.earnMint));
@@ -11019,56 +11065,19 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   );
                 })() : m.text?.startsWith("__YIELD_VAULT_PROMPT__") ? (
                   <YieldVaultPromptCard onSetVault={() => { fetchEarnPositionsForVault(); setShowYieldVault(true); }} />
-                ) : m.text?.startsWith("__FIND_BEST_YIELD__") ? (() => {
-                  const filterAsset = m.text.includes(":asset=") ? m.text.split(":asset=")[1] : null;
-                  const filtered = filterAsset
-                    ? earnVaults.filter(v => v.token?.toUpperCase() === filterAsset.toUpperCase())
-                    : earnVaults;
-                  const ranked = [...filtered].sort((a, b) => b.apy - a.apy).slice(0, 8);
-                  return (
-                    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", marginBottom: 8, animation: "fadeUp 0.22s ease forwards" }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${T.border}`, background: "linear-gradient(135deg, #0d1a0d, #0f1e2a)" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <div style={{ width: 28, height: 28, borderRadius: 7, background: "rgba(199,242,132,0.08)", border: "1px solid rgba(199,242,132,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: T.accent, flexShrink: 0 }}>
-                            <SvgZapSm />
-                          </div>
-                          <span style={{ fontSize: 14, fontWeight: 700, color: T.accent }}>Best Yield Vaults{filterAsset ? ` — ${filterAsset}` : ""}</span>
-                        </div>
-                        <button onClick={() => setMsgs(prev => prev.filter(x => x.id !== m.id))} style={{ background: "none", border: "none", color: T.text3, cursor: "pointer", padding: 6, display: "flex", alignItems: "center", justifyContent: "center" }}><SvgClose /></button>
-                      </div>
-                      <div style={{ padding: "14px 16px" }}>
-                        {earnLoading && <div style={{ textAlign: "center", padding: 20, color: T.text3, fontSize: 13 }}>Loading vaults…</div>}
-                        {!earnLoading && ranked.length === 0 && <div style={{ textAlign: "center", padding: 20, color: T.text3, fontSize: 13 }}>No vaults found{filterAsset ? ` for ${filterAsset}` : ""}.</div>}
-                        {!earnLoading && ranked.map((v, i) => (
-                          <div key={v.id || i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: i === 0 ? "rgba(199,242,132,0.06)" : T.bg, border: `1px solid ${i === 0 ? "rgba(199,242,132,0.2)" : T.border}`, borderRadius: 10, marginBottom: 6 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              {v.logoUrl && <img src={v.logoUrl} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover" }} onError={e => e.target.style.display = "none"} />}
-                              <div>
-                                <div style={{ fontSize: 13, fontWeight: 700, color: T.text1, display: "flex", alignItems: "center", gap: 6 }}>
-                                  {v.token}
-                                  {i === 0 && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(199,242,132,0.15)", color: T.accent, border: "1px solid rgba(199,242,132,0.3)" }}>BEST</span>}
-                                </div>
-                                <div style={{ fontSize: 11, color: T.text3, marginTop: 1 }}>{v.utilization != null ? `${v.utilization}% utilization` : "Jupiter Lend"}</div>
-                              </div>
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <span style={{ fontSize: 15, fontWeight: 800, color: i === 0 ? T.accent : T.teal }}>{v.apyDisplay}</span>
-                              <button
-                                onClick={() => {
-                                  setYieldVaultCfg(prev => ({ ...prev, selectedPositions: v.assetMint ? [v.assetMint] : prev.selectedPositions }));
-                                  fetchEarnPositionsForVault();
-                                  setMsgs(prev => prev.filter(x => x.id !== m.id));
-                                  push("ai", "__YIELD_VAULT_PANEL__");
-                                }}
-                                style={{ padding: "5px 10px", background: i === 0 ? T.accent : "rgba(199,242,132,0.1)", border: `1px solid ${i === 0 ? T.accent : "rgba(199,242,132,0.2)"}`, borderRadius: 7, color: i === 0 ? "#0d1117" : T.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
-                              >Deposit</button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()
+                ) : m.text?.startsWith("__FIND_BEST_YIELD__") ? (
+                  <BestYieldPanel
+                    msgText={m.text}
+                    earnVaults={earnVaults}
+                    earnLoading={earnLoading}
+                    onClose={() => setMsgs(prev => prev.filter(x => x.id !== m.id))}
+                    onDeposit={(v) => {
+                      setYieldVaultCfg(prev => ({ ...prev, selectedPositions: v.assetMint ? [v.assetMint] : prev.selectedPositions }));
+                      fetchEarnPositionsForVault();
+                      setMsgs(prev => prev.filter(x => x.id !== m.id));
+                      push("ai", "__YIELD_VAULT_PANEL__");
+                    }}
+                  />
                 ) : m.text?.startsWith("__YIELD_VAULT_PANEL__") ? (
                   <YieldVaultPanel
                     show={true}
