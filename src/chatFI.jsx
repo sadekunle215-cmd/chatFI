@@ -3535,205 +3535,117 @@ function JupChatInner() {
     if (!walletAddress) return null;
     const results = {};
 
-    // ── 1. Jupiter Ultra balances API — returns ALL tokens keyed by mint ───────
-    // Try 3 sources: /holdings (newest), api.jup.ag/balances, lite-api/balances
+    // ── 1. Jupiter Holdings API — primary source for ALL token balances ────────
+    // GET /ultra/v1/holdings/{address} (official current endpoint, /balances is deprecated)
+    // Response: { amount (lamports str), uiAmount (SOL float), tokens: { mint: { uiAmount, amount, decimals, isFrozen } } }
     try {
       const safeTimeout = (ms) => { try { return AbortSignal.timeout(ms); } catch { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; } };
-      let rawBals = null;
+      const SOL_MINT = "So11111111111111111111111111111111111111112";
+      const MINT_TO_SYM = {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+        "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
+        "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
+        "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
+        "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
+        "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1":  "BSOL",
+        "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v":  "jupSOL",
+        "Jito4APyf642JPzcbhPdHtTkuLFkHy5SfxGgwGiRBGP":  "JitoSOL",
+        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+        "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
+        "So11111111111111111111111111111111111111112":   "SOL",
+      };
 
-      // Source 1: api.jup.ag/ultra/v1/balances (primary — returns all tokens including SPL)
+      // Fetch holdings — try main API then lite fallback
+      let holdingsData = null;
       try {
-        const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${walletAddress}`, { signal: safeTimeout(7000) });
-        if (r.ok) { const d = await r.json(); if (d && typeof d === "object" && !d.error) rawBals = d; }
+        const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(8000) });
+        if (r.ok) { const d = await r.json(); if (d && !d.error && d.uiAmount != null) holdingsData = d; }
       } catch {}
-
-      // Source 2: lite-api fallback
-      if (!rawBals) {
+      if (!holdingsData) {
         try {
-          const d = await fetch(`https://lite-api.jup.ag/ultra/v1/balances/${walletAddress}`).then(r => r.json());
-          if (d && typeof d === "object" && !d.error) rawBals = d;
+          const r = await fetch(`https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(8000) });
+          if (r.ok) { const d = await r.json(); if (d && !d.error && d.uiAmount != null) holdingsData = d; }
         } catch {}
       }
-
-      // Source 3: /holdings — use only to patch SOL if balances returned 0 or missing SOL
-      if (!rawBals || !rawBals["SOL"] || (rawBals["SOL"]?.uiAmount === 0 && rawBals["SOL"]?.amount === "0")) {
+      // Fallback: deprecated /balances — normalize into holdings shape
+      if (!holdingsData) {
         try {
-          const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(7000) });
+          const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${walletAddress}`, { signal: safeTimeout(7000) });
           if (r.ok) {
             const d = await r.json();
-            if (d && d.uiAmount != null) {
-              rawBals = rawBals || {};
-              rawBals["SOL"] = { uiAmount: d.uiAmount };
-              // Also merge any tokens the holdings endpoint returned
-              for (const [m, v] of Object.entries(d.tokens || {})) {
-                if (!rawBals[m]) rawBals[m] = { uiAmount: typeof v === "number" ? v : v?.uiAmount ?? 0 };
+            if (d && !d.error) {
+              const solEntry = d["SOL"] ?? d[SOL_MINT];
+              const solUiAmt = solEntry?.uiAmount ?? (typeof solEntry === "number" ? solEntry : 0);
+              const tokens = {};
+              for (const [k, v] of Object.entries(d)) {
+                if (k === "SOL" || k === SOL_MINT) continue;
+                tokens[k] = v;
               }
+              holdingsData = { uiAmount: solUiAmt, tokens };
             }
           }
         } catch {}
       }
 
-      if (rawBals && typeof rawBals === "object" && !rawBals.error) {
-        const balances = {};  // sym → uiAmount
-        const mintMap  = {};  // sym → mint address
-        const logoMap  = {};  // sym → logo url
+      if (holdingsData) {
+        const balances = { SOL: holdingsData.uiAmount ?? 0 };
+        const mintMap  = { SOL: SOL_MINT };
+        const logoMap  = { SOL: TOKEN_LOGO_URLS["SOL"] };
+        if (!results.nameMap) results.nameMap = {};
 
-        // Helper: extract ui amount from Ultra API token object
-        // API may return { uiAmount } or { amount, decimals } or just a number
-        const getUiAmt = (val) => {
-          if (typeof val === "number") return val;
-          if (val?.uiAmount != null) return val.uiAmount;
-          if (val?.amount != null && val?.decimals != null) return val.amount / Math.pow(10, val.decimals);
-          return 0;
-        };
-
-        const SOL_MINT = "So11111111111111111111111111111111111111112";
-
-        // SOL can be keyed as "SOL" or as the native mint address
-        const solRaw = rawBals["SOL"] ?? rawBals[SOL_MINT];
-        if (solRaw != null) {
-          const uiAmt = getUiAmt(solRaw);
-          if (uiAmt >= 0) {
-            balances["SOL"] = uiAmt;
-            mintMap["SOL"]  = SOL_MINT;
-            logoMap["SOL"]  = TOKEN_LOGO_URLS["SOL"];
-          }
-        }
-
-        // All other keys are mint addresses
-        const MINT_TO_SYM = {
-          "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
-          "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
-          "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
-          "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
-          "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
-          "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
-          "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1": "BSOL",
-          "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v": "jupSOL",
-          "Jito4APyf642JPzcbhPdHtTkuLFkHy5SfxGgwGiRBGP":  "JitoSOL",
-          "So11111111111111111111111111111111111111112":   "SOL",
-        };
-
-        // ── Collect ALL non-SOL mints, then query Jupiter API for every one ─────
+        // Collect all non-SOL mints with nonzero balance
         const allMints = [];
-        for (const [key, val] of Object.entries(rawBals)) {
-          if (key === "SOL" || key === SOL_MINT) continue;
-          const uiAmt = getUiAmt(val);
-          if (uiAmt <= 0) continue; // skip dust / zero balances
-          allMints.push({ mint: key, uiAmt });
+        for (const [mint, data] of Object.entries(holdingsData.tokens || {})) {
+          if (mint === SOL_MINT) continue;
+          const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : (typeof data === "number" ? data : 0));
+          if (!uiAmt || uiAmt <= 0) continue;
+          allMints.push({ mint, uiAmt, decimals: data?.decimals ?? 6 });
         }
+
+        console.log(`[ChatFi Portfolio] holdings SOL=${balances.SOL} SPL mints=${allMints.length}`);
+
+        const normMeta = (mint, raw) => {
+          if (!raw || typeof raw !== "object") return null;
+          const symbol  = raw.symbol || raw.ticker || null;
+          const name    = raw.name || null;
+          const logoURI = raw.logoURI || raw.logo_uri || raw.icon || raw.imageUrl || raw.image || raw.logo || null;
+          const decimals = raw.decimals ?? 6;
+          if (!symbol && !name && !logoURI) return null;
+          return { symbol, name, logoURI, decimals };
+        };
+
+        const resolveOneMint = async (mint) => {
+          const cached = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0];
+          if (cached) return { mint, meta: { symbol: cached, name: cached, logoURI: TOKEN_LOGO_URLS[cached] || `https://img.jup.ag/tokens/${mint}`, decimals: 6 } };
+          const knownSym = MINT_TO_SYM[mint] || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0];
+          if (knownSym) return { mint, meta: { symbol: knownSym, name: knownSym, logoURI: TOKEN_LOGO_URLS[knownSym] || `https://img.jup.ag/tokens/${mint}`, decimals: 6 } };
+          try { const r = await fetch(`https://tokens.jup.ag/token/${mint}`, { signal: safeTimeout(4000) }); if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; } } catch {}
+          try { const r = await fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`, { signal: safeTimeout(4000) }); if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; } } catch {}
+          try { const r = await fetch(`https://api.solana.fm/v0/tokens/${mint}`, { signal: safeTimeout(4000) }); if (r.ok) { const d = await r.json(); const t = d?.tokenList || d?.result || d; if (t?.symbol || t?.name) return { mint, meta: normMeta(mint, { symbol: t.symbol, name: t.name, logoURI: t.imageUrl || t.image || t.logo, decimals: t.decimals ?? 6 }) }; } } catch {}
+          try { const r = await fetch(`https://tokens.jup.ag/tokens?search=${mint}&verify_only=false`, { signal: safeTimeout(4000) }); if (r.ok) { const arr = await r.json(); const found = Array.isArray(arr) ? arr.find(t => t.address === mint) : null; if (found?.symbol || found?.name) return { mint, meta: normMeta(mint, found) }; } } catch {}
+          return { mint, meta: null };
+        };
 
         if (allMints.length > 0) {
-          // Helper: normalize metadata from any API source into a common shape
-          const normMeta = (mint, raw) => {
-            if (!raw || typeof raw !== "object") return null;
-            const symbol  = raw.symbol  || raw.ticker || null;
-            const name    = raw.name    || null;
-            const logoURI = raw.logoURI || raw.logo_uri || raw.icon
-              || raw.imageUrl || raw.image || raw.logo || null;
-            const decimals = raw.decimals ?? 6;
-            if (!symbol && !name && !logoURI) return null;
-            return { address: mint, symbol, name, logoURI, decimals };
-          };
-
-          // Helper: safe timeout signal (AbortSignal.timeout not on all mobile browsers)
-          const timeoutSignal = (ms) => {
-            try {
-              return AbortSignal.timeout(ms);
-            } catch {
-              const ctrl = new AbortController();
-              setTimeout(() => ctrl.abort(), ms);
-              return ctrl.signal;
-            }
-          };
-
-          // Query Jupiter API for EVERY mint the user holds (4-source waterfall):
-          // 1. tokens.jup.ag/token/{mint}             — primary Jupiter verified registry
-          // 2. lite-api.jup.ag/tokens/v1/token/{mint} — Jupiter lite (wider coverage, unverified tokens)
-          // 3. api.solana.fm/v0/tokens/{mint}          — SolanaFM fallback
-          // 4. token.jup.ag (metaplex on-chain)        — last resort for any Solana token
-          // If all fail, fall back to MINT_TO_SYM → TOKEN_MINTS → tokenCache → truncated address
-          const resolveOneMint = async (mint) => {
-            // Source 1: Jupiter verified registry
-            try {
-              const r = await fetch("https://tokens.jup.ag/token/" + mint, { signal: timeoutSignal(4000) });
-              if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; }
-            } catch {}
-            // Source 2: Jupiter lite API (covers unverified/new tokens)
-            try {
-              const r = await fetch("https://lite-api.jup.ag/tokens/v1/token/" + mint, { signal: timeoutSignal(4000) });
-              if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; }
-            } catch {}
-            // Source 3: SolanaFM
-            try {
-              const r = await fetch("https://api.solana.fm/v0/tokens/" + mint, { signal: timeoutSignal(4000) });
-              if (r.ok) {
-                const d = await r.json();
-                const t = d?.tokenList || d?.result || d;
-                if (t?.name || t?.symbol) return { mint, meta: normMeta(mint, { symbol: t.symbol, name: t.name, logoURI: t.imageUrl || t.image || t.logo, decimals: t.decimals ?? 6 }) };
-              }
-            } catch {}
-            // Source 4: Metaplex token metadata via Jupiter token list search
-            try {
-              const r = await fetch(`https://tokens.jup.ag/tokens?search=${mint}&verify_only=false`, { signal: timeoutSignal(4000) });
-              if (r.ok) {
-                const arr = await r.json();
-                const found = Array.isArray(arr) ? arr.find(t => t.address === mint) : null;
-                if (found?.symbol || found?.name) return { mint, meta: normMeta(mint, found) };
-              }
-            } catch {}
-            return { mint, meta: null };
-          };
-
-          const resolveResults = await Promise.allSettled(
-            allMints.slice(0, 50).map(({ mint }) => resolveOneMint(mint))
-          );
-
-          // Build a mint → metadata map from API results
+          const resolveResults = await Promise.allSettled(allMints.slice(0, 50).map(({ mint }) => resolveOneMint(mint)));
           const tokenListMap = {};
           for (const r of resolveResults) {
-            if (r.status === "fulfilled" && r.value?.meta) {
-              const { mint, meta } = r.value;
-              console.log(`[ChatFi] Resolved ${mint.slice(0,8)}… → ${meta.symbol} / ${meta.name}`);
-              tokenListMap[mint] = meta;
-            }
+            if (r.status === "fulfilled" && r.value?.meta) tokenListMap[r.value.mint] = r.value.meta;
           }
 
-          // Apply resolved metadata; fall back to hardcoded map only if API returned nothing
           for (const { mint, uiAmt } of allMints.slice(0, 50)) {
             const meta = tokenListMap[mint];
-
-            // Symbol priority: Jupiter API → tokenCache → MINT_TO_SYM → TOKEN_MINTS → truncated address
             const apiSym = meta?.symbol || null;
-            const fallbackSym =
-              Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
-              || MINT_TO_SYM[mint]
-              || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0]
-              || null;
-            const rawSym = apiSym || fallbackSym || `${mint.slice(0,4)}…${mint.slice(-4)}`;
-            // Avoid collision if two mints resolve to the same symbol
-            const sym = balances[rawSym] !== undefined && !apiSym
-              ? `${mint.slice(0,4)}…${mint.slice(-3)}`
-              : rawSym;
+            const fallbackSym = MINT_TO_SYM[mint] || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0] || null;
+            const rawSym = apiSym || fallbackSym || `${mint.slice(0,4)}\u2026${mint.slice(-4)}`;
+            const sym = balances[rawSym] !== undefined && !apiSym ? `${mint.slice(0,4)}\u2026${mint.slice(-3)}` : rawSym;
 
             balances[sym] = uiAmt;
             mintMap[sym]  = mint;
-            // Logo priority: Jupiter API → TOKEN_LOGO_URLS → img.jup.ag CDN
             logoMap[sym]  = meta?.logoURI || TOKEN_LOGO_URLS[sym] || `https://img.jup.ag/tokens/${mint}`;
-
-            if (meta?.name) {
-              if (!results.nameMap) results.nameMap = {};
-              results.nameMap[sym] = meta.name;
-            } else if (!apiSym && !fallbackSym && meta === undefined) {
-              // No metadata at all — store mint address shortened as sym hint in nameMap
-              // so renderer knows this is an unknown token, not a valid symbol
-              if (!results.nameMap) results.nameMap = {};
-            }
-
-            // Cache resolved symbol so swap panel can reference by symbol
-            if (apiSym && !tokenCacheRef.current[apiSym.toUpperCase()]) {
-              tokenCacheRef.current[apiSym.toUpperCase()] = mint;
-            }
+            if (meta?.name) results.nameMap[sym] = meta.name;
+            if (apiSym && !tokenCacheRef.current[apiSym.toUpperCase()]) tokenCacheRef.current[apiSym.toUpperCase()] = mint;
             if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
           }
         }
@@ -3741,21 +3653,19 @@ function JupChatInner() {
         results.walletBalances = balances;
         results.mintMap        = mintMap;
         results.logoMap        = logoMap;
-        if (!results.nameMap) results.nameMap = {};
         setPortfolio(balances);
+        console.log(`[ChatFi Portfolio] resolved ${Object.keys(balances).length} tokens`);
       }
-    } catch {}
+    } catch (e) { console.error("[ChatFi Portfolio] balances fetch failed:", e); }
 
-    // ── Safety: if Ultra API returned nothing, build SOL balance from RPC directly ─
+    // ── Safety: if all APIs failed, build SOL from Helius RPC directly ────────
     if (!results.walletBalances || Object.keys(results.walletBalances).length === 0) {
       try {
-        const solJson = await fetch("https://api.mainnet-beta.solana.com", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const solJson = await fetch(SOLANA_RPC, {
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"getBalance", params:[walletAddress, { commitment:"confirmed" }] }),
         }).then(r => r.json());
-        const solLamports = solJson?.result?.value || 0;
-        const solAmt = solLamports / 1e9;
+        const solAmt = (solJson?.result?.value || 0) / 1e9;
         results.walletBalances = { SOL: solAmt };
         results.mintMap  = { SOL: "So11111111111111111111111111111111111111112" };
         results.logoMap  = { SOL: TOKEN_LOGO_URLS["SOL"] };
@@ -3763,7 +3673,7 @@ function JupChatInner() {
       } catch {}
     }
 
-    // ── 2. Jupiter Portfolio positions API — wallet + all DeFi positions ───────
+        // ── 2. Jupiter Portfolio positions API — wallet + all DeFi positions ───────
     // https://api.jup.ag/portfolio/v1/positions/{wallet}
     // Returns: { elements: [{type, label, platformId, value, data}], tokenInfo, fetcherReports }
     // label="Wallet" → token balances with USD values
@@ -6206,7 +6116,7 @@ function JupChatInner() {
 
   // ── Solana balances ─────────────────────────────────────────────────────────
   const fetchSolanaBalances = async (pubkey) => {
-    // Known mint → symbol map so USDC/USDT/JupUSD always resolve even if not in cache
+    // Known mint → symbol map so common tokens always resolve without API lookup
     const KNOWN_MINTS = {
       "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
       "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
@@ -6214,135 +6124,162 @@ function JupChatInner() {
       "So11111111111111111111111111111111111111112":   "SOL",
       "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
       "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+      "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
+      "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So":  "MSOL",
+      "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
+      "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1":  "BSOL",
     };
-    try {
-      // ── Primary: Jupiter Ultra balance API — more reliable than public RPC ──
-      // Same source used by the full portfolio panel, so balances always match.
-      const safeTimeout = (ms) => { try { return AbortSignal.timeout(ms); } catch { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; } };
+    const SOL_MINT = "So11111111111111111111111111111111111111112";
+    const safeTimeout = (ms) => { try { return AbortSignal.timeout(ms); } catch { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; } };
 
-      // Try 3 sources in order: holdings (newest), api.jup.ag/balances, lite-api/balances
-      // holdings endpoint returns { uiAmount (SOL), tokens: { mint: { uiAmount } } }
-      // balances endpoints return { SOL: { uiAmount }, mint: { uiAmount }, ... }
-      let ultraRes = null;
-      let isHoldingsFormat = false;
-
-      // Source 1: api.jup.ag/ultra/v1/balances (primary — returns SOL + all SPL tokens)
+    // Helper: resolve a mint address → symbol, updating tokenCache and logoMap
+    const resolveMint = async (mint) => {
+      const cached = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0];
+      if (cached) return { sym: cached, logo: logoMapRef.current?.[cached] || null };
+      const known = KNOWN_MINTS[mint];
+      if (known) return { sym: known, logo: TOKEN_LOGO_URLS[known] || null };
       try {
-        const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(6000) });
-        if (r.ok) { const d = await r.json(); if (d && typeof d === "object" && !d.error) ultraRes = d; }
+        const meta = await fetch(`https://tokens.jup.ag/token/${mint}`, { signal: safeTimeout(4000) }).then(r => r.ok ? r.json() : null).catch(() => null)
+          || await fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`, { signal: safeTimeout(4000) }).then(r => r.ok ? r.json() : null).catch(() => null);
+        if (meta?.symbol) {
+          if (!tokenCacheRef.current[meta.symbol]) tokenCacheRef.current[meta.symbol] = mint;
+          if (meta.logoURI && logoMapRef.current) logoMapRef.current[meta.symbol] = meta.logoURI;
+          return { sym: meta.symbol, logo: meta.logoURI || `https://img.jup.ag/tokens/${mint}` };
+        }
+      } catch {}
+      return { sym: `${mint.slice(0,4)}…${mint.slice(-4)}`, logo: `https://img.jup.ag/tokens/${mint}` };
+    };
+
+    try {
+      // ── PRIMARY: /ultra/v1/holdings/{address} — official current endpoint ──
+      // Response: { amount (lamports str), uiAmount (SOL float), tokens: { mint: { uiAmount, amount, decimals, ... } } }
+      let holdingsData = null;
+      try {
+        const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(7000) });
+        if (r.ok) { const d = await r.json(); if (d && !d.error && d.uiAmount != null) holdingsData = d; }
       } catch {}
 
-      // Source 2: lite-api (original fallback)
-      if (!ultraRes) {
+      // Lite API fallback for holdings
+      if (!holdingsData) {
         try {
-          const r = await fetch(`https://lite-api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(6000) });
-          if (r.ok) { const d = await r.json(); if (d && typeof d === "object" && !d.error) ultraRes = d; }
+          const r = await fetch(`https://lite-api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(7000) });
+          if (r.ok) { const d = await r.json(); if (d && !d.error && d.uiAmount != null) holdingsData = d; }
         } catch {}
       }
 
-      // Source 3: /holdings — only used to patch SOL if balances returned 0/missing SOL
-      if (!ultraRes || !ultraRes["SOL"] || ultraRes["SOL"]?.uiAmount === 0) {
-        try {
-          const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(6000) });
-          if (r.ok) {
-            const d = await r.json();
-            if (d && d.uiAmount != null) {
-              ultraRes = ultraRes || {};
-              ultraRes["SOL"] = { uiAmount: d.uiAmount };
-            }
-          }
-        } catch {}
-      }
+      if (holdingsData) {
+        const balances = { SOL: holdingsData.uiAmount ?? 0 };
+        const unknownMints = [];
 
-      if (ultraRes && typeof ultraRes === "object") {
-        const balances = {};
-        const SOL_MINT = "So11111111111111111111111111111111111111112";
-        for (const [mint, data] of Object.entries(ultraRes)) {
-          // Robustly extract ui amount — API may return uiAmount, or amount+decimals, or a bare number
-          const uiAmt = typeof data === "number" ? data
-            : data?.uiAmount != null ? data.uiAmount
-            : (data?.amount != null && data?.decimals != null) ? data.amount / Math.pow(10, data.decimals)
-            : null;
-          if (uiAmt == null || uiAmt < 0) continue;
-          // Native SOL is keyed as "SOL" or the native mint
-          if (mint === "SOL" || mint === SOL_MINT) {
-            balances["SOL"] = uiAmt;
-            continue;
-          }
-          if (uiAmt <= 0) continue; // skip dust for SPL tokens
-          const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0]
-                   || KNOWN_MINTS[mint];
-          if (sym) {
-            balances[sym] = uiAmt;
+        // holdings.tokens is keyed by mint address: { mint: { uiAmount, amount, decimals, isFrozen, ... } }
+        for (const [mint, data] of Object.entries(holdingsData.tokens || {})) {
+          if (mint === SOL_MINT) continue;
+          const uiAmt = data?.uiAmount ?? (data?.amount && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
+          if (!uiAmt || uiAmt <= 0) continue;
+          const cached = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0] || KNOWN_MINTS[mint];
+          if (cached) {
+            balances[cached] = uiAmt;
+            if (!logoMapRef.current?.[cached]) logoMapRef.current && (logoMapRef.current[cached] = TOKEN_LOGO_URLS[cached] || `https://img.jup.ag/tokens/${mint}`);
           } else {
-            // Resolve unknown mint symbol from Jupiter token API
-            try {
-              const meta = await fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`).then(r => r.json()).catch(() => null);
-              const finalSym = meta?.symbol || mint.slice(0, 8);
-              if (balances[finalSym] === undefined) balances[finalSym] = uiAmt;
-              if (meta?.symbol && !tokenCacheRef.current[meta.symbol]) tokenCacheRef.current[meta.symbol] = mint;
-              if (meta?.logoURI && logoMapRef.current) logoMapRef.current[finalSym] = meta.logoURI;
-            } catch {
-              balances[mint.slice(0, 8)] = uiAmt;
-            }
+            unknownMints.push({ mint, uiAmt });
           }
         }
-        // Ensure SOL is always present (Ultra API sometimes omits 0-balance SOL)
-        if (balances["SOL"] === undefined) balances["SOL"] = 0;
+
+        // Resolve all unknown mints in parallel
+        if (unknownMints.length > 0) {
+          const resolved = await Promise.allSettled(unknownMints.slice(0, 50).map(({ mint, uiAmt }) =>
+            resolveMint(mint).then(({ sym, logo }) => ({ mint, uiAmt, sym, logo }))
+          ));
+          for (const r of resolved) {
+            if (r.status !== "fulfilled") continue;
+            const { mint, uiAmt, sym, logo } = r.value;
+            if (balances[sym] === undefined) balances[sym] = uiAmt;
+            if (logo && logoMapRef.current && !logoMapRef.current[sym]) logoMapRef.current[sym] = logo;
+          }
+        }
+
+        console.log("[ChatFi] fetchSolanaBalances via holdings — tokens:", Object.keys(balances).length);
         return balances;
       }
 
-      // ── Fallback: direct RPC calls if Ultra API is unavailable ──
+      // ── SECONDARY: /ultra/v1/balances (deprecated but still works) ──
+      // Response: { SOL: { uiAmount, amount, slot }, <mint>: { uiAmount, amount, decimals }, ... }
+      let balancesData = null;
+      try {
+        const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(7000) });
+        if (r.ok) { const d = await r.json(); if (d && !d.error) balancesData = d; }
+      } catch {}
+      if (!balancesData) {
+        try {
+          const r = await fetch(`https://lite-api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(7000) });
+          if (r.ok) { const d = await r.json(); if (d && !d.error) balancesData = d; }
+        } catch {}
+      }
+
+      if (balancesData) {
+        const balances = {};
+        const unknownMints = [];
+        for (const [key, data] of Object.entries(balancesData)) {
+          const uiAmt = typeof data === "number" ? data : data?.uiAmount ?? (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : null);
+          if (uiAmt == null || uiAmt < 0) continue;
+          if (key === "SOL" || key === SOL_MINT) { balances["SOL"] = uiAmt; continue; }
+          if (uiAmt <= 0) continue;
+          const cached = Object.entries(tokenCacheRef.current).find(([, v]) => v === key)?.[0] || KNOWN_MINTS[key];
+          if (cached) { balances[cached] = uiAmt; }
+          else { unknownMints.push({ mint: key, uiAmt }); }
+        }
+        if (unknownMints.length > 0) {
+          const resolved = await Promise.allSettled(unknownMints.slice(0, 50).map(({ mint, uiAmt }) =>
+            resolveMint(mint).then(({ sym, logo }) => ({ mint, uiAmt, sym, logo }))
+          ));
+          for (const r of resolved) {
+            if (r.status !== "fulfilled") continue;
+            const { uiAmt, sym, logo } = r.value;
+            if (balances[sym] === undefined) balances[sym] = uiAmt;
+            if (logo && logoMapRef.current && !logoMapRef.current[sym]) logoMapRef.current[sym] = logo;
+          }
+        }
+        if (balances["SOL"] === undefined) balances["SOL"] = 0;
+        console.log("[ChatFi] fetchSolanaBalances via balances — tokens:", Object.keys(balances).length);
+        return balances;
+      }
+
+      // ── FALLBACK: direct Helius RPC ──
       const solJson = await fetch(SOLANA_RPC, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"getBalance", params:[pubkey,{ commitment:"confirmed" }] }),
       }).then(r => r.json());
       const sol = (solJson.result?.value || 0) / 1e9;
       const splJson = await fetch(SOLANA_RPC, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jsonrpc:"2.0", id:2, method:"getTokenAccountsByOwner", params:[pubkey,{ programId:SPL_PROGRAM },{ encoding:"jsonParsed", commitment:"confirmed" }] }),
       }).then(r => r.json());
       const balances = { SOL: sol };
       const unknownMints = [];
-
       for (const acc of (splJson.result?.value || [])) {
-        const info   = acc.account.data.parsed.info;
-        const uiAmt  = info.tokenAmount.uiAmount;
+        const info = acc.account.data.parsed.info;
+        const uiAmt = info.tokenAmount.uiAmount;
         if (!uiAmt || uiAmt <= 0) continue;
-        const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === info.mint)?.[0]
-                 || KNOWN_MINTS[info.mint];
-        if (sym) {
-          balances[sym] = uiAmt;
-        } else {
-          unknownMints.push({ mint: info.mint, uiAmt });
-        }
+        const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === info.mint)?.[0] || KNOWN_MINTS[info.mint];
+        if (sym) { balances[sym] = uiAmt; } else { unknownMints.push({ mint: info.mint, uiAmt }); }
       }
-
       if (unknownMints.length > 0) {
-        const resolved = await Promise.allSettled(
-          unknownMints.slice(0, 20).map(({ mint, uiAmt }) =>
-            fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`)
-              .then(r => r.json())
-              .then(meta => ({ mint, uiAmt, sym: meta?.symbol || null, name: meta?.name || null, logo: meta?.logoURI || null }))
-              .catch(() => ({ mint, uiAmt, sym: null, name: null, logo: null }))
-          )
-        );
+        const resolved = await Promise.allSettled(unknownMints.slice(0, 30).map(({ mint, uiAmt }) =>
+          resolveMint(mint).then(({ sym, logo }) => ({ mint, uiAmt, sym, logo }))
+        ));
         for (const r of resolved) {
           if (r.status !== "fulfilled") continue;
-          const { mint, uiAmt, sym, logo } = r.value;
-          const finalSym = sym || mint.slice(0, 8);
-          if (balances[finalSym] === undefined) balances[finalSym] = uiAmt;
-          if (sym && !tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
-          if (logo && logoMapRef.current) logoMapRef.current[finalSym] = logo;
-          else if (logoMapRef.current && !logoMapRef.current[finalSym])
-            logoMapRef.current[finalSym] = `https://img.jup.ag/tokens/${mint}`;
+          const { uiAmt, sym, logo } = r.value;
+          if (balances[sym] === undefined) balances[sym] = uiAmt;
+          if (logo && logoMapRef.current && !logoMapRef.current[sym]) logoMapRef.current[sym] = logo;
         }
       }
-
+      console.log("[ChatFi] fetchSolanaBalances via RPC — tokens:", Object.keys(balances).length);
       return balances;
-    } catch { return { SOL: 0 }; }
+    } catch (e) {
+      console.error("[ChatFi] fetchSolanaBalances failed:", e);
+      return { SOL: 0 };
+    }
   };
 
   // ── WalletConnect — QR pairing flow ─────────────────────────────────────────
