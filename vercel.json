@@ -16,6 +16,8 @@
       "memory": 512,
       "maxDuration": 30
     }
+  },
+  "crons": [
     { "path": "/api/yield-vault?cron=rotator", "schedule": "*/5 * * * *" }
-  }
+  ]
 }
