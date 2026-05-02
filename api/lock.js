@@ -21,6 +21,7 @@ import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 
@@ -103,12 +104,20 @@ export default async function handler(req, res) {
         LOCK_PROGRAM_ID
       );
 
+      // ── Detect token program from mint account owner ──────────────────────
+      // Jupiter Lock validates that token_program matches the mint's owning program.
+      // Hardcoding TOKEN_PROGRAM_ID fails for Token-2022 mints.
+      const TOKEN_2022 = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+      const mintInfo   = await connection.getAccountInfo(mintKey);
+      if (!mintInfo) throw new Error('Mint not found on-chain: ' + mint);
+      const TOKEN_PROG = mintInfo.owner.equals(TOKEN_2022) ? TOKEN_2022 : TOKEN_PROGRAM_ID;
+
       // ── Token accounts ────────────────────────────────────────────────────
       const funderATA = await getAssociatedTokenAddress(
-        mintKey, funderKey, false, TOKEN_PROGRAM_ID
+        mintKey, funderKey, false, TOKEN_PROG
       );
       const escrowATA = await getAssociatedTokenAddress(
-        mintKey, escrowPDA, true /* allowOwnerOffCurve */, TOKEN_PROGRAM_ID
+        mintKey, escrowPDA, true /* allowOwnerOffCurve */, TOKEN_PROG
       );
 
       // ── Anchor event authority (required by all Jupiter Lock instructions) ─
@@ -171,7 +180,7 @@ export default async function handler(req, res) {
         { pubkey: funderATA,                  isSigner: false, isWritable: true  }, // funder token account
         { pubkey: recipientKey,               isSigner: false, isWritable: false }, // recipient
         { pubkey: mintKey,                    isSigner: false, isWritable: false }, // SPL token mint
-        { pubkey: TOKEN_PROGRAM_ID,           isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROG,                 isSigner: false, isWritable: false },
         { pubkey: SystemProgram.programId,    isSigner: false, isWritable: false },
         { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID,isSigner: false, isWritable: false },
         { pubkey: eventAuthority,             isSigner: false, isWritable: false }, // Anchor CPI events
@@ -190,7 +199,7 @@ export default async function handler(req, res) {
         escrowATA,   // new ATA address
         escrowPDA,   // owner (the escrow PDA)
         mintKey,
-        TOKEN_PROGRAM_ID,
+        TOKEN_PROG,
         ASSOCIATED_TOKEN_PROGRAM_ID
       );
 
