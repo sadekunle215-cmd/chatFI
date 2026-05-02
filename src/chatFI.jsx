@@ -216,6 +216,8 @@ const TOKEN_LOGO_URLS = {
   RAY:     "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R/logo.png",
   MSOL:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So/logo.png",
   JITOSOL: "https://storage.googleapis.com/token-metadata/JitoSOL-256.png",
+  JUPSOL:  "https://static.jup.ag/jupSOL/icon.png",
+  JLP:     "https://static.jup.ag/jlp/icon.png",
   BSOL:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1/logo.png",
   ORCA:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE/logo.png",
   SAMO:    "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU/logo.png",
@@ -580,6 +582,9 @@ const T = {
   serif:    "'Lora','Georgia',serif",
   mono:     "'JetBrains Mono',monospace",
 };
+
+// ── Mobile detection (module-level, used across all panels) ─────────────────
+const isMobile = typeof navigator !== "undefined" && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 // ── Reown AppKit Init ────────────────────────────────────────────────────────
 // Get a free projectId at https://cloud.reown.com
@@ -2063,11 +2068,16 @@ function formatEarned(earned, sym) {
 
 // ── Shared token logo component with robust fallback ─────────────────────────
 function TokenLogo({ logo, mint, sym, size = 32 }) {
-  const [src, setSrc] = useState(logo || null);
+  const symUpper = (sym || "").toUpperCase().replace(/^JL/, ""); // strip jl prefix
+  const [src, setSrc] = useState(
+    logo || TOKEN_LOGO_URLS[symUpper] || null
+  );
+  // Fallback chain — ordered most-reliable first, img.jup.ag blocked cross-origin so skipped
   const fallbacks = [
     logo,
+    TOKEN_LOGO_URLS[symUpper],
     mint ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mint}/logo.png` : null,
-    mint ? `https://img.jup.ag/tokens/${mint}` : null,
+    mint ? `https://cdn.jsdelivr.net/gh/solana-labs/token-list@main/assets/mainnet/${mint}/logo.png` : null,
   ].filter(Boolean);
   const tryNext = (current) => {
     const idx = fallbacks.indexOf(current);
@@ -2077,7 +2087,7 @@ function TokenLogo({ logo, mint, sym, size = 32 }) {
   if (!src) {
     return (
       <div style={{ width: size, height: size, borderRadius: "50%", background: "#1e2d3d", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.35, fontWeight: 700, color: "#4d6a7a", border: "1px solid #2d4a5a" }}>
-        {(sym || "?").slice(0, 2)}
+        {(symUpper || "?").slice(0, 2)}
       </div>
     );
   }
@@ -2129,10 +2139,10 @@ function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, statu
                   <div key={pos.mint} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 13px", borderRadius: 10, border: `1px solid ${T.border}`, background: T.bg, marginBottom: 6, opacity: 0.55 }}>
                     <TokenLogo logo={pos.logo} mint={pos.mint} sym={pos.sym} size={32} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2, flexWrap: "wrap" }}>
                         <span style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{pos.sym} Earn</span>
-                        {apyStr && <span style={{ fontSize: 10, fontWeight: 700, color: "#68d391", background: "rgba(104,211,145,0.12)", borderRadius: 5, padding: "1px 6px" }}>{apyStr} APY</span>}
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: T.accent, background: "rgba(199,242,132,0.1)", borderRadius: 5, padding: "1px 6px", border: "1px solid rgba(199,242,132,0.2)" }}><SvgDot color={T.accent} /> VAULTED</span>
+                        {apyStr && <span style={{ fontSize: 10, fontWeight: 700, color: "#68d391", background: "rgba(104,211,145,0.12)", borderRadius: 5, padding: "1px 6px", whiteSpace: "nowrap" }}>{apyStr} APY</span>}
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, color: T.accent, background: "rgba(199,242,132,0.1)", borderRadius: 5, padding: "1px 6px", border: "1px solid rgba(199,242,132,0.2)", whiteSpace: "nowrap" }}><SvgDot color={T.accent} /> VAULTED</span>
                       </div>
                       <div style={{ fontSize: 12, color: T.text2 }}>
                         {pos.amount.toFixed(4)} {pos.sym} deposited
@@ -2170,9 +2180,9 @@ function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, statu
               <div key={pos.mint} onClick={() => togglePosition(pos.mint)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 13px", borderRadius: 10, cursor: "pointer", border: `1px solid ${selected ? T.accent : T.border}`, background: selected ? "rgba(199,242,132,0.06)" : T.bg, marginBottom: 6, transition: "all 0.15s" }}>
                 <TokenLogo logo={pos.logo} mint={pos.mint} sym={pos.sym} size={32} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{pos.sym} Earn</span>
-                    {apyStr && <span style={{ fontSize: 10, fontWeight: 700, color: "#68d391", background: "rgba(104,211,145,0.12)", borderRadius: 5, padding: "1px 6px" }}>{apyStr} APY</span>}
+                    {apyStr && <span style={{ fontSize: 10, fontWeight: 700, color: "#68d391", background: "rgba(104,211,145,0.12)", borderRadius: 5, padding: "1px 6px", whiteSpace: "nowrap" }}>{apyStr} APY</span>}
                   </div>
                   <div style={{ fontSize: 12, color: T.text2 }}>{pos.amount.toFixed(4)} {pos.sym} deposited{earnedStr && <span style={{ color: "#68d391", marginLeft: 6 }}>{earnedStr}</span>}</div>
                 </div>
@@ -2189,12 +2199,12 @@ function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, statu
           <div style={{ fontSize: 12, color: T.text3, marginBottom: 8 }}>Auto-swap when accumulated yield reaches this amount (USD)</div>
           <div style={{ position: "relative" }}>
             <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: T.text3, fontSize: 14, fontWeight: 600, pointerEvents: "none" }}>$</span>
-            <input type="number" min="1" step="1" value={cfg.thresholdUSD} onChange={e => setCfg(c => ({ ...c, thresholdUSD: e.target.value }))} placeholder="5" style={{ width: "100%", padding: "10px 12px 10px 28px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text1, fontSize: 14, outline: "none" }} />
+            <input type="number" min="1" step="1" value={cfg.thresholdUSD} onChange={e => setCfg(c => ({ ...c, thresholdUSD: e.target.value }))} placeholder="5" style={{ width: "100%", padding: isMobile ? "12px 12px 12px 28px" : "10px 12px 10px 28px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text1, fontSize: isMobile ? 16 : 14, outline: "none", boxSizing: "border-box" }} />
           </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-            {["5", "10", "25", "50", "100"].map(v => (
-              <button key={v} onClick={() => setCfg(c => ({ ...c, thresholdUSD: v }))} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: cfg.thresholdUSD === v ? T.accentBg : T.bg, border: `1px solid ${cfg.thresholdUSD === v ? T.accent : T.border}`, color: cfg.thresholdUSD === v ? T.accent : T.text2, cursor: "pointer" }}>${v}</button>
-            ))}
+          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+            {["$", "1", "2", "5", "10", "25", "50", "100"].includes(cfg.thresholdUSD) || true ? ["5", "10", "25", "50", "100"].map(v => (
+              <button key={v} onClick={() => setCfg(c => ({ ...c, thresholdUSD: v }))} style={{ flex: "1 1 auto", minWidth: isMobile ? 44 : 38, padding: isMobile ? "7px 10px" : "4px 10px", borderRadius: 6, fontSize: isMobile ? 13 : 11, fontWeight: 600, background: cfg.thresholdUSD === v ? T.accentBg : T.bg, border: `1px solid ${cfg.thresholdUSD === v ? T.accent : T.border}`, color: cfg.thresholdUSD === v ? T.accent : T.text2, cursor: "pointer" }}>${v}</button>
+            )) : null}
           </div>
         </div>
         {/* Step 3 — Target token */}
@@ -2251,10 +2261,10 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch }) {
   return (
     <div style={{ background: T.bg, border: `1px solid ${editing ? T.accent : T.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8, transition: "border-color 0.15s" }}>
       {/* Header row */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: editing ? 12 : 10 }}>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{v.earnSymbol} Earn → {editing ? <span style={{ color: T.accent }}>{editToken.sym}</span> : v.targetTokenSymbol}</div>
-          <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>Threshold: <span style={{ color: editing ? T.accent : T.accent }}>${editing ? editThreshold || "—" : v.thresholdUSD}</span></div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: editing ? 12 : 10, flexWrap: "wrap", gap: 6 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: isMobile ? 14 : 13, fontWeight: 700, color: T.text1, wordBreak: "break-word" }}>{v.earnSymbol} Earn → {editing ? <span style={{ color: T.accent }}>{editToken.sym}</span> : v.targetTokenSymbol}</div>
+          <div style={{ fontSize: 11, color: T.text3, marginTop: 2 }}>Threshold: <span style={{ color: T.accent }}>${editing ? editThreshold || "—" : v.thresholdUSD}</span></div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: v.status === "active" ? "rgba(104,211,145,0.12)" : "rgba(77,106,122,0.15)", color: v.status === "active" ? "#68d391" : T.text3, border: `1px solid ${v.status === "active" ? "rgba(104,211,145,0.2)" : T.border}` }}>
@@ -2279,11 +2289,11 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch }) {
             <div style={{ fontSize: 10, fontWeight: 700, color: T.text3, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>Trigger Threshold (USD)</div>
             <div style={{ position: "relative" }}>
               <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: T.text3, fontSize: 13, fontWeight: 600, pointerEvents: "none" }}>$</span>
-              <input type="number" min="1" step="1" value={editThreshold} onChange={e => setEditThreshold(e.target.value)} style={{ width: "100%", padding: "9px 12px 9px 26px", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text1, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
+              <input type="number" min="1" step="1" value={editThreshold} onChange={e => setEditThreshold(e.target.value)} style={{ width: "100%", padding: isMobile ? "12px 12px 12px 26px" : "9px 12px 9px 26px", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text1, fontSize: isMobile ? 16 : 13, outline: "none", boxSizing: "border-box" }} />
             </div>
-            <div style={{ display: "flex", gap: 5, marginTop: 7 }}>
+            <div style={{ display: "flex", gap: 5, marginTop: 7, flexWrap: "wrap" }}>
               {["5", "10", "25", "50", "100"].map(v => (
-                <button key={v} onClick={() => setEditThreshold(v)} style={{ padding: "3px 9px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: editThreshold === v ? T.accentBg : T.bg, border: `1px solid ${editThreshold === v ? T.accent : T.border}`, color: editThreshold === v ? T.accent : T.text2, cursor: "pointer" }}>${v}</button>
+                <button key={v} onClick={() => setEditThreshold(v)} style={{ flex: "1 1 auto", minWidth: isMobile ? 44 : 36, padding: isMobile ? "7px 10px" : "3px 9px", borderRadius: 6, fontSize: isMobile ? 13 : 11, fontWeight: 600, background: editThreshold === v ? T.accentBg : T.bg, border: `1px solid ${editThreshold === v ? T.accent : T.border}`, color: editThreshold === v ? T.accent : T.text2, cursor: "pointer" }}>${v}</button>
               ))}
             </div>
           </div>
@@ -2360,15 +2370,15 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefres
                 )}
                 {unconfigured.map((p) => (
                   <div key={p.mint} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         {p.logo && <TokenLogo logo={p.logo} mint={p.mint} sym={p.sym} size={24} />}
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: T.text1 }}>{p.sym} Earn</div>
+                          <div style={{ fontSize: isMobile ? 14 : 13, fontWeight: 700, color: T.text1 }}>{p.sym} Earn</div>
                           <div style={{ fontSize: 11, color: T.text3, marginTop: 1 }}>{p.amount > 0 ? `${p.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${p.sym} deposited` : "Position active"}</div>
                         </div>
                       </div>
-                      <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: "rgba(77,106,122,0.15)", color: T.text3, border: `1px solid ${T.border}` }}>NO VAULT</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20, background: "rgba(77,106,122,0.15)", color: T.text3, border: `1px solid ${T.border}`, whiteSpace: "nowrap" }}>NO VAULT</span>
                     </div>
                     {p.apy != null && (
                       <div style={{ fontSize: 11, color: T.teal, marginBottom: 8 }}>APY: {(p.apy / 100).toFixed(2)}%</div>
@@ -2634,6 +2644,7 @@ function JupChatInner() {
   });
   const [yieldVaultStatus, setYieldVaultStatus]     = useState(null);
   const [yieldVaultSaved, setYieldVaultSaved]       = useState([]);
+  const yieldVaultSavedRef                          = useRef([]); // mirror for use inside async callbacks
   const [yieldVaultNotifs, setYieldVaultNotifs]     = useState([]);
   const [showYieldVaultTracker, setShowYieldVaultTracker] = useState(false);
 
@@ -3353,6 +3364,9 @@ function JupChatInner() {
 
   // ── Keep volMonitorsRef in sync so the polling interval never reads stale state ─
   useEffect(() => { volMonitorsRef.current = volMonitors; }, [volMonitors]);
+
+  // ── Keep yieldVaultSavedRef in sync for use inside async fetchEarnUserPositions ─
+  useEffect(() => { yieldVaultSavedRef.current = yieldVaultSaved; }, [yieldVaultSaved]);
 
   // ── Volatility Monitor polling ────────────────────────────────────────────────
   // Every 30 s: fetch prices from Jupiter Price API v3, maintain a 10-sample rolling
@@ -5047,6 +5061,66 @@ function JupChatInner() {
         }
       });
       setEarnUserPositions(map);
+
+      // ── Mirror earn position changes → vault auto-cancel / sync ──────────────
+      const savedVaults = yieldVaultSavedRef.current.filter(v => v.status === "active" && v.earnMint);
+      if (savedVaults.length > 0) {
+        // Build mint → { amount, shares } from the raw earnArr
+        const liveByMint = {};
+        earnArr.forEach(e => {
+          const mint = e.token?.address || e.token?.id || e.assetMint;
+          if (!mint) return;
+          const shares = parseFloat(e.shares ?? 0);
+          const ua     = parseFloat(e.underlyingAssets ?? 0);
+          const dec    = e.token?.decimals ?? 6;
+          liveByMint[mint] = { amount: ua / Math.pow(10, dec), shares };
+        });
+
+        const toCancel = [];
+        const toUpdate = [];
+
+        savedVaults.forEach(v => {
+          const live = liveByMint[v.earnMint];
+          // Position fully gone → cancel vault
+          if (!live || live.shares <= 1000) {
+            toCancel.push(v);
+          }
+          // Position partially reduced → sync depositedAmount down to live balance
+          else if (live.amount < v.depositedAmount - 0.0001) {
+            toUpdate.push({ v, newAmount: live.amount });
+          }
+        });
+
+        // Auto-cancel vaults with no remaining earn position
+        if (toCancel.length > 0) {
+          await Promise.all(
+            toCancel.map(v =>
+              fetch(`/api/yield-vault?id=${v.id}&wallet=${walletFull}`, { method: "DELETE" }).catch(() => {})
+            )
+          );
+          const names = toCancel.map(v => v.earnSymbol || v.earnMint.slice(0, 6)).join(", ");
+          push("ai", `**Yield Vault auto-cancelled** for ${names} — Earn position was fully removed.`);
+        }
+
+        // Sync vaults where earn position was partially withdrawn
+        if (toUpdate.length > 0) {
+          await Promise.all(
+            toUpdate.map(({ v, newAmount }) =>
+              updateYieldVault(v.id, {
+                targetTokenSymbol:   v.targetTokenSymbol,
+                targetTokenMint:     v.targetTokenMint,
+                targetTokenDecimals: v.targetTokenDecimals,
+                thresholdUSD:        v.thresholdUSD,
+                depositedAmount:     newAmount,
+              }).catch(() => {})
+            )
+          );
+        }
+
+        if (toCancel.length > 0 || toUpdate.length > 0) fetchSavedVaults();
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       return map;
     } catch { return {}; }
   };
@@ -5226,13 +5300,21 @@ function JupChatInner() {
     } catch {}
   };
 
-  const updateYieldVault = async (vaultId, { targetTokenSymbol, targetTokenMint, targetTokenDecimals, thresholdUSD }) => {
+  const updateYieldVault = async (vaultId, { targetTokenSymbol, targetTokenMint, targetTokenDecimals, thresholdUSD, depositedAmount }) => {
     if (!walletFull) return { success: false, error: "No wallet" };
     try {
       const res = await fetch("/api/yield-vault", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: vaultId, wallet: walletFull, targetTokenSymbol, targetTokenMint, targetTokenDecimals: targetTokenDecimals ?? 6, thresholdUSD: parseFloat(thresholdUSD) }),
+        body: JSON.stringify({
+          id: vaultId,
+          wallet: walletFull,
+          targetTokenSymbol,
+          targetTokenMint,
+          targetTokenDecimals: targetTokenDecimals ?? 6,
+          thresholdUSD: parseFloat(thresholdUSD),
+          ...(depositedAmount !== undefined && { depositedAmount }),
+        }),
       });
       const data = await res.json();
       if (data.success) {
@@ -10745,7 +10827,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 <img src={CHATFI_AVATAR} alt="ChatFi" style={{ width:"100%", height:"100%", objectFit:"cover" }}/>
               </div>
               )}
-              <div style={{ maxWidth:"72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6, wordBreak:"break-word", overflowWrap:"anywhere", minWidth:0 }}>
+              <div style={{ maxWidth: isMobile ? "92%" : "72%", padding:m.role==="user"?"10px 16px":"12px 16px", borderRadius:m.role==="user"?"18px 18px 4px 18px":"4px 18px 18px 18px", background:m.role==="user"?T.accent:T.surface, color:m.role==="user"?"#0d1117":T.text1, border:m.role==="ai"?`1px solid ${T.border}`:"none", fontSize:14, lineHeight:1.6, wordBreak:"break-word", overflowWrap:"anywhere", minWidth:0 }}>
                 {m.walletCard ? (() => {
                   const wc = m.walletCard;
                   const providerIcon = wc.provider === "wallet"
@@ -11043,7 +11125,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             const logoUrl = info.icon || info.logoURI || info.logo_url || TOKEN_LOGO_URLS[info.symbol?.toUpperCase()] || (mint ? `https://img.jup.ag/tokens/${mint}` : null);
 
             return (
-              <div style={{ margin:"0 0 20px 44px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, overflow:"hidden" }}>
+              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, overflow:"hidden" }}>
 
                 {/* ── Hero header with logo + name + price ── */}
                 <div style={{ padding:"16px", background:`linear-gradient(135deg, #161e27 0%, #1a2535 100%)`, borderBottom:`1px solid ${T.border}` }}>
@@ -11246,7 +11328,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Swap panel ─────────────────────────────────────────────────── */}
           {showSwap && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:16, color:T.text1 }}>Swap Tokens</div>
               <div style={{ display:"flex", gap:10, marginBottom:12, alignItems:"center" }}>
                 <TokenPicker
@@ -11302,7 +11384,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           {/* ── Limit order panel ─────────────────────────────────────────── */}
           {/* ── Trigger v2 order panel ─────────────────────────────────────── */}
           {showTrigV2 && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>Trigger Order (v2 · USD price)</div>
               <div style={{ fontSize:11, color:T.text3, marginBottom:14 }}>Private off-chain orders · vault-based · OCO/OTOCO supported · min $10</div>
 
@@ -11442,7 +11524,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Trigger orders list panel ──────────────────────────────────── */}
           {showTrigOrders && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>My Trigger Orders</div>
                 <div style={{ display:"flex", gap:8 }}>
@@ -11520,7 +11602,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Recurring / DCA order panel ──────────────────────────────────── */}
           {showRecurring && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>Recurring Order (DCA)</div>
               <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>Time-based: buys a fixed amount on a set schedule</div>
 
@@ -11598,7 +11680,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Recurring orders list panel ───────────────────────────────────── */}
           {showRecurringOrders && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>My Recurring Orders</div>
                 <div style={{ display:"flex", gap:8 }}>
@@ -11699,7 +11781,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Prediction markets list ───────────────────────────────────── */}
           {showPredList && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>
                 Prediction Markets{predCategory && predCategory !== "null" ? ` — ${predCategory}` : ""}
               </div>
@@ -11836,7 +11918,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Single prediction analysis panel (SHOW_PREDICTION) ──────────── */}
           {showPred && pred && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>{pred.teamA} vs {pred.teamB}</div>
               <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>{pred.league}{pred.league&&pred.sport?" · ":""}{pred.sport}</div>
               {pred.analysis && <div style={{ fontSize:13, color:T.text2, marginBottom:16, lineHeight:1.6, padding:"10px 12px", background:T.bg, borderRadius:8 }}>{pred.analysis}</div>}
@@ -11856,7 +11938,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── On-chain prediction bet panel ────────────────────────────── */}
           {showBet && betMarket && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, minWidth:0, overflow:"hidden" }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12, minWidth:0, overflow:"hidden" }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:8, color:T.text1 }}>Place Prediction Bet</div>
               <div style={{ fontSize:13, color:T.text2, marginBottom:14, padding:"8px 12px", background:T.bg, borderRadius:8, lineHeight:1.5 }}>{betMarket.title}</div>
 
@@ -11984,7 +12066,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Earn / Lend vaults panel ──────────────────────────────────── */}
           {showEarn && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Jupiter Earn Vaults</div>
                 <div style={{ fontSize:11, background:T.tealBg, border:`1px solid ${T.teal}20`, borderRadius:10, padding:"2px 8px", color:T.teal }}>Live yield</div>
@@ -12072,7 +12154,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Borrow panel ─────────────────────────────────────────────── */}
           {showBorrow && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Borrow from Jupiter Lend</div>
                 <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>COMING SOON</span>
@@ -12097,7 +12179,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Send panel ────────────────────────────────────────────── */}
           {showSend && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Send Tokens</div>
               </div>
@@ -12346,7 +12428,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Portfolio panel ───────────────────────────────────────── */}
           {showPortfolio && (
-            <div style={{ margin:"0 0 20px 44px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, overflow:"hidden" }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, overflow:"hidden" }}>
               {/* Header */}
               <div style={{ padding:"16px 16px 12px", borderBottom:`1px solid ${T.border}`, background:`linear-gradient(135deg, #161e27 0%, #1a2535 100%)` }}>
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
@@ -12936,7 +13018,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             }).filter(m => m.bestEdge >= predCLIFilter.minEdge);
 
             return (
-              <div style={{ margin:"0 0 20px 44px", background:"#0a0e13", border:`1px solid #1a3a2a`, borderRadius:12, overflow:"hidden", fontFamily:T.mono }}>
+              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", background:"#0a0e13", border:`1px solid #1a3a2a`, borderRadius:12, overflow:"hidden", fontFamily:T.mono }}>
                 {/* Terminal title bar */}
                 <div style={{ background:"#111820", padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom:`1px solid #1a3a2a` }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10 }}>
@@ -13240,7 +13322,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             };
 
             return (
-              <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid #1a2d4d`, borderRadius:12 }}>
+              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid #1a2d4d`, borderRadius:12 }}>
                 {/* Panel header */}
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:4 }}>
                   <div>
@@ -13307,7 +13389,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               : "—";
             const jupUrl = `https://jup.ag/perps/${marketLabel.toLowerCase()}`;
             return (
-              <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>
                   Jupiter Perps
                 </div>
@@ -13404,7 +13486,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Perps Positions panel ─────────────────────────────────── */}
           {showPerpsPos && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>Open Position Open Perps Positions</div>
               {perpsLoading ? (
                 <div style={{ fontSize:12, color:T.text3 }}>Loading positions…</div>
@@ -13462,7 +13544,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Lend Positions panel ──────────────────────────────────── */}
           {showLendPos && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1, marginBottom:4 }}>My Jupiter Lend Positions</div>
               {lendPosLoading ? (
                 <div style={{ fontSize:12, color:T.text3 }}>Loading positions…</div>
@@ -13586,7 +13668,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
                     {/* ── Multiply (Leverage) panel ─────────────────────────────── */}
           {showMultiply && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
                 <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Jupiter Multiply</div>
                 <span style={{ fontSize:10, padding:"2px 7px", background:T.purpleBg, border:`1px solid ${T.purple}33`, borderRadius:10, color:T.purple, fontWeight:600 }}>COMING SOON</span>
@@ -13611,7 +13693,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Multiply position form — disabled (coming soon) ────────── */}
           {showMultiplyForm && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ textAlign:"center", padding:"16px 0" }}>
                 <div style={{ fontSize:14, fontWeight:700, color:T.text1, marginBottom:6 }}>Multiply — Coming Soon</div>
                 <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>Use Jupiter Lend directly in the meantime.</div>
@@ -13629,7 +13711,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Earn deposit panel ────────────────────────────────────────── */}
           {showEarnDeposit && earnDeposit.vault && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>
                 Deposit to {earnDeposit.vault.name}
               </div>
@@ -13673,7 +13755,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Earn Withdraw modal ──────────────────────────────────── */}
           {showEarnWithdraw && earnWithdraw.vault && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, marginBottom:4, color:T.text1 }}>
                 Withdraw from {earnWithdraw.vault.name}
               </div>
@@ -13751,7 +13833,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Jupiter Studio — Token Creation Panel ──────────────── */}
           {showStudio && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgPalette size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Jupiter Studio — Create Token</span></div>
                 <button onClick={() => setShowStudio(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
@@ -13904,7 +13986,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Studio Fees Panel ────────────────────────────────────── */}
           {showStudioFees && studioFees && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgCoin size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Creator Fees</span></div>
                 <button onClick={() => setShowStudioFees(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
@@ -13933,7 +14015,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Jupiter Lock — Token Lock Panel ─────────────────────── */}
           {showLock && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgLock size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Lock Tokens</span></div>
                 <button onClick={() => setShowLock(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
@@ -14043,7 +14125,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             const claimedCount   = mlLocks.filter(l => l.totalRaw > 0 && l.totalClaimed >= l.totalRaw).length;
 
             return (
-              <div style={{ margin:"0 0 20px 44px", padding:"18px 20px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:"18px 20px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
 
                 {/* Header */}
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
@@ -14127,7 +14209,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Route Inspector Panel ────────────────────────────────── */}
           {showRoute && routeData && (
-            <div style={{ margin:"0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}><SvgMap size={16} color={T.accent}/><span style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Swap Route: {routeData.fromSym} → {routeData.toSym}</span></div>
                 <button onClick={() => setShowRoute(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:16, cursor:"pointer" }}>✕</button>
