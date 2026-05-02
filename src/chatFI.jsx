@@ -5355,72 +5355,75 @@ function JupChatInner() {
   };
 
   const doSend = async (cfgOverride) => {
-    setSendStatus(null); // reset any previous error state so spinner shows
+    setSendStatus(null);
     const { token, amount, mint } = cfgOverride || sendCfg;
     if (!amount || parseFloat(amount) <= 0) return;
     if (!walletFull) { push("ai", "Connect your wallet first to send tokens."); return; }
-    const provider = getActiveProvider();
-    if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
     if (!mint) { push("ai", `Could not resolve mint for **${token}**. Try searching the token first.`); return; }
     if (!checkBalance(token, parseFloat(amount), "this send")) return;
-    if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
 
     const decimals  = token === "SOL" ? 9 : (tokenDecimalsRef.current[token.toUpperCase()] ?? 6);
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
 
-    // STEP 1: Generate invite code client-side (Jupiter spec: 13 random bytes → base58 → 12 chars)
+    // STEP 1: Generate invite code client-side
     const inviteCode = generateInviteCode();
-
-    // STEP 2: Derive keypair from invite code client-side.
-    // Send only the pubkey to the server — raw inviteCode never leaves the browser.
-    const inviteKeypair   = await inviteCodeToKeypair(inviteCode);
-    const inviteSignerPub = inviteKeypair.publicKey.toBase58();
 
     setSendStatus("signing");
     setSendErr(null);
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
-      // STEP 3: POST inviteSigner pubkey to server.
-      // Server calls Jupiter craft-send and returns the raw unsigned tx + blockhash.
+      // STEP 2: POST inviteCode to server.
+      // Server derives the keypair, calls Jupiter craft-send, partially signs with
+      // the invite keypair (using nacl directly so no other slots are touched),
+      // and returns the partially-signed tx + blockhash.
       const serverRes = await fetch("/api/send", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint, inviteSigner: inviteSignerPub }),
+        body:    JSON.stringify({ sender: walletFull, amount: amountRaw, mint, inviteCode }),
       });
       const serverData = await serverRes.json();
       if (serverData.error) throw new Error(serverData.error);
 
-      const { tx: txB64, blockhash, lastValidBlockHeight } = serverData;
-      if (!txB64) throw new Error("No transaction returned from server.");
+      const { partiallySignedTx, blockhash, lastValidBlockHeight } = serverData;
+      if (!partiallySignedTx) throw new Error("No transaction returned from server.");
       if (!blockhash || !lastValidBlockHeight) throw new Error("Server did not return blockhash metadata.");
 
-      // STEP 4: Wallet signs first, then inject invite keypair signature manually.
-      // We MUST do it in this order because Reown/WalletConnect's signTransaction
-      // internally resets ALL signature slots before signing — so if we sign with
-      // the invite keypair first, that signature gets wiped when the wallet signs.
-      // By injecting the invite sig AFTER the wallet signs (using nacl directly on
-      // the serialized message bytes) we avoid touching any other slots.
-      const tx = VersionedTransaction.deserialize(b64ToBytes(txB64));
+      // STEP 3: Deserialize the partially-signed tx (invite keypair slot already filled).
+      // Now get the sender's signature using the injected wallet directly.
+      // We use the raw injected wallet (window.phantom / window.backpack etc.) instead
+      // of going through Reown's signTransaction wrapper — Reown's wrapper calls
+      // tx.sign() internally which resets ALL signature slots, wiping the invite sig.
+      const tx = VersionedTransaction.deserialize(b64ToBytes(partiallySignedTx));
 
-      // Wallet signs first (sender signature)
-      const signedTx = await provider.signTransaction(tx);
+      // Resolve the raw injected wallet — bypass Reown wrapper to preserve existing sigs
+      const inj = window?.phantom?.solana || window?.backpack?.solana ||
+                  window?.solflare || window?.solana || null;
+      let signedTx;
+      if (inj?.signTransaction) {
+        // Injected wallet signs in-place without resetting other slots
+        signedTx = await inj.signTransaction(tx);
+      } else {
+        // Fallback: use Reown provider, then re-inject invite sig using nacl
+        // (handles WalletConnect where no injected wallet is available)
+        const provider = getActiveProvider();
+        if (!provider?.signTransaction) throw new Error("Wallet does not support transaction signing. Please reconnect.");
+        signedTx = await provider.signTransaction(tx);
+        // Re-inject invite keypair sig — Reown may have wiped it
+        const inviteKeypair = await inviteCodeToKeypair(inviteCode);
+        const msgBytes  = signedTx.message.serialize();
+        const inviteSig = nacl.sign.detached(msgBytes, inviteKeypair.secretKey);
+        const inviteIdx = signedTx.message.staticAccountKeys
+          .findIndex(k => k.equals(inviteKeypair.publicKey));
+        if (inviteIdx >= 0) signedTx.signatures[inviteIdx] = inviteSig;
+      }
 
-      // Inject the invite keypair signature into its slot without resetting others
-      const msgBytes  = signedTx.message.serialize();
-      const inviteSig = nacl.sign.detached(msgBytes, inviteKeypair.secretKey);
-      const inviteIdx = signedTx.message.staticAccountKeys
-        .findIndex(k => k.equals(inviteKeypair.publicKey));
-      if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
-      signedTx.signatures[inviteIdx] = inviteSig;
-
-      // STEP 5: Broadcast
+      // STEP 4: Broadcast
       const connection = new Connection(SOLANA_RPC, "confirmed");
       const signature  = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 0 });
       if (!signature) throw new Error("Transaction failed to send.");
 
       push("ai", `Send sent — confirming on-chain…`);
 
-      // STEP 6: Confirm using the blockhash from the server (same one baked into the tx)
       const confirmation = await connection.confirmTransaction({
         signature,
         blockhash,
@@ -5431,8 +5434,6 @@ function JupChatInner() {
       const inviteLink = `https://jup.ag/send?code=${inviteCode}`;
       setSendLink(inviteLink);
       setSendStatus("done");
-      // NOTE: intentionally NOT closing the panel here so the user can see
-      // the invite link + copy button in the UI before dismissing manually.
       push("ai",
         `Send confirmed ✓\n\n**${amount} ${token}** locked and ready to claim.\n\n` +
         `**Invite link:**\n\`${inviteLink}\`\n\n` +
