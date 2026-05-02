@@ -582,7 +582,7 @@ const T = {
 
 // ── Reown AppKit Init ────────────────────────────────────────────────────────
 // Get a free projectId at https://cloud.reown.com
-const REOWN_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f"; // replace with your own
+const REOWN_PROJECT_ID = import.meta.env.VITE_REOWN_PROJECT_ID;
 const _solanaAdapter = new SolanaAdapter();
 createAppKit({
   adapters: [_solanaAdapter],
@@ -6530,7 +6530,7 @@ function JupChatInner() {
   // Dynamically loads @walletconnect/sign-client from CDN, generates a Solana
   // mainnet pairing URI, shows it as a QR code, waits for Jupiter Mobile to scan.
 
-  const WC_PROJECT_ID = "21a9551a7eeedcd3c442d912b6ea336f";
+  const WC_PROJECT_ID = import.meta.env.VITE_REOWN_PROJECT_ID;
 
   const loadWCScript = () =>
     new Promise((res, rej) => {
