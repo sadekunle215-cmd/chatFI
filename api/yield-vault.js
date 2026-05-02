@@ -4,10 +4,11 @@
 export const config = { runtime: "nodejs" };
 //
 // Routes:
-//   GET  /api/yield-vault?wallet=xxx          → fetch active vaults for wallet
-//   POST /api/yield-vault                     → create/update vault config
-//   DELETE /api/yield-vault?id=xxx&wallet=xxx → cancel vault
-//   GET  /api/yield-vault?cron=1              → watcher (called by Vercel cron)
+//   GET    /api/yield-vault?wallet=xxx          → fetch active vaults for wallet
+//   POST   /api/yield-vault                     → create/update vault config
+//   PATCH  /api/yield-vault                     → update threshold, target token, depositedAmount
+//   DELETE /api/yield-vault?id=xxx&wallet=xxx   → cancel vault
+//   GET    /api/yield-vault?cron=1              → watcher (called by Vercel cron)
 //
 // vercel.json crons entry:
 //   { "path": "/api/yield-vault?cron=1", "schedule": "*/5 * * * *" }
@@ -273,7 +274,7 @@ async function runWatcher(req, res) {
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
   if (req.method === "OPTIONS") return res.status(200).end();
 
@@ -320,6 +321,27 @@ export default async function handler(req, res) {
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     });
     return res.status(200).json({ success: true, id: ref.id, action: "created" });
+  }
+
+  // PATCH /api/yield-vault — update threshold, target token, and/or depositedAmount
+  if (req.method === "PATCH") {
+    const { id, wallet, targetTokenSymbol, targetTokenMint, targetTokenDecimals, thresholdUSD, depositedAmount } = req.body;
+    if (!id || !wallet) return res.status(400).json({ error: "id and wallet required" });
+    try {
+      const doc = col.doc(id);
+      const snap = await doc.get();
+      if (!snap.exists) return res.status(404).json({ error: "Vault not found" });
+      if (snap.data().wallet !== wallet) return res.status(403).json({ error: "Forbidden" });
+      const updates = { updatedAt: new Date().toISOString() };
+      if (targetTokenSymbol  !== undefined) updates.targetTokenSymbol  = targetTokenSymbol;
+      if (targetTokenMint    !== undefined) updates.targetTokenMint    = targetTokenMint;
+      if (targetTokenDecimals !== undefined) updates.targetTokenDecimals = targetTokenDecimals ?? 6;
+      if (thresholdUSD       !== undefined) updates.thresholdUSD       = parseFloat(thresholdUSD);
+      // depositedAmount sync — sent by frontend when user partially withdraws from Earn
+      if (depositedAmount    !== undefined) updates.depositedAmount    = parseFloat(depositedAmount);
+      await doc.update(updates);
+      return res.status(200).json({ success: true, id });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
   // DELETE /api/yield-vault?id=xxx&wallet=xxx
