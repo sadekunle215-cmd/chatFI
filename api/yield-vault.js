@@ -1,21 +1,28 @@
 // api/yield-vault.js
-// Yield Vault — CRUD + Cron Watcher merged into one file
+// Yield Vault — CRUD + Cron Watcher + Telegram Notifications
 
 export const config = { runtime: "nodejs" };
 //
 // Routes:
-//   GET    /api/yield-vault?wallet=xxx          → fetch active vaults for wallet
-//   POST   /api/yield-vault                     → create/update vault config
-//   PATCH  /api/yield-vault                     → update threshold, target token, depositedAmount
-//   DELETE /api/yield-vault?id=xxx&wallet=xxx   → cancel vault
-//   GET    /api/yield-vault?cron=1              → watcher (called by Vercel cron)
+//   GET    /api/yield-vault?wallet=xxx                → fetch active vaults for wallet
+//   POST   /api/yield-vault                           → create/update vault config
+//   PATCH  /api/yield-vault                           → update threshold, target token, depositedAmount
+//   DELETE /api/yield-vault?id=xxx&wallet=xxx         → cancel vault
+//   GET    /api/yield-vault?cron=1                    → watcher (called by cron-job.org)
+//   POST   /api/yield-vault?action=link-telegram      → generate magic link token
+//   POST   /api/yield-vault?action=telegram-webhook   → Telegram bot webhook receiver
 //
-// vercel.json crons entry:
+// vercel.json crons entry (or use cron-job.org):
 //   { "path": "/api/yield-vault?cron=1", "schedule": "*/5 * * * *" }
+//
+// Telegram setup:
+//   1. Create bot via @BotFather → get token → add as TELEGRAM_BOT_TOKEN in Vercel
+//   2. Set webhook: https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://chatfi.pro/api/yield-vault?action=telegram-webhook
 
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { Connection, Keypair, VersionedTransaction } from "@solana/web3.js";
+import crypto from "crypto";
 
 // ── Firebase Admin init ──────────────────────────────────────────────────────
 function getDb() {
@@ -31,7 +38,7 @@ function getDb() {
   return getFirestore();
 }
 
-// ── Delegate keypair (bot wallet that signs on behalf of users) ──────────────
+// ── Delegate keypair ─────────────────────────────────────────────────────────
 function getDelegateKeypair() {
   const raw = process.env.DELEGATE_PRIVATE_KEY;
   if (!raw) throw new Error("DELEGATE_PRIVATE_KEY not set");
@@ -47,6 +54,10 @@ const JUP_EARN_API   = "https://api.jup.ag/lend/v1/earn";
 const JUP_SWAP_ORDER = "https://api.jup.ag/swap/v2/order";
 const JUP_SWAP_EXEC  = "https://api.jup.ag/swap/v2/execute";
 const JUP_PRICE_API  = "https://api.jup.ag/price/v3";
+
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://chatfi.pro";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -65,6 +76,65 @@ const bytesToB64 = (bytes) => {
     s += String.fromCharCode(...bytes.subarray(i, i + chunk));
   return btoa(s);
 };
+
+// ── Telegram: send message ────────────────────────────────────────────────────
+async function sendTelegramMessage(chatId, text, replyMarkup = null) {
+  if (!TELEGRAM_BOT_TOKEN) {
+    console.warn("[Telegram] TELEGRAM_BOT_TOKEN not set — skipping notification");
+    return;
+  }
+  try {
+    const body = {
+      chat_id: chatId,
+      text,
+      parse_mode: "HTML",
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    };
+    const res = await fetch(`${TELEGRAM_API}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      console.error("[Telegram] sendMessage failed:", err);
+    }
+  } catch (e) {
+    console.error("[Telegram] sendMessage error:", e.message);
+  }
+}
+
+// ── Telegram: notify yield ready ─────────────────────────────────────────────
+async function notifyYieldReady(vault, yieldUSD) {
+  const db = getDb();
+  // Look up chatId from chatfi_users by wallet
+  const userSnap = await db
+    .collection("chatfi_users")
+    .where("wallet", "==", vault.wallet)
+    .limit(1)
+    .get();
+
+  if (userSnap.empty) return;
+  const user = userSnap.docs[0].data();
+  if (!user.telegramChatId) return;
+
+  const harvestUrl = `${APP_URL}/?harvest=${vault.id}`;
+
+  const message =
+    `🌾 <b>Yield Ready — ChatFi</b>\n\n` +
+    `Your <b>${vault.earnSymbol}</b> vault has accumulated <b>$${yieldUSD.toFixed(2)}</b> in yield.\n\n` +
+    `Target: <b>${vault.targetTokenSymbol}</b>\n` +
+    `Threshold: <b>$${vault.thresholdUSD}</b>\n\n` +
+    `Tap below to harvest now 👇`;
+
+  const replyMarkup = {
+    inline_keyboard: [[
+      { text: "🚀 Harvest Now", url: harvestUrl },
+    ]],
+  };
+
+  await sendTelegramMessage(user.telegramChatId, message, replyMarkup);
+}
 
 // ── Fetch live Jupiter Earn position value ────────────────────────────────────
 async function fetchEarnPositionValue(walletAddress, earnMint) {
@@ -85,8 +155,6 @@ async function fetchEarnPositionValue(walletAddress, earnMint) {
     );
     if (!pos) return null;
     const dec = pos.token?.decimals ?? pos.asset?.decimals ?? pos.decimals ?? 6;
-    // underlyingAssets = raw integer of user's balance in protocol (principal + interest)
-    // underlyingBalance = wallet balance (NOT deposit) — ignore
     const ua = parseFloat(pos.underlyingAssets ?? 0);
     const currentAmount = ua > 0 ? ua / Math.pow(10, dec) : 0;
     return { currentAmount, decimals: dec, apy: pos.apy ?? pos.supplyApy ?? null, raw: pos };
@@ -173,9 +241,8 @@ async function waitConfirmed(sig, timeoutMs = 60000) {
   throw new Error("Transaction confirmation timeout");
 }
 
-// ── Cron watcher logic ────────────────────────────────────────────────────────
+// ── Cron watcher ─────────────────────────────────────────────────────────────
 async function runWatcher(req, res) {
-  // Security: Vercel cron sends Authorization header with CRON_SECRET
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -221,23 +288,19 @@ async function runWatcher(req, res) {
           continue;
         }
 
-        vaultLog.push(`THRESHOLD HIT — initiating withdraw + swap`);
+        vaultLog.push(`THRESHOLD HIT — sending Telegram alert`);
 
-        const withdrawSig = await withdrawYield(vault, yieldAmount, connection, delegateKp);
-        vaultLog.push(`Withdraw OK: ${withdrawSig.slice(0, 20)}...`);
-        await sleep(3000);
+        // ── Send Telegram notification ──────────────────────────────────────
+        await notifyYieldReady(vault, yieldUSD);
+        vaultLog.push(`Telegram alert sent`);
 
-        const yieldAmountRaw = Math.floor(yieldAmount * Math.pow(10, position.decimals));
-        const { sig: swapSig, outAmount } = await swapYield(vault, yieldAmountRaw);
-        vaultLog.push(`Swap OK: ${swapSig.slice(0, 20)}...`);
-
+        // ── Mark vault as pending harvest (waiting for user to sign) ────────
         await doc.ref.update({
-          swapCount: (vault.swapCount || 0) + 1,
-          totalSwapped: (vault.totalSwapped || 0) + yieldUSD,
+          pendingHarvest: true,
+          pendingHarvestYieldUSD: yieldUSD,
+          pendingHarvestYieldAmount: yieldAmount,
+          pendingHarvestDetectedAt: new Date().toISOString(),
           lastTriggeredAt: new Date().toISOString(),
-          lastTxSig: swapSig,
-          lastWithdrawSig: withdrawSig,
-          lastYieldUSD: yieldUSD,
           updatedAt: new Date().toISOString(),
         });
 
@@ -247,14 +310,12 @@ async function runWatcher(req, res) {
           earnSymbol: vault.earnSymbol,
           targetTokenSymbol: vault.targetTokenSymbol,
           yieldUSD: yieldUSD.toFixed(2),
-          withdrawSig,
-          swapSig,
-          outAmount: outAmount || null,
+          type: "harvest_ready",
           read: false,
           createdAt: new Date().toISOString(),
         });
 
-        vaultLog.push(`SUCCESS — $${yieldUSD.toFixed(2)} rotated into ${vault.targetTokenSymbol}`);
+        vaultLog.push(`SUCCESS — $${yieldUSD.toFixed(2)} ready to harvest into ${vault.targetTokenSymbol}`);
       } catch (vaultErr) {
         vaultLog.push(`ERROR: ${vaultErr.message}`);
         await doc.ref.update({ lastError: vaultErr.message, lastErrorAt: new Date().toISOString() }).catch(() => {});
@@ -271,6 +332,122 @@ async function runWatcher(req, res) {
   }
 }
 
+// ── Telegram magic link: generate token ──────────────────────────────────────
+async function handleLinkTelegram(req, res) {
+  const { wallet } = req.body;
+  if (!wallet) return res.status(400).json({ error: "wallet required" });
+
+  const db = getDb();
+  const token = crypto.randomBytes(16).toString("hex");
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min expiry
+
+  // Store token in Firestore
+  await db.collection("telegram_link_tokens").doc(token).set({
+    wallet,
+    expiresAt,
+    createdAt: new Date().toISOString(),
+    used: false,
+  });
+
+  const botLink = `https://t.me/ChatFI_Ibot?start=${token}`;
+  return res.status(200).json({ success: true, botLink });
+}
+
+// ── Telegram webhook: receive /start <token> from bot ────────────────────────
+async function handleTelegramWebhook(req, res) {
+  // Always respond 200 immediately to Telegram
+  res.status(200).json({ ok: true });
+
+  try {
+    const update = req.body;
+    const message = update?.message;
+    if (!message) return;
+
+    const chatId = message.chat.id;
+    const text = message.text || "";
+    const firstName = message.from?.first_name || "there";
+
+    // Handle /start <token>
+    if (text.startsWith("/start ")) {
+      const token = text.split(" ")[1]?.trim();
+      if (!token) {
+        await sendTelegramMessage(chatId, "❌ Invalid link. Please generate a new one from ChatFi.");
+        return;
+      }
+
+      const db = getDb();
+      const tokenDoc = await db.collection("telegram_link_tokens").doc(token).get();
+
+      if (!tokenDoc.exists) {
+        await sendTelegramMessage(chatId, "❌ Link not found. Please generate a new one from ChatFi.");
+        return;
+      }
+
+      const tokenData = tokenDoc.data();
+
+      if (tokenData.used) {
+        await sendTelegramMessage(chatId, "⚠️ This link has already been used. Generate a new one from ChatFi if needed.");
+        return;
+      }
+
+      if (new Date(tokenData.expiresAt) < new Date()) {
+        await sendTelegramMessage(chatId, "⏰ This link has expired. Please generate a new one from ChatFi.");
+        return;
+      }
+
+      // Link telegramChatId to wallet in chatfi_users
+      const usersSnap = await db
+        .collection("chatfi_users")
+        .where("wallet", "==", tokenData.wallet)
+        .limit(1)
+        .get();
+
+      if (usersSnap.empty) {
+        // Create user doc if it doesn't exist
+        await db.collection("chatfi_users").add({
+          wallet: tokenData.wallet,
+          telegramChatId: chatId,
+          telegramFirstName: firstName,
+          telegramLinkedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+        });
+      } else {
+        await usersSnap.docs[0].ref.update({
+          telegramChatId: chatId,
+          telegramFirstName: firstName,
+          telegramLinkedAt: new Date().toISOString(),
+        });
+      }
+
+      // Mark token as used
+      await tokenDoc.ref.update({ used: true, usedAt: new Date().toISOString() });
+
+      await sendTelegramMessage(
+        chatId,
+        `✅ <b>Wallet linked successfully!</b>\n\nHi ${firstName}! You'll now receive yield harvest alerts here from ChatFi.\n\nWhen your yield threshold is hit, I'll send you a notification with a direct link to harvest. 🌾`
+      );
+      return;
+    }
+
+    // Handle /start with no token (user opened bot directly)
+    if (text === "/start") {
+      await sendTelegramMessage(
+        chatId,
+        `👋 <b>Welcome to ChatFI Bot!</b>\n\nTo link your wallet, go to <a href="${APP_URL}">ChatFi</a> and click <b>Connect Telegram</b> in your Yield Vault settings.`
+      );
+      return;
+    }
+
+    // Default response
+    await sendTelegramMessage(
+      chatId,
+      `ℹ️ Use ChatFi to manage your yield vaults: <a href="${APP_URL}">${APP_URL}</a>`
+    );
+  } catch (e) {
+    console.error("[TelegramWebhook] error:", e.message);
+  }
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -281,6 +458,16 @@ export default async function handler(req, res) {
   // Cron watcher — GET ?cron=1
   if (req.method === "GET" && req.query.cron === "1") {
     return runWatcher(req, res);
+  }
+
+  // Telegram magic link — POST ?action=link-telegram
+  if (req.method === "POST" && req.query.action === "link-telegram") {
+    return handleLinkTelegram(req, res);
+  }
+
+  // Telegram webhook — POST ?action=telegram-webhook
+  if (req.method === "POST" && req.query.action === "telegram-webhook") {
+    return handleTelegramWebhook(req, res);
   }
 
   let db;
@@ -317,13 +504,14 @@ export default async function handler(req, res) {
       thresholdUSD: parseFloat(thresholdUSD), targetTokenSymbol, targetTokenMint,
       targetTokenDecimals: targetTokenDecimals || 9, status: "active",
       totalSwapped: 0, swapCount: 0,
+      pendingHarvest: false,
       lastCheckedAt: null, lastTriggeredAt: null, lastTxSig: null,
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     });
     return res.status(200).json({ success: true, id: ref.id, action: "created" });
   }
 
-  // PATCH /api/yield-vault — update threshold, target token, and/or depositedAmount
+  // PATCH /api/yield-vault
   if (req.method === "PATCH") {
     const { id, wallet, targetTokenSymbol, targetTokenMint, targetTokenDecimals, thresholdUSD, depositedAmount } = req.body;
     if (!id || !wallet) return res.status(400).json({ error: "id and wallet required" });
@@ -333,12 +521,11 @@ export default async function handler(req, res) {
       if (!snap.exists) return res.status(404).json({ error: "Vault not found" });
       if (snap.data().wallet !== wallet) return res.status(403).json({ error: "Forbidden" });
       const updates = { updatedAt: new Date().toISOString() };
-      if (targetTokenSymbol  !== undefined) updates.targetTokenSymbol  = targetTokenSymbol;
-      if (targetTokenMint    !== undefined) updates.targetTokenMint    = targetTokenMint;
+      if (targetTokenSymbol   !== undefined) updates.targetTokenSymbol   = targetTokenSymbol;
+      if (targetTokenMint     !== undefined) updates.targetTokenMint     = targetTokenMint;
       if (targetTokenDecimals !== undefined) updates.targetTokenDecimals = targetTokenDecimals ?? 6;
-      if (thresholdUSD       !== undefined) updates.thresholdUSD       = parseFloat(thresholdUSD);
-      // depositedAmount sync — sent by frontend when user partially withdraws from Earn
-      if (depositedAmount    !== undefined) updates.depositedAmount    = parseFloat(depositedAmount);
+      if (thresholdUSD        !== undefined) updates.thresholdUSD        = parseFloat(thresholdUSD);
+      if (depositedAmount     !== undefined) updates.depositedAmount     = parseFloat(depositedAmount);
       await doc.update(updates);
       return res.status(200).json({ success: true, id });
     } catch (e) { return res.status(500).json({ error: e.message }); }
