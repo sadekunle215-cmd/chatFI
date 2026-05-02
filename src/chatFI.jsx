@@ -334,6 +334,7 @@ Available actions:
 - "PLACE_PREDICTION" → actionData: { "searchQuery": "Arsenal Atletico Madrid", "outcome": "Arsenal FC", "side": "yes", "amount": "20" } — directly place a bet without showing the market browser. Use when user clearly states the match, which team/outcome, yes/no side, and an amount. outcome must match one of the market outcome titles (team name, "Draw", etc). side: "yes" = betting that outcome happens, "no" = betting it doesn't. amount in USD (min $5).
 - "BASKET_PREDICTION" → actionData: { "bets": [ { "searchQuery": "Arsenal Atletico", "outcome": "Arsenal FC", "side": "yes", "amount": "10" }, { "searchQuery": "Man City Chelsea", "outcome": "Draw", "side": "no", "amount": "15" } ] } — place up to 10 prediction bets in sequence. Use when user specifies multiple matches and outcomes in one message. Each bet has same fields as PLACE_PREDICTION.
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — portion: "all"|"half"|"quarter"|"N%"
+- "FIND_BEST_YIELD"  → actionData: { "asset": "USDC" or null } — scan all Jupiter Lend vaults, rank by APY, show best option for asset. Use when user asks "best yield", "highest APY", "where should I deposit", "best vault for USDC", "find best yield", "optimize my yield", "where to earn most".
 - "SET_YIELD_VAULT"  → actionData: {} — open the Yield Vault setup panel so user can auto-rotate their Jupiter Earn yield into any token
 - "SHOW_YIELD_VAULT" → actionData: {} — show user's active yield vault positions and stats
 - "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — leveraged looping via Jupiter Lend flashloans. Explain mechanics + show vaults.
@@ -379,6 +380,7 @@ Rules:
 - "predictions" / "show markets" / "what can I bet on" / "sport prediction" / "new predictions" / "show predictions" / "prediction markets" / any mention of predict/bet + sport/crypto/politics → FETCH_PREDICTIONS — infer category from context. If user says "sport" or "sports" set sport:"sports". If user says "show me top N" extract limit:N.
 - "show new sport prediction" / "sport prediction to predict on" / "new sport markets" → FETCH_PREDICTIONS with sport:"sports"
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
+- "best yield" / "highest APY" / "best APY" / "where should I deposit" / "find best yield" / "best vault for" / "optimize my yield" / "where to earn most" → FIND_BEST_YIELD — extract asset if mentioned (e.g. "best yield for USDC" → asset:"USDC"), otherwise asset:null
 - "withdraw from earn" / "redeem jlTokens" / "take out my earn" → SHOW_LEND_POSITIONS (earn panel has withdraw buttons)
 - "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY
 - "borrow" / "I want to borrow" / "use borrow" / "deposit collateral" / "take a loan" / "borrow USDC" / "borrow against SOL" / "lend borrow" / "use SOL as collateral" / "how do I borrow" / "open borrow" → SHOW_BORROW — fire this IMMEDIATELY even if no amounts given; open the panel and let the user fill in details. Extract collateral/debt/amounts if present, otherwise leave blank.
@@ -2346,11 +2348,24 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch, onConnectTelegram, telegra
   );
 }
 
-function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefresh, earnPositions = [], onSetVault, jupFetch, onConnectTelegram, telegramLinked }) {
+function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefresh, earnPositions = [], onSetVault, jupFetch, onConnectTelegram, telegramLinked, earnVaults = [], onFindBestYield }) {
   if (!show) return null;
   const configuredMints = new Set((vaults || []).map((v) => v.earnMint));
   const unconfigured = (earnPositions || []).filter((p) => p.mint && !configuredMints.has(p.mint));
   const hasAnything = (vaults && vaults.length > 0) || unconfigured.length > 0;
+
+  // ── Compute migrate alerts: find vaults where a better APY is available ──────
+  const migrateAlerts = (vaults || []).filter(v => v.status === "active").reduce((acc, vault) => {
+    if (!earnVaults.length) return acc;
+    const currentVaultData = earnVaults.find(ev => ev.assetMint === vault.earnMint);
+    const currentApy = currentVaultData?.apy || 0;
+    const sameAsset = earnVaults.filter(ev => ev.token === (currentVaultData?.token || vault.earnSymbol));
+    const best = sameAsset.reduce((b, ev) => ev.apy > (b?.apy || 0) ? ev : b, null);
+    if (best && best.assetMint !== vault.earnMint && best.apy - currentApy > 0.5) {
+      acc.push({ vault, currentApy, bestVault: best, bestApy: best.apy });
+    }
+    return acc;
+  }, []);
   return (
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", marginBottom: 8, animation: "fadeUp 0.22s ease forwards" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${T.border}`, background: "linear-gradient(135deg, #0d1a0d, #0f1e2a)" }}>
@@ -2370,6 +2385,20 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefres
           <div style={{ textAlign: "center", padding: 24, color: T.text3, fontSize: 13 }}>No active Yield Vaults or Earn positions found.</div>
         ) : (
           <>
+            {migrateAlerts.map((alert) => (
+              <div key={alert.vault.id + "-migrate"} style={{ background: "rgba(199,242,132,0.06)", border: "1px solid rgba(199,242,132,0.25)", borderRadius: 10, padding: "10px 13px", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: T.accent, marginBottom: 2 }}>📈 Better yield available for {alert.vault.earnSymbol}</div>
+                  <div style={{ fontSize: 11, color: T.text2 }}>
+                    Current: <b style={{ color: T.text1 }}>{alert.currentApy.toFixed(2)}%</b> → Best: <b style={{ color: T.accent }}>{alert.bestApy.toFixed(2)}%</b>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onFindBestYield && onFindBestYield(alert.vault.earnSymbol)}
+                  style={{ padding: "6px 12px", background: "rgba(199,242,132,0.15)", border: "1px solid rgba(199,242,132,0.3)", borderRadius: 7, color: T.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}
+                >View Options</button>
+              </div>
+            ))}
             {vaults && vaults.map((v) => (
               <VaultCard key={v.id} v={v} onCancel={onCancel} onUpdate={onUpdate} jupFetch={jupFetch} onConnectTelegram={onConnectTelegram} telegramLinked={telegramLinked} />
             ))}
@@ -3380,6 +3409,25 @@ function JupChatInner() {
 
   // ── Keep yieldVaultSavedRef in sync for use inside async fetchEarnUserPositions ─
   useEffect(() => { yieldVaultSavedRef.current = yieldVaultSaved; }, [yieldVaultSaved]);
+
+  // ── Deep link handler — ?action=migrate&asset=USDC&vault=MINTADDR ────────────
+  // Called from Telegram APY alert. Opens FIND_BEST_YIELD panel for the asset.
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const action = params.get("action");
+      const asset  = params.get("asset");
+      if (action === "migrate" && asset) {
+        fetchEarnVaults();
+        push("ai", `I found a better yield opportunity for **${asset}**. Here are the top vaults ranked by APY — tap Deposit on the best one to migrate your position.`);
+        push("ai", "__FIND_BEST_YIELD__:asset=" + asset);
+        // Clean URL without reloading
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, "", cleanUrl);
+      }
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Volatility Monitor polling ────────────────────────────────────────────────
   // Every 30 s: fetch prices from Jupiter Price API v3, maintain a 10-sample rolling
@@ -10325,6 +10373,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           }
         }
 
+      } else if (action === "FIND_BEST_YIELD") {
+        push("ai", text);
+        await fetchEarnVaults();
+        const filterAsset = actionData?.asset || null;
+        push("ai", "__FIND_BEST_YIELD__" + (filterAsset ? ":asset=" + filterAsset : ""));
+
       } else if (action === "SET_YIELD_VAULT") {
         push("ai", text);
         fetchEarnPositionsForVault();
@@ -10965,6 +11019,56 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   );
                 })() : m.text?.startsWith("__YIELD_VAULT_PROMPT__") ? (
                   <YieldVaultPromptCard onSetVault={() => { fetchEarnPositionsForVault(); setShowYieldVault(true); }} />
+                ) : m.text?.startsWith("__FIND_BEST_YIELD__") ? (() => {
+                  const filterAsset = m.text.includes(":asset=") ? m.text.split(":asset=")[1] : null;
+                  const filtered = filterAsset
+                    ? earnVaults.filter(v => v.token?.toUpperCase() === filterAsset.toUpperCase())
+                    : earnVaults;
+                  const ranked = [...filtered].sort((a, b) => b.apy - a.apy).slice(0, 8);
+                  return (
+                    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", marginBottom: 8, animation: "fadeUp 0.22s ease forwards" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: `1px solid ${T.border}`, background: "linear-gradient(135deg, #0d1a0d, #0f1e2a)" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ width: 28, height: 28, borderRadius: 7, background: "rgba(199,242,132,0.08)", border: "1px solid rgba(199,242,132,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: T.accent, flexShrink: 0 }}>
+                            <SvgZapSm />
+                          </div>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: T.accent }}>Best Yield Vaults{filterAsset ? ` — ${filterAsset}` : ""}</span>
+                        </div>
+                        <button onClick={() => setMsgs(prev => prev.filter(x => x.id !== m.id))} style={{ background: "none", border: "none", color: T.text3, cursor: "pointer", padding: 6, display: "flex", alignItems: "center", justifyContent: "center" }}><SvgClose /></button>
+                      </div>
+                      <div style={{ padding: "14px 16px" }}>
+                        {earnLoading && <div style={{ textAlign: "center", padding: 20, color: T.text3, fontSize: 13 }}>Loading vaults…</div>}
+                        {!earnLoading && ranked.length === 0 && <div style={{ textAlign: "center", padding: 20, color: T.text3, fontSize: 13 }}>No vaults found{filterAsset ? ` for ${filterAsset}` : ""}.</div>}
+                        {!earnLoading && ranked.map((v, i) => (
+                          <div key={v.id || i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: i === 0 ? "rgba(199,242,132,0.06)" : T.bg, border: `1px solid ${i === 0 ? "rgba(199,242,132,0.2)" : T.border}`, borderRadius: 10, marginBottom: 6 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              {v.logoUrl && <img src={v.logoUrl} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover" }} onError={e => e.target.style.display = "none"} />}
+                              <div>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: T.text1, display: "flex", alignItems: "center", gap: 6 }}>
+                                  {v.token}
+                                  {i === 0 && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(199,242,132,0.15)", color: T.accent, border: "1px solid rgba(199,242,132,0.3)" }}>BEST</span>}
+                                </div>
+                                <div style={{ fontSize: 11, color: T.text3, marginTop: 1 }}>{v.utilization != null ? `${v.utilization}% utilization` : "Jupiter Lend"}</div>
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ fontSize: 15, fontWeight: 800, color: i === 0 ? T.accent : T.teal }}>{v.apyDisplay}</span>
+                              <button
+                                onClick={() => {
+                                  setYieldVaultCfg(prev => ({ ...prev, selectedPositions: v.assetMint ? [v.assetMint] : prev.selectedPositions }));
+                                  fetchEarnPositionsForVault();
+                                  setMsgs(prev => prev.filter(x => x.id !== m.id));
+                                  push("ai", "__YIELD_VAULT_PANEL__");
+                                }}
+                                style={{ padding: "5px 10px", background: i === 0 ? T.accent : "rgba(199,242,132,0.1)", border: `1px solid ${i === 0 ? T.accent : "rgba(199,242,132,0.2)"}`, borderRadius: 7, color: i === 0 ? "#0d1117" : T.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
+                              >Deposit</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()
                 ) : m.text?.startsWith("__YIELD_VAULT_PANEL__") ? (
                   <YieldVaultPanel
                     show={true}
@@ -10989,6 +11093,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     jupFetch={jupFetch}
                     onConnectTelegram={connectTelegram}
                     telegramLinked={telegramLinked}
+                    earnVaults={earnVaults}
+                    onFindBestYield={(asset) => { setMsgs(prev => prev.filter(x => x.id !== m.id)); fetchEarnVaults(); push("ai", "__FIND_BEST_YIELD__" + (asset ? ":asset=" + asset : "")); }}
                     onSetVault={(p) => {
                       setYieldVaultCfg(prev => ({ ...prev, selectedPositions: [p.mint] }));
                       setMsgs(prev => prev.filter(x => x.id !== m.id));
@@ -12057,6 +12163,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             jupFetch={jupFetch}
             onConnectTelegram={connectTelegram}
             telegramLinked={telegramLinked}
+            earnVaults={earnVaults}
+            onFindBestYield={(asset) => { setShowYieldVaultTracker(false); fetchEarnVaults(); push("ai", "__FIND_BEST_YIELD__" + (asset ? ":asset=" + asset : "")); }}
             onSetVault={(p) => {
               setYieldVaultCfg(prev => ({ ...prev, selectedPositions: [p.mint] }));
               setShowYieldVaultTracker(false);
