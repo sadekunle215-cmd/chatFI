@@ -2230,7 +2230,17 @@ function JupChatInner() {
 
   // ── Reown AppKit hooks ─────────────────────────────────────────────────────
   const { open: reownOpen }                                     = useAppKit();
-  const { address: reownAddress, isConnected: reownConnected }  = useAppKitAccount();
+  const { address: _reownRawAddress, caipAddress: reownCaipAddress, isConnected: reownConnected } = useAppKitAccount({ namespace: "solana" });
+  // Extract the real Solana base58 pubkey from caipAddress ("solana:chainId:PUBKEY")
+  // which is always chain-scoped and correct, unlike `address` which can return
+  // a session key or wrong-chain address when connecting via WalletConnect (e.g. Jupiter wallet)
+  const reownAddress = (() => {
+    if (reownCaipAddress) {
+      const parts = reownCaipAddress.split(":");
+      if (parts.length === 3 && parts[2].length >= 32) return parts[2];
+    }
+    return _reownRawAddress;
+  })();
   const { walletProvider: reownProvider }                       = useAppKitProvider("solana");
   const { disconnect: reownDisconnect }                         = useDisconnect();
   const { walletInfo: reownWalletInfo }                         = useWalletInfo();
