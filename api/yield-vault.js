@@ -475,11 +475,16 @@ export default async function handler(req, res) {
 
   const col = db.collection("yield_vaults");
 
-  // GET /api/yield-vault?wallet=xxx
+  // GET /api/yield-vault?wallet=xxx&checkTelegram=1
   if (req.method === "GET") {
-    const { wallet } = req.query;
+    const { wallet, checkTelegram } = req.query;
     if (!wallet) return res.status(400).json({ error: "wallet required" });
     try {
+      if (checkTelegram === "1") {
+        const userSnap = await db.collection("chatfi_users").where("wallet", "==", wallet).limit(1).get();
+        const linked = !userSnap.empty && !!userSnap.docs[0].data().telegramChatId;
+        return res.status(200).json({ telegramLinked: linked });
+      }
       const snap = await col.where("wallet", "==", wallet).where("status", "==", "active").get();
       return res.status(200).json({ vaults: snap.docs.map(d => ({ id: d.id, ...d.data() })) });
     } catch (e) { return res.status(500).json({ error: e.message }); }
