@@ -2239,7 +2239,7 @@ function YieldVaultPanel({ show, onClose, positions, loading, cfg, setCfg, statu
 }
 
 // ── Yield Vault Tracker Panel ─────────────────────────────────────────────────
-function VaultCard({ v, onCancel, onUpdate, jupFetch }) {
+function VaultCard({ v, onCancel, onUpdate, jupFetch, onConnectTelegram, telegramLinked }) {
   const [editing, setEditing] = useState(false);
   const [editToken, setEditToken]       = useState({ sym: v.targetTokenSymbol, mint: v.targetTokenMint, decimals: v.targetTokenDecimals ?? 6 });
   const [editThreshold, setEditThreshold] = useState(String(v.thresholdUSD));
@@ -2330,13 +2330,23 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch }) {
           {v.status === "active" && (
             <button onClick={() => onCancel(v.id)} style={{ width: "100%", padding: "8px 0", background: "none", border: `1px solid ${T.redBd}`, borderRadius: 8, color: T.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel Vault</button>
           )}
+          {v.status === "active" && onConnectTelegram && (
+            <button
+              onClick={onConnectTelegram}
+              style={{ width: "100%", marginTop: 8, padding: "8px 0", background: telegramLinked ? "rgba(41,182,246,0.08)" : "rgba(41,182,246,0.12)", border: `1px solid ${telegramLinked ? "rgba(41,182,246,0.3)" : "rgba(41,182,246,0.4)"}`, borderRadius: 8, color: "#29b6f6", fontSize: 12, fontWeight: 600, cursor: telegramLinked ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+              disabled={telegramLinked}
+            >
+              <SvgTelegram size={13} color="#29b6f6" />
+              {telegramLinked ? "✓ Telegram Connected" : "Connect Telegram Alerts"}
+            </button>
+          )}
         </>
       )}
     </div>
   );
 }
 
-function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefresh, earnPositions = [], onSetVault, jupFetch }) {
+function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefresh, earnPositions = [], onSetVault, jupFetch, onConnectTelegram, telegramLinked }) {
   if (!show) return null;
   const configuredMints = new Set((vaults || []).map((v) => v.earnMint));
   const unconfigured = (earnPositions || []).filter((p) => p.mint && !configuredMints.has(p.mint));
@@ -2361,7 +2371,7 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefres
         ) : (
           <>
             {vaults && vaults.map((v) => (
-              <VaultCard key={v.id} v={v} onCancel={onCancel} onUpdate={onUpdate} jupFetch={jupFetch} />
+              <VaultCard key={v.id} v={v} onCancel={onCancel} onUpdate={onUpdate} jupFetch={jupFetch} onConnectTelegram={onConnectTelegram} telegramLinked={telegramLinked} />
             ))}
             {unconfigured.length > 0 && (
               <>
@@ -2647,6 +2657,9 @@ function JupChatInner() {
   const yieldVaultSavedRef                          = useRef([]); // mirror for use inside async callbacks
   const [yieldVaultNotifs, setYieldVaultNotifs]     = useState([]);
   const [showYieldVaultTracker, setShowYieldVaultTracker] = useState(false);
+  const [telegramLinked, setTelegramLinked]         = useState(false);  // true once user links Telegram
+  const [telegramLinking, setTelegramLinking]       = useState(false);  // loading state for link button
+  const [showTelegramPrompt, setShowTelegramPrompt] = useState(false);  // post-activation prompt
 
 
   // ── Jupiter Studio state ─────────────────────────────────────────────────────
@@ -5282,6 +5295,7 @@ function JupChatInner() {
     // Only close panel on success — keep open on failure so user can retry
     if (saved > 0) {
       setShowYieldVault(false);
+      if (!telegramLinked) setShowTelegramPrompt(true);
       push("ai", `**Yield Vault active** on ${saved} position${saved > 1 ? "s" : ""}!\n\nWhenever your ${selectedPositions.length > 1 ? "selected earn positions" : yieldVaultPositions.find((p) => p.mint === selectedPositions[0])?.sym + " Earn position"} accumulate **$${thresholdUSD}+ in yield**, it will automatically be withdrawn and swapped into **${targetTokenSymbol}**.\n\nNo further action needed. Type *"show my yield vault"* to track your positions.`);
       fetchSavedVaults();
     } else { push("ai", "Failed to save Yield Vault. Please try again."); }
@@ -5332,6 +5346,40 @@ function JupChatInner() {
     } catch (e) {
       return { success: false, error: e.message };
     }
+  };
+
+  // ── Yield Vault — connect Telegram via magic link ────────────────────────────
+  const connectTelegram = async () => {
+    if (!walletFull) return;
+    setTelegramLinking(true);
+    try {
+      const res = await fetch("/api/yield-vault?action=link-telegram", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: walletFull }),
+      });
+      const data = await res.json();
+      if (data.botLink) {
+        window.open(data.botLink, "_blank");
+        // Poll chatfi_users for telegramChatId being set (up to 2 mins)
+        let attempts = 0;
+        const poll = setInterval(async () => {
+          attempts++;
+          try {
+            const check = await fetch(`/api/yield-vault?wallet=${walletFull}&checkTelegram=1`);
+            const info = await check.json();
+            if (info.telegramLinked) {
+              setTelegramLinked(true);
+              clearInterval(poll);
+            }
+          } catch {}
+          if (attempts >= 24) clearInterval(poll); // stop after 2 mins
+        }, 5000);
+      }
+    } catch (e) {
+      console.error("[Telegram] link error:", e.message);
+    }
+    setTelegramLinking(false);
   };
 
   // ── Shared tx helper ─────────────────────────────────────────────────────────
@@ -10909,6 +10957,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     onRefresh={() => { fetchSavedVaults(); fetchEarnPositionsForVault(); }}
                     earnPositions={yieldVaultPositions}
                     jupFetch={jupFetch}
+                    onConnectTelegram={connectTelegram}
+                    telegramLinked={telegramLinked}
                     onSetVault={(p) => {
                       setYieldVaultCfg(prev => ({ ...prev, selectedPositions: [p.mint] }));
                       setMsgs(prev => prev.filter(x => x.id !== m.id));
@@ -11975,12 +12025,43 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             onRefresh={() => { fetchSavedVaults(); fetchEarnPositionsForVault(); }}
             earnPositions={yieldVaultPositions}
             jupFetch={jupFetch}
+            onConnectTelegram={connectTelegram}
+            telegramLinked={telegramLinked}
             onSetVault={(p) => {
               setYieldVaultCfg(prev => ({ ...prev, selectedPositions: [p.mint] }));
               setShowYieldVaultTracker(false);
               setShowYieldVault(true);
             }}
           />
+
+          {/* ── Telegram link prompt — shown once after vault activation ─────── */}
+          {showTelegramPrompt && !telegramLinked && (
+            <div style={{ margin: isMobile ? "0 0 12px 0" : "0 0 12px 44px", padding: "14px 16px", background: "linear-gradient(135deg, rgba(41,182,246,0.08), rgba(41,182,246,0.04))", border: "1px solid rgba(41,182,246,0.3)", borderRadius: 12, display: "flex", alignItems: "flex-start", gap: 12 }}>
+              <div style={{ flexShrink: 0, width: 32, height: 32, borderRadius: 8, background: "rgba(41,182,246,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <SvgTelegram size={16} color="#29b6f6" />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#29b6f6", marginBottom: 3 }}>Get Yield Alerts on Telegram</div>
+                <div style={{ fontSize: 12, color: T.text2, marginBottom: 10, lineHeight: 1.5 }}>Connect Telegram to receive a notification when your yield threshold is hit. One tap to harvest.</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={connectTelegram}
+                    disabled={telegramLinking}
+                    style={{ flex: 2, padding: "8px 0", background: telegramLinking ? T.border : "rgba(41,182,246,0.15)", border: "1px solid rgba(41,182,246,0.4)", borderRadius: 8, color: "#29b6f6", fontSize: 12, fontWeight: 700, cursor: telegramLinking ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+                  >
+                    <SvgTelegram size={13} color="#29b6f6" />
+                    {telegramLinking ? "Opening…" : "Connect Telegram"}
+                  </button>
+                  <button
+                    onClick={() => setShowTelegramPrompt(false)}
+                    style={{ flex: 1, padding: "8px 0", background: "none", border: `1px solid ${T.border}`, borderRadius: 8, color: T.text3, fontSize: 12, cursor: "pointer" }}
+                  >
+                    Maybe later
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ── Earn / Lend vaults panel ──────────────────────────────────── */}
           {showEarn && (
