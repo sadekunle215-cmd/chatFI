@@ -105,9 +105,8 @@ async function sendTelegramMessage(chatId, text, replyMarkup = null) {
 }
 
 // ── Telegram: notify yield ready ─────────────────────────────────────────────
-async function notifyYieldReady(vault, yieldUSD) {
+async function notifyYieldReady(vault, yieldUSD, isReminder = false) {
   const db = getDb();
-  // Look up chatId from chatfi_users by wallet
   const userSnap = await db
     .collection("chatfi_users")
     .where("wallet", "==", vault.wallet)
@@ -119,13 +118,17 @@ async function notifyYieldReady(vault, yieldUSD) {
   if (!user.telegramChatId) return;
 
   const harvestUrl = `${APP_URL}/?harvest=${vault.id}`;
+  const pingCount = (vault.pendingHarvestPingCount || 0) + 1;
 
-  const message =
-    `🌾 <b>Yield Ready — ChatFi</b>\n\n` +
-    `Your <b>${vault.earnSymbol}</b> vault has accumulated <b>$${yieldUSD.toFixed(2)}</b> in yield.\n\n` +
-    `Target: <b>${vault.targetTokenSymbol}</b>\n` +
-    `Threshold: <b>$${vault.thresholdUSD}</b>\n\n` +
-    `Tap below to harvest now 👇`;
+  const message = isReminder
+    ? `🔔 <b>Reminder #${pingCount} — Yield Still Waiting</b>\n\n` +
+      `Your <b>${vault.earnSymbol}</b> vault has <b>$${yieldUSD.toFixed(2)}</b> in yield ready to harvest into <b>${vault.targetTokenSymbol}</b>.\n\n` +
+      `Tap below to harvest now 👇`
+    : `🌾 <b>Yield Ready — ChatFi</b>\n\n` +
+      `Your <b>${vault.earnSymbol}</b> vault has accumulated <b>$${yieldUSD.toFixed(2)}</b> in yield.\n\n` +
+      `Target: <b>${vault.targetTokenSymbol}</b>\n` +
+      `Threshold: <b>$${vault.thresholdUSD}</b>\n\n` +
+      `Tap below to harvest now 👇`;
 
   const replyMarkup = {
     inline_keyboard: [[
@@ -283,39 +286,62 @@ async function runWatcher(req, res) {
         vaultLog.push(`current=${position.currentAmount.toFixed(4)}, yield=${yieldAmount.toFixed(4)} (~$${yieldUSD.toFixed(2)}), threshold=$${vault.thresholdUSD}`);
 
         if (yieldUSD < vault.thresholdUSD) {
-          vaultLog.push(`Below threshold — skipping`);
+          // ── If was pending but yield dropped below threshold (user harvested externally) ──
+          if (vault.pendingHarvest) {
+            await doc.ref.update({ pendingHarvest: false, pendingHarvestYieldUSD: null, pendingHarvestAlertedAt: null, updatedAt: new Date().toISOString() });
+            vaultLog.push(`Pending harvest cleared — yield dropped below threshold`);
+          } else {
+            vaultLog.push(`Below threshold — skipping`);
+          }
           log.push(`[${vault.wallet.slice(0, 8)}] ${vaultLog.join(" | ")}`);
           continue;
         }
 
-        vaultLog.push(`THRESHOLD HIT — sending Telegram alert`);
+        // ── Threshold hit — decide whether to send alert ────────────────────
+        const PING_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+        const now = Date.now();
+        const lastAlerteAt = vault.pendingHarvestAlertedAt ? new Date(vault.pendingHarvestAlertedAt).getTime() : 0;
+        const isFirstAlert = !vault.pendingHarvest;
+        const isDueForPing = (now - lastAlerteAt) >= PING_INTERVAL_MS;
 
-        // ── Send Telegram notification ──────────────────────────────────────
-        await notifyYieldReady(vault, yieldUSD);
-        vaultLog.push(`Telegram alert sent`);
+        if (isFirstAlert || isDueForPing) {
+          vaultLog.push(`THRESHOLD HIT — ${isFirstAlert ? "first alert" : "repeat ping"}`);
 
-        // ── Mark vault as pending harvest (waiting for user to sign) ────────
-        await doc.ref.update({
-          pendingHarvest: true,
-          pendingHarvestYieldUSD: yieldUSD,
-          pendingHarvestYieldAmount: yieldAmount,
-          pendingHarvestDetectedAt: new Date().toISOString(),
-          lastTriggeredAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
+          // ── Send Telegram notification ────────────────────────────────────
+          await notifyYieldReady(vault, yieldUSD, !isFirstAlert);
+          vaultLog.push(`Telegram ${isFirstAlert ? "alert" : "reminder"} sent`);
 
-        await db.collection("yield_vault_notifications").add({
-          wallet: vault.wallet,
-          vaultId: vault.id,
-          earnSymbol: vault.earnSymbol,
-          targetTokenSymbol: vault.targetTokenSymbol,
-          yieldUSD: yieldUSD.toFixed(2),
-          type: "harvest_ready",
-          read: false,
-          createdAt: new Date().toISOString(),
-        });
+          // ── Update vault state ────────────────────────────────────────────
+          await doc.ref.update({
+            pendingHarvest: true,
+            pendingHarvestYieldUSD: yieldUSD,
+            pendingHarvestYieldAmount: yieldAmount,
+            pendingHarvestDetectedAt: isFirstAlert ? new Date().toISOString() : (vault.pendingHarvestDetectedAt || new Date().toISOString()),
+            pendingHarvestAlertedAt: new Date().toISOString(),
+            pendingHarvestPingCount: (vault.pendingHarvestPingCount || 0) + 1,
+            lastTriggeredAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
 
-        vaultLog.push(`SUCCESS — $${yieldUSD.toFixed(2)} ready to harvest into ${vault.targetTokenSymbol}`);
+          if (isFirstAlert) {
+            await db.collection("yield_vault_notifications").add({
+              wallet: vault.wallet,
+              vaultId: vault.id,
+              earnSymbol: vault.earnSymbol,
+              targetTokenSymbol: vault.targetTokenSymbol,
+              yieldUSD: yieldUSD.toFixed(2),
+              type: "harvest_ready",
+              read: false,
+              createdAt: new Date().toISOString(),
+            });
+          }
+
+          vaultLog.push(`SUCCESS — $${yieldUSD.toFixed(2)} pending harvest into ${vault.targetTokenSymbol} (ping #${(vault.pendingHarvestPingCount || 0) + 1})`);
+        } else {
+          const nextPingMs = PING_INTERVAL_MS - (now - lastAlerteAt);
+          const nextPingMins = Math.ceil(nextPingMs / 60000);
+          vaultLog.push(`Pending harvest — next ping in ~${nextPingMins} min`);
+        }
       } catch (vaultErr) {
         vaultLog.push(`ERROR: ${vaultErr.message}`);
         await doc.ref.update({ lastError: vaultErr.message, lastErrorAt: new Date().toISOString() }).catch(() => {});
@@ -329,6 +355,87 @@ async function runWatcher(req, res) {
   } catch (err) {
     console.error("[YieldVaultWatcher]", err);
     return res.status(500).json({ error: err.message, log });
+  }
+}
+
+// ── Telegram: notify vault created ───────────────────────────────────────────
+async function handleNotifyVaultCreated(req, res) {
+  const { wallet, earnSymbol, targetTokenSymbol, thresholdUSD } = req.body;
+  if (!wallet) return res.status(400).json({ error: "wallet required" });
+
+  try {
+    const db = getDb();
+    const userSnap = await db.collection("chatfi_users").where("wallet", "==", wallet).limit(1).get();
+    if (userSnap.empty || !userSnap.docs[0].data().telegramChatId) {
+      return res.status(200).json({ sent: false, reason: "no telegram linked" });
+    }
+
+    const chatId = userSnap.docs[0].data().telegramChatId;
+    const message =
+      `🌾 <b>Yield Vault Activated!</b>\n\n` +
+      `Your <b>${earnSymbol || "Earn"}</b> position is now being monitored.\n\n` +
+      `When yield reaches <b>$${thresholdUSD}</b>, it will be swapped into <b>${targetTokenSymbol}</b>. I'll ping you here when it's time to harvest.\n\n` +
+      `<i>You'll receive reminders every 10 minutes until you harvest.</i>`;
+
+    await sendTelegramMessage(chatId, message);
+    return res.status(200).json({ sent: true });
+  } catch (e) {
+    console.error("[notifyVaultCreated]", e.message);
+    return res.status(500).json({ error: e.message });
+  }
+}
+
+// ── Telegram: notify vault cancelled ─────────────────────────────────────────
+async function handleNotifyVaultCancelled(req, res) {
+  const { wallet, earnSymbol } = req.body;
+  if (!wallet) return res.status(400).json({ error: "wallet required" });
+
+  try {
+    const db = getDb();
+    const userSnap = await db.collection("chatfi_users").where("wallet", "==", wallet).limit(1).get();
+    if (userSnap.empty || !userSnap.docs[0].data().telegramChatId) {
+      return res.status(200).json({ sent: false, reason: "no telegram linked" });
+    }
+
+    const chatId = userSnap.docs[0].data().telegramChatId;
+    const message =
+      `❌ <b>Yield Vault Cancelled</b>\n\n` +
+      `Your <b>${earnSymbol || "Earn"}</b> vault has been cancelled.\n\n` +
+      `Your principal remains in Jupiter Earn and continues earning. You can set up a new vault anytime from <a href="${APP_URL}">ChatFi</a>.`;
+
+    await sendTelegramMessage(chatId, message);
+    return res.status(200).json({ sent: true });
+  } catch (e) {
+    console.error("[notifyVaultCancelled]", e.message);
+    return res.status(500).json({ error: e.message });
+  }
+}
+
+// ── Telegram: notify vault updated ───────────────────────────────────────────
+async function handleNotifyVaultUpdated(req, res) {
+  const { wallet, earnSymbol, targetTokenSymbol, thresholdUSD } = req.body;
+  if (!wallet) return res.status(400).json({ error: "wallet required" });
+
+  try {
+    const db = getDb();
+    const userSnap = await db.collection("chatfi_users").where("wallet", "==", wallet).limit(1).get();
+    if (userSnap.empty || !userSnap.docs[0].data().telegramChatId) {
+      return res.status(200).json({ sent: false, reason: "no telegram linked" });
+    }
+
+    const chatId = userSnap.docs[0].data().telegramChatId;
+    const message =
+      `✏️ <b>Yield Vault Updated</b>\n\n` +
+      `Your <b>${earnSymbol || "Earn"}</b> vault settings have been updated.\n\n` +
+      `${targetTokenSymbol ? `Target token: <b>${targetTokenSymbol}</b>\n` : ""}` +
+      `${thresholdUSD ? `Threshold: <b>$${thresholdUSD}</b>\n` : ""}` +
+      `\nChanges are live immediately.`;
+
+    await sendTelegramMessage(chatId, message);
+    return res.status(200).json({ sent: true });
+  } catch (e) {
+    console.error("[notifyVaultUpdated]", e.message);
+    return res.status(500).json({ error: e.message });
   }
 }
 
@@ -468,6 +575,21 @@ export default async function handler(req, res) {
   // Telegram webhook — POST ?action=telegram-webhook
   if (req.method === "POST" && req.query.action === "telegram-webhook") {
     return handleTelegramWebhook(req, res);
+  }
+
+  // Notify vault created — POST ?action=notify-vault-created
+  if (req.method === "POST" && req.query.action === "notify-vault-created") {
+    return handleNotifyVaultCreated(req, res);
+  }
+
+  // Notify vault cancelled — POST ?action=notify-vault-cancelled
+  if (req.method === "POST" && req.query.action === "notify-vault-cancelled") {
+    return handleNotifyVaultCancelled(req, res);
+  }
+
+  // Notify vault updated — POST ?action=notify-vault-updated
+  if (req.method === "POST" && req.query.action === "notify-vault-updated") {
+    return handleNotifyVaultUpdated(req, res);
   }
 
   let db;
