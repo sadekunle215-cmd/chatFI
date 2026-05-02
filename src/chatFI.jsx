@@ -2371,23 +2371,26 @@ function BestYieldPanel({ msgText, earnVaults, earnLoading, onClose, onDeposit, 
         {!earnLoading && ranked.map((v, i) => {
           const positions = earnUserPositions || {};
           const byMint = positions.__byMint || {};
-          const sym = v.token?.toUpperCase();
 
-          // Is the user already IN this vault?
+          // Is the user already IN this specific vault?
           const inThisVault = v.assetMint
             ? (byMint[v.assetMint]?.amount > 0)
-            : (positions[sym]?.amount > 0 && positions[sym]?.mint === v.assetMint);
+            : false;
 
-          // Is the user in a different vault for the same token (can migrate here)?
-          const sourceMintEntry = !inThisVault
-            ? Object.values(byMint).find(p => p.sym === sym && p.amount > 0 && p.mint !== v.assetMint)
+          // Find ANY position the user has in a lower-APY vault (same or different token)
+          // so we can offer migration to this higher-APY vault
+          const sourceEntry = !inThisVault
+            ? Object.values(byMint).find(p => p.amount > 0 && p.mint !== v.assetMint && (() => {
+                const sourceVault = (earnVaults || []).find(ev => ev.assetMint === p.mint);
+                return !sourceVault || sourceVault.apy < v.apy;
+              })())
             : null;
-          const sourceEarnVault = sourceMintEntry
-            ? ranked.find(rv => rv.assetMint === sourceMintEntry.mint)
+          const sourceVault = sourceEntry
+            ? (earnVaults || []).find(ev => ev.assetMint === sourceEntry.mint)
             : null;
-          const canMigrate = !!sourceEarnVault && !inThisVault;
+          const canMigrate = !!sourceEntry && !inThisVault;
 
-          const displayPos = inThisVault ? (byMint[v.assetMint] || positions[sym]) : null;
+          const displayPos = inThisVault ? (byMint[v.assetMint] || positions[v.token?.toUpperCase()]) : null;
 
           return (
             <div key={v.id || i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: i === 0 ? "rgba(199,242,132,0.06)" : T.bg, border: `1px solid ${i === 0 ? "rgba(199,242,132,0.2)" : T.border}`, borderRadius: 10, marginBottom: 6 }}>
@@ -2397,14 +2400,14 @@ function BestYieldPanel({ msgText, earnVaults, earnLoading, onClose, onDeposit, 
                   <div style={{ fontSize: 13, fontWeight: 700, color: T.text1, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     {v.token}
                     {i === 0 && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(199,242,132,0.15)", color: T.accent, border: "1px solid rgba(199,242,132,0.3)" }}>BEST</span>}
-                    {inThisVault && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(41,182,246,0.12)", color: "#29b6f6", border: "1px solid rgba(41,182,246,0.25)" }}>IN POSITION</span>}
+                    {inThisVault && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: T.tealBg, color: T.teal, border: `1px solid ${T.teal}33` }}>IN POSITION</span>}
                     {canMigrate && <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(199,242,132,0.12)", color: T.accent, border: "1px solid rgba(199,242,132,0.3)" }}>BETTER APY</span>}
                   </div>
                   <div style={{ fontSize: 11, color: T.text3, marginTop: 1 }}>
                     {inThisVault
                       ? `${displayPos.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${v.token} deposited`
                       : canMigrate
-                        ? `${sourceMintEntry.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${v.token} in lower-APY vault`
+                        ? `${sourceEntry.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${sourceEntry.sym} in lower-APY vault`
                         : v.utilization != null ? `${v.utilization}% utilization` : "Jupiter Lend"}
                   </div>
                 </div>
@@ -2415,7 +2418,14 @@ function BestYieldPanel({ msgText, earnVaults, earnLoading, onClose, onDeposit, 
                   <span style={{ padding: "5px 10px", background: T.tealBg, border: `1px solid ${T.teal}33`, borderRadius: 7, color: T.teal, fontSize: 11, fontWeight: 700 }}>Active</span>
                 ) : canMigrate ? (
                   <button
-                    onClick={() => { if (onMigrate && sourceEarnVault) onMigrate({ fromVault: sourceEarnVault, toVault: v, amount: sourceMintEntry.amount }); }}
+                    onClick={() => {
+                      if (onMigrate && sourceVault) {
+                        onMigrate({ fromVault: sourceVault, toVault: v, amount: sourceEntry.amount });
+                      } else if (onMigrate && sourceEntry) {
+                        // fallback: build minimal fromVault if not found in earnVaults list
+                        onMigrate({ fromVault: { assetMint: sourceEntry.mint, token: sourceEntry.sym, apy: 0, apyDisplay: "?%", assetDecimals: sourceEntry.decimals }, toVault: v, amount: sourceEntry.amount });
+                      }
+                    }}
                     style={{ padding: "5px 10px", background: i === 0 ? T.accent : "rgba(199,242,132,0.15)", border: `1px solid ${i === 0 ? T.accent : "rgba(199,242,132,0.35)"}`, borderRadius: 7, color: i === 0 ? "#0d1117" : T.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
                   >Migrate</button>
                 ) : (
@@ -2484,7 +2494,7 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefres
                     const amount = pos?.amount || alert.vault.depositedAmount || 0;
                     return amount > 0 ? (
                       <button
-                        onClick={() => onMigrate({ fromVault: { ...alert.vault, assetMint: alert.vault.earnMint, token: alert.vault.earnSymbol, apy: alert.currentApy, apyDisplay: alert.currentApy.toFixed(2) + "%" }, toVault: alert.bestVault, amount })}
+                        onClick={() => onMigrate({ fromVault: { ...alert.vault, assetMint: alert.vault.earnMint, token: alert.vault.earnSymbol, apy: alert.currentApy, apyDisplay: alert.currentApy.toFixed(2) + "%", assetDecimals: 6 }, toVault: alert.bestVault, amount })}
                         style={{ padding: "6px 12px", background: T.accent, border: "none", borderRadius: 7, color: "#0d1117", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
                       >Migrate</button>
                     ) : null;
@@ -5191,17 +5201,14 @@ function JupChatInner() {
     setEarnLoading(false);
   };
 
-  // ── Helper: normalise Jupiter Earn underlyingAssets which may be a raw integer
-  // (e.g. 1150000 for 1.15 USDC) or a pre-divided float (e.g. 1.15) depending on API version.
+  // ── Helper: normalise Jupiter Earn underlyingAssets — may be raw integer or pre-divided float
   const parseEarnAmount = (rawValue, decimals) => {
     const val = parseFloat(rawValue ?? 0);
     if (val <= 0) return 0;
     const divisor = Math.pow(10, decimals);
-    // If val has a fractional component it is already human-readable
-    if (val % 1 !== 0) return val;
-    // If dividing would produce near-zero dust but val is itself a normal-looking amount, skip division
+    if (val % 1 !== 0) return val; // fractional → already human-readable
     const divided = val / divisor;
-    if (divided < 0.00001 && val < divisor) return val;
+    if (divided < 0.00001 && val < divisor) return val; // small float, not raw integer
     return divided;
   };
 
@@ -5220,9 +5227,8 @@ function JupChatInner() {
         else earnArr = [];
       }
       const map = {};
-      const byMint = {}; // keyed by assetMint for per-vault migrate detection
+      const byMint = {};
       earnArr.forEach(e => {
-        // Per Jupiter docs: e.token = underlying asset { symbol, address, decimals }
         const tok = e.token || {};
         const sym = (tok.symbol || e.symbol || "").toUpperCase().replace(/^JL/, "");
         if (!sym) return;
@@ -5231,14 +5237,10 @@ function JupChatInner() {
         const shares = parseFloat(e.shares ?? 0);
         const mint = tok.address || tok.id || e.assetMint || e.mint;
         if (amount > 0 || shares > 1000) {
-          // Symbol map — keep highest amount per symbol for display
           if (!map[sym] || amount > map[sym].amount) {
             map[sym] = { amount, shares, decimals: dec, mint };
           }
-          // Mint map — one entry per vault for migrate source detection
-          if (mint) {
-            byMint[mint] = { sym, amount, shares, decimals: dec, mint };
-          }
+          if (mint) byMint[mint] = { sym, amount, shares, decimals: dec, mint };
         }
       });
       map.__byMint = byMint;
@@ -11255,6 +11257,10 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     telegramLinked={telegramLinked}
                     earnVaults={earnVaults}
                     onFindBestYield={(asset) => { setMsgs(prev => prev.filter(x => x.id !== m.id)); fetchEarnVaults(); push("ai", "__FIND_BEST_YIELD__" + (asset ? ":asset=" + asset : "")); }}
+                    onMigrate={({ fromVault, toVault, amount }) => {
+                      setMsgs(prev => prev.filter(x => x.id !== m.id));
+                      doMigrateEarn({ fromVault, toVault, amount });
+                    }}
                     onSetVault={(p) => {
                       setYieldVaultCfg(prev => ({ ...prev, selectedPositions: [p.mint] }));
                       setMsgs(prev => prev.filter(x => x.id !== m.id));
