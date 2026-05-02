@@ -1942,17 +1942,22 @@ function MLLockCard({ lock, onClaim, claiming }) {
 
       {/* claim button */}
       {status === "claimable" && (
-        <button onClick={() => onClaim(lock)} disabled={claiming === lock.pubkey}
+        <button onClick={() => onClaim(lock)} disabled={!!claiming}
           style={{
             width: "100%", padding: "10px",
-            background: claiming === lock.pubkey ? T.border : T.greenBg,
-            border: `1px solid ${T.greenBd}`, borderRadius: 8,
-            color: claiming === lock.pubkey ? T.text3 : T.green,
+            background: claiming === lock.pubkey ? T.tealBg : claiming ? T.border : T.greenBg,
+            border: `1px solid ${claiming === lock.pubkey ? T.teal : T.greenBd}`,
+            borderRadius: 8,
+            color: claiming === lock.pubkey ? T.teal : claiming ? T.text3 : T.green,
             fontWeight: 700, fontSize: 13,
-            cursor: claiming === lock.pubkey ? "not-allowed" : "pointer",
+            cursor: claiming ? "not-allowed" : "pointer",
             transition: "all 0.2s",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
           }}>
-          {claiming === lock.pubkey ? "Confirming on-chain..." : `Claim ${claimable} tokens`}
+          {claiming === lock.pubkey
+            ? <><span style={{ display:"inline-block", width:12, height:12, border:`2px solid currentColor`, borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.7s linear infinite" }}/> Confirming on-chain…</>
+            : `Claim ${claimable} tokens`
+          }
         </button>
       )}
     </div>
@@ -2646,6 +2651,7 @@ function JupChatInner() {
   const [lockStatus, setLockStatus]         = useState(null); // null|"signing"|"done"|"error"
   const [lockResult, setLockResult]         = useState(null); // { lockId, txSig }
   const [showLocks, setShowLocks]           = useState(false);
+  const [lockFilter, setLockFilter]         = useState("all"); // "all"|"claimable"|"locked"|"claimed"
   const [lockList, setLockList]             = useState([]);
   const [locksLoading, setLocksLoading]     = useState(false);
   const [claimingLock, setClaimingLock]     = useState(null); // lockId being claimed
@@ -4584,11 +4590,13 @@ function JupChatInner() {
   };
 
   // ── Lock: claim vested tokens ────────────────────────────────────────────────
-  // Builds claim tx client-side — no backend needed.
+  // Builds and sends the Jupiter Lock "claim" instruction client-side.
+  // Program: LocpQgucEQHbqNABEYvBvwoxCPsSbG91A1QaQhQQqjn
   const doClaimLock = async (lockId, lockPubkey) => {
     const provider = getActiveProvider();
     if (!provider || !walletFull) { push("ai", "Wallet not connected."); return; }
     const escrowAddr = lockId || lockPubkey;
+    if (!escrowAddr) { push("ai", "No escrow address provided."); return; }
     setClaimingLock(escrowAddr);
     try {
       const { TransactionInstruction } = await import("@solana/web3.js");
@@ -4600,70 +4608,88 @@ function JupChatInner() {
       const recipientKey = new PublicKey(walletFull);
       const escrowKey    = new PublicKey(escrowAddr);
 
-      // Fetch escrow account data to get mint (offset: 8 disc + 32 base + 32 mint = at byte 40)
+      // Read escrow account to extract the mint address
+      // Anchor account layout: [8 disc][32 base][32 mint][...]  → mint at bytes 40–72
       const acctInfo = await connection.getAccountInfo(escrowKey);
-      if (!acctInfo) throw new Error("Escrow account not found on-chain");
+      if (!acctInfo) throw new Error("Escrow account not found on-chain. It may already be fully claimed.");
+      if (acctInfo.data.length < 72) throw new Error("Escrow account data too short — unexpected format.");
       const mintKey = new PublicKey(acctInfo.data.slice(40, 72));
 
-      const escrowATA    = await getAssociatedTokenAddress(mintKey, escrowKey,    true,  TOKEN_PROGRAM_ID);
+      // Derive token accounts
+      const escrowATA    = await getAssociatedTokenAddress(mintKey, escrowKey,    true  /* allowOffCurve */, TOKEN_PROGRAM_ID);
       const recipientATA = await getAssociatedTokenAddress(mintKey, recipientKey, false, TOKEN_PROGRAM_ID);
 
-      // Anchor event authority PDA — required by ALL Jupiter Lock instructions
-      // Omitting this causes Custom error: 101 (InstructionFallbackNotFound)
+      // Anchor event authority — required by ALL Jupiter Lock instructions
+      // Missing this causes "Custom program error: 0x65" (InstructionFallbackNotFound)
       const [eventAuthority] = PublicKey.findProgramAddressSync(
         [Buffer.from("__event_authority")],
         LOCK_PROGRAM
       );
 
-      // Discriminator for claim = sha256("global:claim")[0..8]
-      const discriminator = Buffer.from([62, 198, 214, 193, 213, 159, 108, 210]);
-      // max_amount = u64::MAX (claim all available)
-      const maxAmount = Buffer.alloc(8);
-      maxAmount.writeBigUInt64LE(BigInt("18446744073709551615"), 0);
-      const data = Buffer.concat([discriminator, maxAmount]);
+      // Discriminator: sha256("global:claim")[0..8]
+      const CLAIM_DISC = Buffer.from([62, 198, 214, 193, 213, 159, 108, 210]);
+      // Claim max available: pass u64::MAX so the program claims everything vested
+      const maxAmountBuf = Buffer.alloc(8);
+      maxAmountBuf.writeBigUInt64LE(BigInt("18446744073709551615"), 0);
+      const data = Buffer.concat([CLAIM_DISC, maxAmountBuf]);
 
+      // Account order matches programs/locker/src/instructions/claim.rs:
+      //   escrow (writable), escrow_token (writable), recipient (signer + writable — pays ATA rent),
+      //   recipient_token (writable), mint, token_program, system_program,
+      //   event_authority, program (CPI self-ref)
       const keys = [
-        { pubkey: escrowKey,               isSigner: false, isWritable: true  },
-        { pubkey: escrowATA,               isSigner: false, isWritable: true  },
-        { pubkey: recipientKey,            isSigner: true,  isWritable: false },
-        { pubkey: recipientATA,            isSigner: false, isWritable: true  },
-        { pubkey: mintKey,                 isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID,        isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        // FIX: Anchor event CPI accounts — REQUIRED by Jupiter Lock claim
-        // Without these, Anchor can't emit the ClaimEvent and rejects with error 101
-        { pubkey: eventAuthority,          isSigner: false, isWritable: false },
-        { pubkey: LOCK_PROGRAM,            isSigner: false, isWritable: false },
+        { pubkey: escrowKey,                isSigner: false, isWritable: true  },
+        { pubkey: escrowATA,                isSigner: false, isWritable: true  },
+        { pubkey: recipientKey,             isSigner: true,  isWritable: true  }, // writable: pays for ATA if needed
+        { pubkey: recipientATA,             isSigner: false, isWritable: true  },
+        { pubkey: mintKey,                  isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID,         isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId,  isSigner: false, isWritable: false },
+        { pubkey: eventAuthority,           isSigner: false, isWritable: false },
+        { pubkey: LOCK_PROGRAM,             isSigner: false, isWritable: false },
       ];
 
       const claimIx = new TransactionInstruction({ programId: LOCK_PROGRAM, keys, data });
 
-      // Create recipient ATA if needed
-      const createRecipientAtaIx = createAssociatedTokenAccountInstruction(
+      // Prepend ATA creation if the recipient token account doesn't exist yet
+      const recipientAtaInfo = await connection.getAccountInfo(recipientATA);
+      const createAtaIx = recipientAtaInfo ? null : createAssociatedTokenAccountInstruction(
         recipientKey, recipientATA, recipientKey, mintKey,
         TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID
       );
 
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
       const tx = new Transaction();
-      // Try to add ATA creation; if it already exists the tx will just have one ix
-      try { tx.add(createRecipientAtaIx); } catch (_) {}
-      tx.add(claimIx);
       tx.recentBlockhash = blockhash;
       tx.feePayer        = recipientKey;
+      if (createAtaIx) tx.add(createAtaIx);
+      tx.add(claimIx);
 
       const signed = await provider.signTransaction(tx);
-      const sig    = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: true });
+      const sig    = await connection.sendRawTransaction(
+        signed.serialize(),
+        { skipPreflight: false, preflightCommitment: "confirmed" }
+      );
 
       push("ai", `Confirming claim on-chain… ⏳`);
       await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
 
+      // Verify the tx actually succeeded (confirmed ≠ no error)
+      const txResult = await connection.getTransaction(sig, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      });
+      if (txResult?.meta?.err) {
+        throw new Error(`On-chain tx failed: ${JSON.stringify(txResult.meta.err)}`);
+      }
+
       push("ai", `Vested tokens claimed ✓\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
-      await fetchLocks();
+      setClaimingLock(null);
+      await fetchLocks(); // refresh lock list so card updates
     } catch (err) {
       push("ai", `Claim failed: ${err?.message}`);
+      setClaimingLock(null);
     }
-    setClaimingLock(null);
   };
 
   // ── Route Inspector: fetch Jupiter v1 quote with full route breakdown ────────
@@ -14023,9 +14049,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       ["locked",    `Locked (${lockedCount})`],
                       ["claimed",   `Claimed (${claimedCount})`],
                     ].map(([key, label]) => (
-                      <span key={key} style={{
-                        padding:"4px 12px", borderRadius:20, fontSize:11, fontWeight:600,
-                        border:`1px solid ${T.border}`, color:T.text3, background:"transparent",
+                      <span key={key} onClick={() => setLockFilter(key)} style={{
+                        padding:"4px 12px", borderRadius:20, fontSize:11, fontWeight:600, cursor:"pointer",
+                        border:`1px solid ${lockFilter === key ? T.accent : T.border}`,
+                        color: lockFilter === key ? T.accent : T.text3,
+                        background: lockFilter === key ? T.accentBg || T.tealBg : "transparent",
+                        transition:"all 0.15s",
                       }}>{label}</span>
                     ))}
                   </div>
@@ -14049,7 +14078,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 )}
 
                 {/* Lock cards */}
-                {!locksLoading && mlLocks.map((lock, i) => (
+                {!locksLoading && mlLocks
+                  .filter(l => {
+                    if (lockFilter === "claimable") return l.claimableRaw > 0;
+                    if (lockFilter === "locked")    return l.claimableRaw === 0 && l.totalClaimed < l.totalRaw;
+                    if (lockFilter === "claimed")   return l.totalRaw > 0 && l.totalClaimed >= l.totalRaw;
+                    return true;
+                  })
+                  .map((lock, i) => (
                   <MLLockCard
                     key={lock.pubkey || i}
                     lock={lock}
