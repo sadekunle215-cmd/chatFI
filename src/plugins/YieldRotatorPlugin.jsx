@@ -123,13 +123,22 @@ export default function YieldRotatorPlugin({
     const ops = [];
 
     for (const pos of positions) {
-      const posMint   = pos.asset?.mint || pos.mint || pos.tokenMint || pos.assetMint || "";
-      const posSym    = pos.asset?.symbol || pos.assetSymbol || pos.symbol || mintToSym(posMint);
-      const posApy    = parseFloat(
-        pos.supplyApy ?? pos.apy ?? pos.apyPct ?? pos.lendingApy ?? pos.rate ?? 0
-      );
+      // Support both raw API shape AND yieldVaultPositions shape { sym, mint, amount, apy, logo, dec }
+      const posMint   = pos.mint || pos.asset?.mint || pos.tokenMint || pos.assetMint || "";
+      const posSym    = pos.sym  || pos.asset?.symbol || pos.assetSymbol || pos.symbol || mintToSym(posMint);
+
+      // APY: yieldVaultPositions stores basis points (e.g. 41500 = 4.15%)
+      // Raw API stores decimal (0.0415) or percent (4.15)
+      const rawApy = pos.apy ?? pos.supplyApy ?? pos.apyPct ?? pos.lendingApy ?? pos.rate ?? 0;
+      const posApy = rawApy > 1000
+        ? parseFloat(rawApy) / 10000 * 100  // basis points → percent
+        : rawApy > 1
+        ? parseFloat(rawApy)                 // already percent
+        : parseFloat(rawApy) * 100;          // decimal → percent
+
       const posAmt    = parseFloat(
-        pos.underlyingBalance ?? pos.underlyingAssets ?? pos.depositedAmount ?? pos.amount ?? pos.value ?? 0
+        pos.amount ?? pos.underlyingBalance ?? pos.underlyingAssets ??
+        pos.depositedAmount ?? pos.value ?? 0
       );
       const posPoolId = pos.planId || pos.poolId || pos.marketId || pos.pool || "";
 
@@ -144,8 +153,14 @@ export default function YieldRotatorPlugin({
         const poolApyRaw = pool.totalApy ?? pool.supplyApy ?? pool.apy ??
                            pool.lendingApy ?? pool.rate ?? pool.apyPct ?? null;
         if (poolApyRaw === null) continue;
-        const poolApy = parseFloat(poolApyRaw);
-        if (isNaN(poolApy) || poolApy <= 0) continue;
+        const poolApyParsed = parseFloat(poolApyRaw);
+        if (isNaN(poolApyParsed) || poolApyParsed <= 0) continue;
+        // Normalise pool APY to percent
+        const poolApy = poolApyParsed > 1000
+          ? poolApyParsed / 10000 * 100   // basis points
+          : poolApyParsed > 1
+          ? poolApyParsed                  // already percent
+          : poolApyParsed * 100;           // decimal
 
         const poolMint = pool.asset?.mint || pool.mint || pool.tokenMint || pool.assetMint || "";
         const poolId   = pool.planId || pool.id || pool.poolId || pool.marketId || "";
