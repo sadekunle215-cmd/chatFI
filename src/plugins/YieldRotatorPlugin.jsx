@@ -117,37 +117,43 @@ export default function YieldRotatorPlugin({
     }
   }, [jupFetch]);
 
-  // ── Compare user positions vs all pools → find migration opportunities ────
+  // ── Compare user positions vs ALL pools → find best opportunity (any asset) ─
   const detectOpportunities = useCallback((positions, pools) => {
     if (!positions?.length || !pools?.length) return [];
     const ops = [];
 
     for (const pos of positions) {
-      // Normalise position fields
-      const posMint = pos.asset?.mint || pos.mint || pos.tokenMint || pos.assetMint || "";
-      const posSym  = pos.asset?.symbol || pos.assetSymbol || pos.symbol || mintToSym(posMint);
-      const posApy  = parseFloat(
+      const posMint   = pos.asset?.mint || pos.mint || pos.tokenMint || pos.assetMint || "";
+      const posSym    = pos.asset?.symbol || pos.assetSymbol || pos.symbol || mintToSym(posMint);
+      const posApy    = parseFloat(
         pos.supplyApy ?? pos.apy ?? pos.apyPct ?? pos.lendingApy ?? pos.rate ?? 0
       );
-      const posAmt  = parseFloat(
+      const posAmt    = parseFloat(
         pos.underlyingBalance ?? pos.underlyingAssets ?? pos.depositedAmount ?? pos.amount ?? pos.value ?? 0
       );
       const posPoolId = pos.planId || pos.poolId || pos.marketId || pos.pool || "";
 
-      if (posAmt <= 0) continue; // skip dust positions
+      if (posAmt <= 0) continue;
 
-      // Find all pools that beat current APY, cross-asset allowed
+      // Find the single best pool across ALL assets (cross-asset included)
+      // No minimum APY gap — any improvement triggers the banner
       let bestPool = null;
-      let bestApy  = posApy;
+      let bestApy  = -Infinity;
 
       for (const pool of pools) {
-        const poolApy   = parseFloat(pool.supplyApy ?? pool.apy ?? pool.lendingApy ?? pool.rate ?? 0);
-        const poolMint  = pool.asset?.mint || pool.mint || pool.tokenMint || "";
-        const poolId    = pool.planId || pool.id || pool.poolId || "";
+        const poolApyRaw = pool.totalApy ?? pool.supplyApy ?? pool.apy ??
+                           pool.lendingApy ?? pool.rate ?? pool.apyPct ?? null;
+        if (poolApyRaw === null) continue;
+        const poolApy = parseFloat(poolApyRaw);
+        if (isNaN(poolApy) || poolApy <= 0) continue;
+
+        const poolMint = pool.asset?.mint || pool.mint || pool.tokenMint || pool.assetMint || "";
+        const poolId   = pool.planId || pool.id || pool.poolId || pool.marketId || "";
 
         // Skip the user's current pool
-        if (poolId && posPoolId && poolId === posPoolId) continue;
-        if (!poolId && poolMint === posMint && Math.abs(poolApy - posApy) < 0.01) continue;
+        const sameById  = poolId && posPoolId && poolId === posPoolId;
+        const sameByVal = !poolId && poolMint === posMint && Math.abs(poolApy - posApy) < 0.5;
+        if (sameById || sameByVal) continue;
 
         if (poolApy > bestApy) {
           bestApy  = poolApy;
@@ -155,25 +161,26 @@ export default function YieldRotatorPlugin({
         }
       }
 
-      if (bestPool) {
+      // Only show banner if the best pool actually beats current APY
+      if (bestPool && bestApy > posApy) {
+        const bestMint = bestPool.asset?.mint || bestPool.mint || bestPool.tokenMint || "";
         ops.push({
-          position:    pos,
+          position:     pos,
           posSym,
           posMint,
           posApy,
           posAmt,
           posPoolId,
           bestPool,
-          bestSym:  bestPool.asset?.symbol || mintToSym(bestPool.asset?.mint || bestPool.mint || ""),
-          bestMint: bestPool.asset?.mint || bestPool.mint || bestPool.tokenMint || "",
+          bestSym:      bestPool.asset?.symbol || bestPool.symbol || mintToSym(bestMint),
+          bestMint,
           bestApy,
-          apyGap:   bestApy - posApy,
-          isCrossAsset: (bestPool.asset?.mint || bestPool.mint || "") !== posMint,
+          apyGap:       bestApy - posApy,
+          isCrossAsset: bestMint !== posMint,
         });
       }
     }
 
-    // Sort by biggest APY gain first
     ops.sort((a, b) => b.apyGap - a.apyGap);
     return ops;
   }, []);
