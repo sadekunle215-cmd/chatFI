@@ -30,7 +30,7 @@ const RPC_URL         = process.env.SOLANA_RPC || "https://api.mainnet-beta.sola
 // Anchor discriminator for createVestingEscrow
 // = first 8 bytes of sha256("global:create_vesting_escrow")
 // Verified against jup-lock source (programs/locker/src/instructions/)
-const CREATE_DISC = Buffer.from([185, 131, 167, 212, 173, 21, 238, 76]);
+const CREATE_DISC = Buffer.from([23, 100, 197, 94, 222, 153, 38, 90]);
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
