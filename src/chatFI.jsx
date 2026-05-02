@@ -3779,15 +3779,17 @@ function JupChatInner() {
       };
 
       // Fetch holdings — try main API then lite fallback
+      // Jupiter uses "tokenBalances" (not "tokens") for SPL tokens in current API versions
+      const isValidHoldings = (d) => d && !d.error && (d.uiAmount != null || d.nativeBalance != null || d.amount != null);
       let holdingsData = null;
       try {
         const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(8000) });
-        if (r.ok) { const d = await r.json(); if (d && !d.error && d.uiAmount != null) holdingsData = d; }
+        if (r.ok) { const d = await r.json(); if (isValidHoldings(d)) holdingsData = d; }
       } catch {}
       if (!holdingsData) {
         try {
           const r = await fetch(`https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(8000) });
-          if (r.ok) { const d = await r.json(); if (d && !d.error && d.uiAmount != null) holdingsData = d; }
+          if (r.ok) { const d = await r.json(); if (isValidHoldings(d)) holdingsData = d; }
         } catch {}
       }
       // Fallback: deprecated /balances — normalize into holdings shape
@@ -3811,14 +3813,16 @@ function JupChatInner() {
       }
 
       if (holdingsData) {
-        const balances = { SOL: holdingsData.uiAmount ?? 0 };
+        const solUiAmt2 = holdingsData.uiAmount ?? (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : holdingsData.amount != null ? Number(holdingsData.amount) / 1e9 : 0);
+        const balances = { SOL: solUiAmt2 };
         const mintMap  = { SOL: SOL_MINT };
         const logoMap  = { SOL: TOKEN_LOGO_URLS["SOL"] };
         if (!results.nameMap) results.nameMap = {};
 
         // Collect all non-SOL mints with nonzero balance
+        // Jupiter uses "tokenBalances" in current API — fall back to "tokens" for resilience
         const allMints = [];
-        for (const [mint, data] of Object.entries(holdingsData.tokens || {})) {
+        for (const [mint, data] of Object.entries(holdingsData.tokenBalances || holdingsData.tokens || {})) {
           if (mint === SOL_MINT) continue;
           const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : (typeof data === "number" ? data : 0));
           if (!uiAmt || uiAmt <= 0) continue;
@@ -6430,27 +6434,31 @@ function JupChatInner() {
 
     try {
       // ── PRIMARY: /ultra/v1/holdings/{address} — official current endpoint ──
-      // Response: { amount (lamports str), uiAmount (SOL float), tokens: { mint: { uiAmount, amount, decimals, ... } } }
+      // Response: { amount (lamports str), uiAmount (SOL float), tokenBalances: { mint: { uiAmount, amount, decimals, ... } } }
+      // NOTE: Jupiter uses "tokenBalances" not "tokens" — both are checked for resilience.
       let holdingsData = null;
+      const isValidHoldings = (d) => d && !d.error && (d.uiAmount != null || d.nativeBalance != null || d.amount != null);
       try {
         const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(7000) });
-        if (r.ok) { const d = await r.json(); if (d && !d.error && d.uiAmount != null) holdingsData = d; }
+        if (r.ok) { const d = await r.json(); if (isValidHoldings(d)) holdingsData = d; }
       } catch {}
 
       // Lite API fallback for holdings
       if (!holdingsData) {
         try {
           const r = await fetch(`https://lite-api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(7000) });
-          if (r.ok) { const d = await r.json(); if (d && !d.error && d.uiAmount != null) holdingsData = d; }
+          if (r.ok) { const d = await r.json(); if (isValidHoldings(d)) holdingsData = d; }
         } catch {}
       }
 
       if (holdingsData) {
-        const balances = { SOL: holdingsData.uiAmount ?? 0 };
+        // SOL balance — field name varies by API version
+        const solUiAmt = holdingsData.uiAmount ?? (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : holdingsData.amount != null ? Number(holdingsData.amount) / 1e9 : 0);
+        const balances = { SOL: solUiAmt };
         const unknownMints = [];
 
-        // holdings.tokens is keyed by mint address: { mint: { uiAmount, amount, decimals, isFrozen, ... } }
-        for (const [mint, data] of Object.entries(holdingsData.tokens || {})) {
+        // SPL tokens: Jupiter uses "tokenBalances" (current) — fall back to "tokens" for older responses
+        for (const [mint, data] of Object.entries(holdingsData.tokenBalances || holdingsData.tokens || {})) {
           if (mint === SOL_MINT) continue;
           const uiAmt = data?.uiAmount ?? (data?.amount && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
           if (!uiAmt || uiAmt <= 0) continue;
