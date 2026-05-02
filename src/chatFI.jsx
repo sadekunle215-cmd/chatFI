@@ -2657,7 +2657,7 @@ function JupChatInner() {
   const yieldVaultSavedRef                          = useRef([]); // mirror for use inside async callbacks
   const [yieldVaultNotifs, setYieldVaultNotifs]     = useState([]);
   const [showYieldVaultTracker, setShowYieldVaultTracker] = useState(false);
-  const [telegramLinked, setTelegramLinked]         = useState(false);  // true once user links Telegram
+  const [telegramLinked, setTelegramLinked]         = useState(false);  // synced from localStorage + Firestore
   const [telegramLinking, setTelegramLinking]       = useState(false);  // loading state for link button
   const [showTelegramPrompt, setShowTelegramPrompt] = useState(false);  // post-activation prompt
 
@@ -2996,6 +2996,7 @@ function JupChatInner() {
   useEffect(() => {
     if (!walletFull) {
       setPriceAlerts([]); setVolMonitors([]); setTradeJournal([]);
+      setTelegramLinked(false);
       return;
     }
     const loadLocal = (key, fallback) => { try { return JSON.parse(localStorage.getItem(`${key}-${walletFull}`) || fallback); } catch { return JSON.parse(fallback); } };
@@ -3003,6 +3004,23 @@ function JupChatInner() {
     const volmon  = loadLocal("chatfi-volmon",  "[]");
     const journal = loadLocal("chatfi-journal", "[]");
     setPriceAlerts(alerts); setVolMonitors(volmon); setTradeJournal(journal);
+
+    // ── Telegram: check localStorage first (instant), then verify with Firestore ──
+    const localLinked = localStorage.getItem(`tg_linked_${walletFull}`) === "1";
+    if (localLinked) setTelegramLinked(true);
+    // Always verify with Firestore in background to catch cross-device state
+    fetch(`/api/yield-vault?wallet=${walletFull}&checkTelegram=1`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.telegramLinked) {
+          setTelegramLinked(true);
+          localStorage.setItem(`tg_linked_${walletFull}`, "1");
+        } else {
+          setTelegramLinked(false);
+          localStorage.removeItem(`tg_linked_${walletFull}`);
+        }
+      })
+      .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletFull]);
 
@@ -5390,7 +5408,7 @@ function JupChatInner() {
       });
       const data = await res.json();
       if (data.botLink) {
-        window.open(data.botLink, "_blank");
+        window.location.href = data.botLink;
         // Poll chatfi_users for telegramChatId being set (up to 2 mins)
         let attempts = 0;
         const poll = setInterval(async () => {
@@ -5400,6 +5418,7 @@ function JupChatInner() {
             const info = await check.json();
             if (info.telegramLinked) {
               setTelegramLinked(true);
+              localStorage.setItem(`tg_linked_${walletFull}`, "1");
               clearInterval(poll);
             }
           } catch {}
