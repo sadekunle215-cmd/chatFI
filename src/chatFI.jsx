@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Connection, Transaction, VersionedTransaction, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import nacl from "tweetnacl"; // used for invite keypair signing in Jupiter Send
 
 // ── Reown AppKit (external wallet connect — Phantom, Backpack, etc.) ─────────
 import { createAppKit, useAppKit, useAppKitAccount, useAppKitProvider, useDisconnect, useWalletInfo } from "@reown/appkit/react";
@@ -5393,11 +5394,24 @@ function JupChatInner() {
       if (!txB64) throw new Error("No transaction returned from server.");
       if (!blockhash || !lastValidBlockHeight) throw new Error("Server did not return blockhash metadata.");
 
-      // STEP 4: Sign with invite keypair first, then sender wallet.
-      // Both signatures are required by Jupiter Send.
+      // STEP 4: Wallet signs first, then inject invite keypair signature manually.
+      // We MUST do it in this order because Reown/WalletConnect's signTransaction
+      // internally resets ALL signature slots before signing — so if we sign with
+      // the invite keypair first, that signature gets wiped when the wallet signs.
+      // By injecting the invite sig AFTER the wallet signs (using nacl directly on
+      // the serialized message bytes) we avoid touching any other slots.
       const tx = VersionedTransaction.deserialize(b64ToBytes(txB64));
-      tx.sign([inviteKeypair]);                           // invite keypair signs first
-      const signedTx = await provider.signTransaction(tx); // sender wallet signs second
+
+      // Wallet signs first (sender signature)
+      const signedTx = await provider.signTransaction(tx);
+
+      // Inject the invite keypair signature into its slot without resetting others
+      const msgBytes  = signedTx.message.serialize();
+      const inviteSig = nacl.sign.detached(msgBytes, inviteKeypair.secretKey);
+      const inviteIdx = signedTx.message.staticAccountKeys
+        .findIndex(k => k.equals(inviteKeypair.publicKey));
+      if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
+      signedTx.signatures[inviteIdx] = inviteSig;
 
       // STEP 5: Broadcast
       const connection = new Connection(SOLANA_RPC, "confirmed");
