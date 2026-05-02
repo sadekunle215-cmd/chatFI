@@ -2583,6 +2583,7 @@ function JupChatInner() {
   const [sendStatus, setSendStatus]     = useState(null); // null|"signing"|"done"|"error"
   const [sendLink, setSendLink]         = useState("");
   const [sendMode, setSendMode]         = useState("invite"); // "invite" | "direct"
+  const [sendErr, setSendErr]           = useState(null);
   const [sendRecipient, setSendRecipient] = useState("");
   const [sendTxSig, setSendTxSig]       = useState("");
   // Jupiter token search for direct send
@@ -5344,6 +5345,7 @@ function JupChatInner() {
   };
 
   const doSend = async (cfgOverride) => {
+    setSendStatus(null); // reset any previous error state so spinner shows
     const { token, amount, mint } = cfgOverride || sendCfg;
     if (!amount || parseFloat(amount) <= 0) return;
     if (!walletFull) { push("ai", "Connect your wallet first to send tokens."); return; }
@@ -5364,6 +5366,7 @@ function JupChatInner() {
     // inviteCode is sent to server — server derives inviteSigner pubkey and partially signs
 
     setSendStatus("signing");
+    setSendErr(null);
     push("ai", `Crafting invite link to send **${amount} ${token}**…`);
     try {
       // STEP 4: POST inviteCode to server — server derives the keypair, calls Jupiter
@@ -5415,6 +5418,7 @@ function JupChatInner() {
       setPortfolio(updated);
     } catch (err) {
       setSendStatus("error");
+      setSendErr(err?.message || "Unknown error");
       push("ai", `Send failed: ${err?.message || "Unknown error"}. Please check your balance and try again.`);
     }
   };
@@ -12131,7 +12135,9 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 </button>
                 {sendStatus === "error" && (
                   <div style={{ fontSize:12, color:T.red, background:`${T.red}18`, border:`1px solid ${T.red}44`, borderRadius:8, padding:"8px 12px", marginBottom:8 }}>
-                    Transaction failed. Check your balance and try again.
+                    {sendErr || "Transaction failed. Check your balance and try again."}
+                    <span onClick={() => { setSendStatus(null); setSendErr(null); }}
+                      style={{ float:"right", cursor:"pointer", opacity:0.7 }}>✕</span>
                   </div>
                 )}
                 {sendStatus === "done" && sendLink && (
