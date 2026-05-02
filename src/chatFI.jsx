@@ -3541,31 +3541,35 @@ function JupChatInner() {
       const safeTimeout = (ms) => { try { return AbortSignal.timeout(ms); } catch { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; } };
       let rawBals = null;
 
-      // Source 1: /holdings — newest, most reliable
+      // Source 1: api.jup.ag/ultra/v1/balances (primary — returns all tokens including SPL)
       try {
-        const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(7000) });
-        if (r.ok) {
-          const d = await r.json();
-          if (d && (d.uiAmount != null || d.tokens)) {
-            // Normalize holdings format -> standard balances format { SOL: {uiAmount}, mint: {uiAmount} }
-            rawBals = { SOL: { uiAmount: d.uiAmount ?? 0 }, ...Object.fromEntries(Object.entries(d.tokens || {}).map(([m, v]) => [m, { uiAmount: typeof v === "number" ? v : v?.uiAmount ?? 0 }])) };
-          }
-        }
+        const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${walletAddress}`, { signal: safeTimeout(7000) });
+        if (r.ok) { const d = await r.json(); if (d && typeof d === "object" && !d.error) rawBals = d; }
       } catch {}
 
-      // Source 2: api.jup.ag/ultra/v1/balances
-      if (!rawBals) {
-        try {
-          const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${walletAddress}`, { signal: safeTimeout(7000) });
-          if (r.ok) { const d = await r.json(); if (d && typeof d === "object" && !d.error) rawBals = d; }
-        } catch {}
-      }
-
-      // Source 3: lite-api (original fallback)
+      // Source 2: lite-api fallback
       if (!rawBals) {
         try {
           const d = await fetch(`https://lite-api.jup.ag/ultra/v1/balances/${walletAddress}`).then(r => r.json());
           if (d && typeof d === "object" && !d.error) rawBals = d;
+        } catch {}
+      }
+
+      // Source 3: /holdings — use only to patch SOL if balances returned 0 or missing SOL
+      if (!rawBals || !rawBals["SOL"] || (rawBals["SOL"]?.uiAmount === 0 && rawBals["SOL"]?.amount === "0")) {
+        try {
+          const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(7000) });
+          if (r.ok) {
+            const d = await r.json();
+            if (d && d.uiAmount != null) {
+              rawBals = rawBals || {};
+              rawBals["SOL"] = { uiAmount: d.uiAmount };
+              // Also merge any tokens the holdings endpoint returned
+              for (const [m, v] of Object.entries(d.tokens || {})) {
+                if (!rawBals[m]) rawBals[m] = { uiAmount: typeof v === "number" ? v : v?.uiAmount ?? 0 };
+              }
+            }
+          }
         } catch {}
       }
 
@@ -6215,24 +6219,13 @@ function JupChatInner() {
       let ultraRes = null;
       let isHoldingsFormat = false;
 
-      // Source 1: /holdings — newest Jupiter endpoint, most reliable
+      // Source 1: api.jup.ag/ultra/v1/balances (primary — returns SOL + all SPL tokens)
       try {
-        const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(6000) });
-        if (r.ok) {
-          const d = await r.json();
-          if (d && (d.uiAmount != null || d.tokens)) { ultraRes = d; isHoldingsFormat = true; }
-        }
+        const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(6000) });
+        if (r.ok) { const d = await r.json(); if (d && typeof d === "object" && !d.error) ultraRes = d; }
       } catch {}
 
-      // Source 2: api.jup.ag/ultra/v1/balances (dynamic, higher rate limits)
-      if (!ultraRes) {
-        try {
-          const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(6000) });
-          if (r.ok) { const d = await r.json(); if (d && typeof d === "object" && !d.error) ultraRes = d; }
-        } catch {}
-      }
-
-      // Source 3: lite-api (original)
+      // Source 2: lite-api (original fallback)
       if (!ultraRes) {
         try {
           const r = await fetch(`https://lite-api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(6000) });
@@ -6240,28 +6233,18 @@ function JupChatInner() {
         } catch {}
       }
 
-      // Parse holdings format: { uiAmount: SOL, tokens: { mint: { uiAmount, ... } } }
-      if (ultraRes && isHoldingsFormat) {
-        const balances = {};
-        const SOL_MINT = "So11111111111111111111111111111111111111112";
-        balances["SOL"] = ultraRes.uiAmount ?? 0;
-        for (const [mint, data] of Object.entries(ultraRes.tokens || {})) {
-          if (mint === SOL_MINT) continue;
-          const uiAmt = typeof data === "number" ? data : data?.uiAmount ?? 0;
-          if (uiAmt <= 0) continue;
-          const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0] || KNOWN_MINTS[mint];
-          if (sym) { balances[sym] = uiAmt; }
-          else {
-            try {
-              const meta = await fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`).then(r => r.json()).catch(() => null);
-              const finalSym = meta?.symbol || mint.slice(0, 8);
-              if (balances[finalSym] === undefined) balances[finalSym] = uiAmt;
-              if (meta?.symbol && !tokenCacheRef.current[meta.symbol]) tokenCacheRef.current[meta.symbol] = mint;
-              if (meta?.logoURI && logoMapRef.current) logoMapRef.current[finalSym] = meta.logoURI;
-            } catch { balances[mint.slice(0, 8)] = uiAmt; }
+      // Source 3: /holdings — only used to patch SOL if balances returned 0/missing SOL
+      if (!ultraRes || !ultraRes["SOL"] || ultraRes["SOL"]?.uiAmount === 0) {
+        try {
+          const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(6000) });
+          if (r.ok) {
+            const d = await r.json();
+            if (d && d.uiAmount != null) {
+              ultraRes = ultraRes || {};
+              ultraRes["SOL"] = { uiAmount: d.uiAmount };
+            }
           }
-        }
-        return balances;
+        } catch {}
       }
 
       if (ultraRes && typeof ultraRes === "object") {
