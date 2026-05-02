@@ -6624,7 +6624,13 @@ function JupChatInner() {
           const earnArr = Array.isArray(earnRes) ? earnRes : (earnRes?.data || Object.values(earnRes||{}).flatMap(v=>Array.isArray(v)?v:[]));
           const activeEarn = (earnArr || []).filter(e => parseFloat(e.underlyingBalance||e.underlyingAssets||0) > 0);
           if (activeEarn.length > 0) {
-            push("ai", `__YIELD_VAULT_PROMPT__${JSON.stringify(activeEarn)}`);
+            const vaultRes = await fetch(`/api/yield-vault?wallet=${address}`).catch(()=>null);
+            const vaultData = vaultRes ? await vaultRes.json().catch(()=>null) : null;
+            const configuredMints = new Set((vaultData?.vaults || []).map(v => v.earnMint));
+            const unconfigured = activeEarn.filter(e => e.mint && !configuredMints.has(e.mint));
+            if (unconfigured.length > 0) {
+              push("ai", `__YIELD_VAULT_PROMPT__${JSON.stringify(unconfigured)}`);
+            }
           } else if (idleUSD >= 20) {
             const idleLabel = idleUSDC >= 20 ? `${idleUSDC.toFixed(2)} USDC` : `${idleSOL.toFixed(3)} SOL (~$${(idleSOL*solPrice).toFixed(2)})`;
             push("ai", `**Idle funds detected** — you have **${idleLabel}** sitting uninvested.\n\nPut it to work earning **${idleUSDC>=20?"~5-10% APY (USDC)":"~8%+ APY (SOL)"}** in Jupiter Lend.\n\nType *"show earn vaults"* to get started.`);
@@ -7563,7 +7569,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                 const earnArr = Array.isArray(earnRes) ? earnRes : (earnRes?.data || Object.values(earnRes||{}).flatMap(v=>Array.isArray(v)?v:[]));
                 const activeEarn = (earnArr || []).filter(e => parseFloat(e.underlyingBalance||e.underlyingAssets||0) > 0);
                 if (activeEarn.length > 0) {
-                  push("ai", `__YIELD_VAULT_PROMPT__${JSON.stringify(activeEarn)}`);
+                  const vaultRes = await fetch(`/api/yield-vault?wallet=${reownAddress}`).catch(()=>null);
+                  const vaultData = vaultRes ? await vaultRes.json().catch(()=>null) : null;
+                  const configuredMints = new Set((vaultData?.vaults || []).map(v => v.earnMint));
+                  const unconfigured = activeEarn.filter(e => e.mint && !configuredMints.has(e.mint));
+                  if (unconfigured.length > 0) {
+                    push("ai", `__YIELD_VAULT_PROMPT__${JSON.stringify(unconfigured)}`);
+                  }
                 } else if (idleUSD >= 20) {
                   const idleLabel = idleUSDC >= 20 ? `${idleUSDC.toFixed(2)} USDC` : `${idleSOL.toFixed(3)} SOL (~$${(idleSOL*solPrice).toFixed(2)})`;
                   push("ai", `**Idle funds detected** — you have **${idleLabel}** sitting uninvested.\n\nPut it to work earning **${idleUSDC>=20?"~5-10% APY (USDC)":"~8%+ APY (SOL)"}** in Jupiter Lend.\n\nType *"show earn vaults"* to get started.`);
@@ -7668,7 +7680,13 @@ Order: \`${orderKey.slice(0,20)}…\`
                 const earnArr = Array.isArray(earnRes) ? earnRes : (earnRes?.data || Object.values(earnRes||{}).flatMap(v=>Array.isArray(v)?v:[]));
                 const activeEarn = (earnArr || []).filter(e => parseFloat(e.underlyingBalance||e.underlyingAssets||0) > 0);
                 if (activeEarn.length > 0) {
-                  push("ai", `__YIELD_VAULT_PROMPT__${JSON.stringify(activeEarn)}`);
+                  const vaultRes = await fetch(`/api/yield-vault?wallet=${address}`).catch(()=>null);
+                  const vaultData = vaultRes ? await vaultRes.json().catch(()=>null) : null;
+                  const configuredMints = new Set((vaultData?.vaults || []).map(v => v.earnMint));
+                  const unconfigured = activeEarn.filter(e => e.mint && !configuredMints.has(e.mint));
+                  if (unconfigured.length > 0) {
+                    push("ai", `__YIELD_VAULT_PROMPT__${JSON.stringify(unconfigured)}`);
+                  }
                 } else if (idleUSD >= 20) {
                   const idleLabel = idleUSDC >= 20 ? `${idleUSDC.toFixed(2)} USDC` : `${idleSOL.toFixed(3)} SOL (~$${(idleSOL*solPrice).toFixed(2)})`;
                   push("ai", `**Idle funds detected** — you have **${idleLabel}** sitting uninvested.\n\nPut it to work earning **${idleUSDC>=20?"~5-10% APY (USDC)":"~8%+ APY (SOL)"}** in Jupiter Lend.\n\nType *"show earn vaults"* to get started.`);
