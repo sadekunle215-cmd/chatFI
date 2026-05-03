@@ -96,11 +96,12 @@ export default function YieldRotatorPlugin({
   onMigrationDone,
 }) {
   // ── State ────────────────────────────────────────────────────────────────
-  const [allPools, setAllPools]         = useState([]);   // all live Jupiter Earn pools
-  const [opportunities, setOpportunities] = useState([]); // [ { current, best, apyGap } ]
-  const [migrating, setMigrating]       = useState(null); // position key being migrated
-  const [migrateStep, setMigrateStep]   = useState("");   // progress label
-  const [lastChecked, setLastChecked]   = useState(null);
+  const [allPools, setAllPools]           = useState([]);
+  const [opportunities, setOpportunities] = useState([]);
+  const [migrating, setMigrating]         = useState(null);
+  const [migrateStep, setMigrateStep]     = useState("");
+  const [lastChecked, setLastChecked]     = useState(null);
+  const [successCard, setSuccessCard]     = useState(null); // { posSym, bestSym, posApy, bestApy, depositSig }
   const pollRef = useRef(null);
 
   // ── Fetch all Jupiter Earn pools with live APYs ───────────────────────────
@@ -278,7 +279,7 @@ export default function YieldRotatorPlugin({
     try {
       // ── Tx 1: Withdraw from current Earn pool ──────────────────────────────
       setStep("Withdrawing from current pool…");
-      push("ai", `🔄 **Migrating ${posSym} Earn → ${bestSym} Earn**\nStep 1/3 — withdrawing from current pool…`);
+      push("ai", `[Migrate] ${posSym} Earn → ${bestSym} Earn\nStep 1/3 — withdrawing from current pool…`);
 
       const dec = KNOWN_DECIMALS[posSym] ?? KNOWN_DECIMALS[posMint] ?? 6;
       const withdrawAmtRaw = posAmt > 1e6
@@ -313,7 +314,7 @@ export default function YieldRotatorPlugin({
       const withdrawSig = withdrawSendRes?.result;
       if (!withdrawSig) throw new Error(withdrawSendRes?.error?.message || "No signature from withdraw tx");
       await waitConfirm(withdrawSig);
-      push("ai", `✅ Step 1/3 done — withdrawn from ${posSym} Earn. [Solscan](https://solscan.io/tx/${withdrawSig})`);
+      push("ai", `[Done] Step 1/3 — withdrawn from ${posSym} Earn. [Solscan](https://solscan.io/tx/${withdrawSig})`);
 
       // ── Tx 2: Swap if cross-asset ──────────────────────────────────────────
       let depositMint   = posMint || symToMint(posSym);
@@ -322,7 +323,7 @@ export default function YieldRotatorPlugin({
 
       if (isCrossAsset && bestMint && bestMint !== depositMint) {
         setStep("Swapping to target asset…");
-        push("ai", `🔄 Step 2/3 — swapping ${posSym} → ${bestSym}…`);
+        push("ai", `[Swap] Step 2/3 — swapping ${posSym} → ${bestSym}…`);
 
         const swapOrderRes = await jupFetch(
           `${JUP_SWAP_ORDER}?inputMint=${depositMint}&outputMint=${bestMint}&amount=${withdrawAmtRaw}&slippageBps=50&taker=${walletFull}`
@@ -380,14 +381,14 @@ export default function YieldRotatorPlugin({
 
         // Show exact amount being deposited so it's visible in chat if something looks wrong
         const depositHuman = (depositAmtRaw / Math.pow(10, KNOWN_DECIMALS[bestSym] ?? 6)).toFixed(4);
-        push("ai", `✅ Step 2/3 done — swapped to ${bestSym}. Depositing ${depositHuman} ${bestSym}. [Solscan](https://solscan.io/tx/${swapSig})`);
+        push("ai", `[Done] Step 2/3 — swapped to ${bestSym}. Depositing ${depositHuman} ${bestSym}. [Solscan](https://solscan.io/tx/${swapSig})`);
       } else {
-        push("ai", `⏭ Step 2/3 — same asset (${posSym}), no swap needed.`);
+        push("ai", `[Skip] Step 2/3 — same asset (${posSym}), no swap needed.`);
       }
 
       // ── Tx 3: Deposit into new Earn pool (with retry) ─────────────────────
       setStep("Depositing into new pool…");
-      push("ai", `🔄 Step 3/3 — depositing into ${bestSym} Earn (${bestApy.toFixed(2)}% APY)…`);
+      push("ai", `[Deposit] Step 3/3 — depositing into ${bestSym} Earn (${bestApy.toFixed(2)}% APY)…`);
 
       // Fix: include bestPlanId so Jupiter routes to the correct pool
       const bestPlanId = bestPool.planId || bestPool.id || bestPool.poolId;
@@ -441,7 +442,7 @@ export default function YieldRotatorPlugin({
           if (attempt === 0) {
             console.warn("Deposit attempt 1 failed, retrying…", err?.message);
             setStep("Deposit timed out — retrying…");
-            push("ai", `⚠️ Deposit attempt 1 timed out — retrying automatically…`);
+            push("ai", `[Retry] Deposit attempt 1 timed out — retrying automatically…`);
             await new Promise(r => setTimeout(r, 2000));
           }
         }
@@ -456,11 +457,14 @@ export default function YieldRotatorPlugin({
       }
 
       push("ai",
-        `✅ **Migration complete!**\n` +
+        `[Complete] Migration done\n` +
         `${posSym} Earn (${posApy.toFixed(2)}%) → ${bestSym} Earn (${bestApy.toFixed(2)}%)\n` +
-        `You're now earning **+${(bestApy - posApy).toFixed(2)}% more APY**. 🎉\n` +
+        `Now earning +${(bestApy - posApy).toFixed(2)}% more APY\n` +
         `[View deposit tx](https://solscan.io/tx/${depositSig})`
       );
+
+      // Show success card in the panel
+      setSuccessCard({ posSym, bestSym, posApy, bestApy, depositSig });
 
       // Refresh opportunities after successful migration
       await runCheck();
@@ -469,7 +473,7 @@ export default function YieldRotatorPlugin({
     } catch (err) {
       const msg = err?.message || "Unknown error";
       // Bug fix 4: use stepRef.current (always current) not migrateStep (stale closure)
-      push("ai", `❌ Migration failed at: **${stepRef.current || "unknown step"}**\n${msg}`);
+      push("ai", `[Failed] Migration stopped at: ${stepRef.current || "unknown step"}\n${msg}`);
     } finally {
       setMigrating(null);
       setMigrateStep("");
@@ -477,14 +481,66 @@ export default function YieldRotatorPlugin({
   };
 
   // ── Render: Migrate banner cards ──────────────────────────────────────────
-  // Returns an array of banner elements — caller can embed these anywhere
-  // (typically right after the Earn Positions section in the portfolio panel)
-  if (!opportunities.length) return null;
+  if (!opportunities.length && !successCard) return null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {/* Section header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+
+      {/* ── Success card — shown after migration completes ── */}
+      {successCard && (
+        <div style={{
+          padding: "14px 16px",
+          background: "linear-gradient(135deg, #0a1f0a, #0d230d)",
+          border: "1px solid #68d39155",
+          borderRadius: 12,
+          fontSize: 12,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              {/* checkmark circle */}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#68d391" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/><path d="M7 12.5l3.5 3.5 6.5-7"/>
+              </svg>
+              <span style={{ fontWeight: 700, color: "#68d391", fontSize: 13 }}>Migration Complete</span>
+            </div>
+            <button onClick={() => setSuccessCard(null)}
+              style={{ background: "none", border: "none", color: T.text3, cursor: "pointer", padding: 2, lineHeight: 1 }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6L6 18M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+
+          {/* from → to row */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <div style={{ background: T.surface, borderRadius: 8, padding: "5px 12px", textAlign: "center" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: T.text2 }}>{successCard.posSym}</div>
+              <div style={{ fontSize: 10, color: T.text3 }}>{successCard.posApy.toFixed(2)}%</div>
+            </div>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+              {/* arrow right */}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#68d391" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12h14M12 5l7 7-7 7"/>
+              </svg>
+              <span style={{ fontSize: 10, color: "#68d391", fontWeight: 700 }}>+{(successCard.bestApy - successCard.posApy).toFixed(2)}% APY</span>
+            </div>
+            <div style={{ background: "rgba(104,211,145,0.08)", border: "1px solid rgba(104,211,145,0.25)", borderRadius: 8, padding: "5px 12px", textAlign: "center" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#68d391" }}>{successCard.bestSym}</div>
+              <div style={{ fontSize: 10, color: "#68d391", fontWeight: 700 }}>{successCard.bestApy.toFixed(2)}%</div>
+            </div>
+          </div>
+
+          <a href={`https://solscan.io/tx/${successCard.depositSig}`} target="_blank" rel="noreferrer"
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, width: "100%", padding: "7px", background: "rgba(104,211,145,0.08)", border: "1px solid rgba(104,211,145,0.2)", borderRadius: 8, color: "#68d391", fontSize: 11, fontWeight: 600, textDecoration: "none" }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+            View on Solscan
+          </a>
+        </div>
+      )}
+      {/* Section header + opportunity cards — only when opportunities exist */}
+      {opportunities.length > 0 && (<>
         {/* rotate icon */}
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#c7f284" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
@@ -629,6 +685,7 @@ export default function YieldRotatorPlugin({
           </button>
         </div>
       )}
+      </>)}
 
       {/* Keyframe styles */}
       <style>{`
