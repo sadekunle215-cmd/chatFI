@@ -89,7 +89,7 @@ async function mintToSymbol(mint) {
 // ── 1. Token balances via Helius RPC (reliable SPL) + Jupiter for prices ─────
 async function fetchTokenBalances(wallet) {
   try {
-    const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
+    const HELIUS_RPC = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
 
     // Step 1: Get SOL balance
     const solRes = await fetch(HELIUS_RPC, {
@@ -126,23 +126,26 @@ async function fetchTokenBalances(wallet) {
       if (uiAmt > 0 && mint) splMints.push({ mint, amount: uiAmt, decimals: dec });
     }
 
-    // Step 4: Resolve metadata + prices for all mints in parallel
-    const SOL_PRICE_URL = `https://lite-api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112,${splMints.map(m => m.mint).join(",")}`;
-    const [metaResults, priceRes] = await Promise.all([
+    // Step 4: Resolve metadata + prices for all mints in parallel (including SOL)
+    const SOL_MINT = "So11111111111111111111111111111111111111112";
+    const allMints = [SOL_MINT, ...splMints.map(m => m.mint)];
+    const SOL_PRICE_URL = `https://lite-api.jup.ag/price/v2?ids=${allMints.join(",")}`;
+    const [solMeta, metaResults, priceRes] = await Promise.all([
+      jFetch(`https://tokens.jup.ag/token/${SOL_MINT}`, {}, 5000),
       Promise.allSettled(splMints.map(({ mint }) => jFetch(`https://tokens.jup.ag/token/${mint}`, {}, 5000))),
       jFetch(SOL_PRICE_URL, {}, 8000),
     ]);
 
-    const prices = priceRes?.data || {};
-    const solPrice = parseFloat(prices["So11111111111111111111111111111111111111112"]?.price || 0);
+    const prices   = priceRes?.data || {};
+    const solPrice = parseFloat(prices[SOL_MINT]?.price || 0);
     const solUSD   = solAmt * solPrice;
 
     const tokens = [{
-      symbol:   "SOL",
-      mint:     "So11111111111111111111111111111111111111112",
+      symbol:   solMeta?.symbol  || "SOL",
+      mint:     SOL_MINT,
       amount:   solAmt,
       usdValue: solUSD,
-      logoURI:  "https://img.jup.ag/tokens/So11111111111111111111111111111111111111112",
+      logoURI:  solMeta?.logoURI || solMeta?.icon || `https://img.jup.ag/tokens/${SOL_MINT}`,
       price:    solPrice,
     }];
 
