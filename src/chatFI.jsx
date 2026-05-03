@@ -3846,29 +3846,37 @@ function JupChatInner() {
         } catch {}
       }
 
-      // ── Helius fallback: fetch SPL tokens if Jupiter returned empty ────────────
-      // Jupiter's holdings API sometimes returns tokens:{} even when wallet has SPL tokens.
-      // Use our backend /api/portfolio?wallet= which calls Helius getTokenAccountsByOwner.
-      const hasSplFromJup = holdingsData && Object.keys(holdingsData.tokenBalances || holdingsData.tokens || {}).length > 0;
-      if (!hasSplFromJup) {
-        try {
-          const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
-          if (r.ok) {
-            const d = await r.json();
-            const splTokens = d?.tokens || [];
-            if (splTokens.length > 0) {
-              // Merge into holdingsData shape
-              const tokens = {};
-              for (const t of splTokens) {
-                if (!t.mint || t.mint === SOL_MINT) continue;
-                tokens[t.mint] = { uiAmount: t.amount, symbol: t.symbol, decimals: 6, logoURI: t.logoURI };
-              }
-              const solAmt = holdingsData?.uiAmount ?? splTokens.find(t => t.mint === SOL_MINT)?.amount ?? 0;
-              holdingsData = { uiAmount: solAmt, tokens };
+      // ── Helius fallback: ALWAYS fetch SPL tokens and merge with Jupiter data ──
+      // Jupiter's holdings API intermittently returns tokenBalances:{} even when
+      // the wallet has SPL tokens. We always call /api/portfolio (Helius RPC) and
+      // merge results so tokens from both sources are combined — Jupiter wins on
+      // any mint it already has (to keep its richer metadata), Helius fills gaps.
+      try {
+        const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
+        if (r.ok) {
+          const d = await r.json();
+          const splTokens = d?.tokens || [];
+          if (splTokens.length > 0) {
+            // Build a tokens map from Helius results
+            const heliusTokens = {};
+            for (const t of splTokens) {
+              if (!t.mint || t.mint === SOL_MINT) continue;
+              heliusTokens[t.mint] = { uiAmount: t.amount, symbol: t.symbol, decimals: t.decimals ?? 6, logoURI: t.logoURI };
+            }
+            if (holdingsData) {
+              // Merge: keep existing Jupiter entries, add any Helius mints Jupiter missed
+              const jupTokens = holdingsData.tokenBalances || holdingsData.tokens || {};
+              const merged = { ...heliusTokens, ...jupTokens }; // Jupiter overwrites Helius on overlap
+              const solAmt = holdingsData.uiAmount ?? splTokens.find(t => t.mint === SOL_MINT)?.amount ?? 0;
+              holdingsData = { uiAmount: solAmt, tokenBalances: merged };
+            } else {
+              // Jupiter failed entirely — use Helius as sole source
+              const solAmt = splTokens.find(t => t.mint === SOL_MINT)?.amount ?? 0;
+              holdingsData = { uiAmount: solAmt, tokenBalances: heliusTokens };
             }
           }
-        } catch {}
-      }
+        }
+      } catch (e) { console.warn("[ChatFi Portfolio] Helius SPL fallback failed:", e?.message); }
 
       if (holdingsData) {
         const solUiAmt2 = holdingsData.uiAmount ?? (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : holdingsData.amount != null ? Number(holdingsData.amount) / 1e9 : 0);
