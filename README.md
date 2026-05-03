@@ -1,5 +1,9 @@
 # ChatFI — Conversational AI Trading Interface for Jupiter DEX
 
+<p align="center">
+  <img src="chatfi-logo.jpg" alt="ChatFI Logo" width="120" />
+</p>
+
 > **Type in what you want. ChatFI figures out the rest.**
 
 ChatFI is a production-grade, chat-first DeFi interface built entirely on the [Jupiter Developer Platform](https://developers.jup.ag). Instead of navigating tabs, forms, and confirmations, users describe their intent in plain language and the AI routes it to the correct Jupiter API — swaps, limit orders, DCA, yield vaults, prediction markets, portfolio views, token discovery, and more.
