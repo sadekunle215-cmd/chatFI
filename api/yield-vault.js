@@ -13,7 +13,8 @@ export const config = { runtime: "nodejs" };
 //   POST   /api/yield-vault?action=telegram-webhook   → Telegram bot webhook receiver
 //
 // vercel.json crons entry (or use cron-job.org):
-//   { "path": "/api/yield-vault?cron=1", "schedule": "*/5 * * * *" }
+//   { "path": "/api/yield-vault?cron=1",       "schedule": "*/5 * * * *" }   ← yield harvest watcher (every 5 min)
+//   { "path": "/api/yield-vault?cron=rotator", "schedule": "0 */12 * * *" }  ← APY rotator alerts (every 12 hrs)
 //
 // Telegram setup:
 //   1. Create bot via @BotFather → get token → add as TELEGRAM_BOT_TOKEN in Vercel
@@ -461,40 +462,48 @@ async function runRotatorWatcher(req, res) {
         const rotatorSnap = await rotatorRef.get();
         const rotatorData = rotatorSnap.exists ? rotatorSnap.data() : {};
 
-        // Skip if we already alerted for this same target pool within the last hour
-        const lastAlertPool = rotatorData.lastAlertPool || "";
-        const lastAlertAt   = rotatorData.lastAlertAt ? new Date(rotatorData.lastAlertAt).getTime() : 0;
-        const ONE_HOUR_MS   = 60 * 60 * 1000;
-        if (lastAlertPool === best.bestSym && (Date.now() - lastAlertAt) < ONE_HOUR_MS) {
-          log.push(`[${wallet.slice(0, 8)}] Already alerted for ${best.bestSym} — skipping`);
+        // Skip if we already alerted for this same target pool within the last 12 hours
+        const lastAlertPool   = rotatorData.lastAlertPool || "";
+        const lastAlertAt     = rotatorData.lastAlertAt ? new Date(rotatorData.lastAlertAt).getTime() : 0;
+        const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+        const alreadyAlerted  = lastAlertPool === best.bestSym && (Date.now() - lastAlertAt) < FIVE_HOURS_MS;
+
+        if (alreadyAlerted) {
+          const nextAlertMins = Math.ceil((FIVE_HOURS_MS - (Date.now() - lastAlertAt)) / 60000);
+          log.push(`[${wallet.slice(0, 8)}] Already alerted for ${best.bestSym} — next in ~${nextAlertMins} min`);
           continue;
         }
 
-        // Send Telegram alert (reuse existing sendTelegramMessage)
+        // Build alert — show repeat count if user has been notified before
+        // Reset count if the best pool has changed (new opportunity)
+        const alertCount = lastAlertPool !== best.bestSym ? 1 : (rotatorData.alertCount || 0) + 1;
+        const isRepeat   = alertCount > 1;
         const msg =
-          `📈 <b>Better Yield Found! — ChatFi</b>\n\n` +
-          `Your <b>${best.posSym} Earn</b> is at <b>${best.posApy.toFixed(2)}% APY</b>.\n\n` +
-          `Better pool available: <b>${best.bestSym} Earn</b> at <b>${best.bestApy.toFixed(2)}% APY</b>` +
-          (best.isCrossAsset ? ` <i>(swap required)</i>` : ``) + `.\n\n` +
-          `Potential gain: <b>+${best.apyGap.toFixed(2)}%</b> more APY 🚀\n\n` +
-          `Open ChatFi to migrate with one tap 👇`;
+          `📈 <b>${isRepeat ? `Reminder #${alertCount} — ` : ""}Better Yield Available — ChatFi</b>\n\n` +
+          `Your <b>${best.posSym} Earn</b> is earning <b>${best.posApy.toFixed(2)}% APY</b>.\n\n` +
+          `A better pool is available:\n` +
+          `<b>${best.bestSym} Earn</b> — <b>${best.bestApy.toFixed(2)}% APY</b>` +
+          (best.isCrossAsset ? ` <i>(includes a swap)</i>` : ``) + `\n\n` +
+          `Potential gain: <b>+${best.apyGap.toFixed(2)}% more APY</b>\n\n` +
+          `Tap below to migrate with one tap on ChatFi 👇`;
 
         const markup = {
           inline_keyboard: [[
-            { text: "🔄 Migrate Now", url: `${APP_URL}` },
+            { text: "Migrate Now", url: `${APP_URL}` },
           ]],
         };
         await sendTelegramMessage(telegramChatId, msg, markup);
         alertsSent++;
 
-        // Persist state
+        // Persist state — track alert count so reminders show "Reminder #N"
         await rotatorRef.set({
           wallet,
           lastAlertPool: best.bestSym,
           lastAlertAt:   new Date().toISOString(),
+          alertCount,
         }, { merge: true });
 
-        log.push(`[${wallet.slice(0, 8)}] Alert sent — ${best.posSym} ${best.posApy.toFixed(2)}% → ${best.bestSym} ${best.bestApy.toFixed(2)}%`);
+        log.push(`[${wallet.slice(0, 8)}] Alert #${alertCount} sent — ${best.posSym} ${best.posApy.toFixed(2)}% → ${best.bestSym} ${best.bestApy.toFixed(2)}%`);
         await sleep(300);
       } catch (e) {
         log.push(`[${wallet.slice(0, 8)}] ERROR: ${e.message}`);
