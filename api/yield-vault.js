@@ -308,7 +308,49 @@ async function runWatcher(req, res) {
         if (isFirstAlert || isDueForPing) {
           vaultLog.push(`THRESHOLD HIT — ${isFirstAlert ? "first alert" : "repeat ping"}`);
 
-          // ── Send Telegram notification ────────────────────────────────────
+          // ── Auto-harvest if user opted in ────────────────────────────────
+          if (vault.autoHarvest) {
+            try {
+              vaultLog.push(`Auto-harvest enabled — executing withdraw + swap...`);
+              const withdrawSig = await withdrawYield(vault, Math.floor(yieldAmount * Math.pow(10, vault.earnDecimals ?? 6)), connection, delegateKp);
+              vaultLog.push(`Withdraw confirmed: ${withdrawSig}`);
+              const { sig: swapSig, outAmount } = await swapYield(vault, Math.floor(yieldAmount * Math.pow(10, vault.earnDecimals ?? 6)));
+              vaultLog.push(`Swap confirmed: ${swapSig}`);
+
+              // Notify user via Telegram
+              const userSnap = await db.collection("chatfi_users").where("wallet", "==", vault.wallet).limit(1).get();
+              if (!userSnap.empty && userSnap.docs[0].data().telegramChatId) {
+                const chatId = userSnap.docs[0].data().telegramChatId;
+                const outHuman = outAmount ? (Number(outAmount) / Math.pow(10, vault.targetTokenDecimals ?? 6)).toFixed(4) : "?";
+                const msg =
+                  `✅ <b>Auto-Harvest Complete — ChatFi</b>
+
+` +
+                  `Your <b>${vault.earnSymbol}</b> vault yield of <b>$${yieldUSD.toFixed(2)}</b> has been automatically harvested and swapped into <b>${outHuman} ${vault.targetTokenSymbol}</b>.
+
+` +
+                  `<a href="https://solscan.io/tx/${swapSig}">View transaction on Solscan</a>`;
+                const markup = { inline_keyboard: [[{ text: "Open ChatFi", url: APP_URL }]] };
+                await sendTelegramMessage(chatId, msg, markup);
+              }
+
+              // Update vault — reset yield tracking
+              await doc.ref.update({
+                depositedAmount: position.currentAmount - yieldAmount + (Number(outAmount ?? 0) / Math.pow(10, vault.earnDecimals ?? 6)),
+                pendingHarvest: false,
+                pendingHarvestYieldUSD: null,
+                lastAutoHarvestAt: new Date().toISOString(),
+                lastAutoHarvestYieldUSD: yieldUSD,
+                updatedAt: new Date().toISOString(),
+              });
+              log.push(`[${vault.wallet.slice(0, 8)}] Auto-harvest SUCCESS — $${yieldUSD.toFixed(2)}`);
+              continue; // skip manual alert
+            } catch (autoErr) {
+              vaultLog.push(`Auto-harvest FAILED: ${autoErr.message} — falling back to manual alert`);
+            }
+          }
+
+          // ── Send Telegram notification (manual harvest) ───────────────────
           await notifyYieldReady(vault, yieldUSD, !isFirstAlert);
           vaultLog.push(`Telegram ${isFirstAlert ? "alert" : "reminder"} sent`);
 
@@ -663,6 +705,61 @@ async function handleNotifyRotationComplete(req, res) {
   }
 }
 
+// ── Enable auto-harvest for a vault ─────────────────────────────────────────
+async function handleEnableAutoHarvest(req, res) {
+  const { wallet, vaultId } = req.body;
+  if (!wallet || !vaultId) return res.status(400).json({ error: "wallet and vaultId required" });
+  try {
+    const db = getDb();
+    const ref = db.collection("yield_vaults").doc(vaultId);
+    const doc = await ref.get();
+    if (!doc.exists || doc.data().wallet !== wallet) {
+      return res.status(403).json({ error: "Vault not found or wallet mismatch" });
+    }
+    await ref.update({ autoHarvest: true, autoHarvestEnabledAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+
+    // Notify user via Telegram
+    const userSnap = await db.collection("chatfi_users").where("wallet", "==", wallet).limit(1).get();
+    if (!userSnap.empty && userSnap.docs[0].data().telegramChatId) {
+      const chatId = userSnap.docs[0].data().telegramChatId;
+      const vault = doc.data();
+      const msg =
+        `⚡ <b>Auto-Harvest Enabled — ChatFi</b>
+
+` +
+        `Your <b>${vault.earnSymbol}</b> vault will now automatically harvest and swap yield into <b>${vault.targetTokenSymbol}</b> when your $${vault.thresholdUSD} threshold is reached.
+
+` +
+        `You can disable this anytime from ChatFi.`;
+      await sendTelegramMessage(chatId, msg, { inline_keyboard: [[{ text: "Open ChatFi", url: APP_URL }]] });
+    }
+
+    return res.status(200).json({ success: true, autoHarvest: true });
+  } catch (e) {
+    console.error("[enableAutoHarvest]", e.message);
+    return res.status(500).json({ error: e.message });
+  }
+}
+
+// ── Disable auto-harvest for a vault ─────────────────────────────────────────
+async function handleDisableAutoHarvest(req, res) {
+  const { wallet, vaultId } = req.body;
+  if (!wallet || !vaultId) return res.status(400).json({ error: "wallet and vaultId required" });
+  try {
+    const db = getDb();
+    const ref = db.collection("yield_vaults").doc(vaultId);
+    const doc = await ref.get();
+    if (!doc.exists || doc.data().wallet !== wallet) {
+      return res.status(403).json({ error: "Vault not found or wallet mismatch" });
+    }
+    await ref.update({ autoHarvest: false, autoHarvestDisabledAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    return res.status(200).json({ success: true, autoHarvest: false });
+  } catch (e) {
+    console.error("[disableAutoHarvest]", e.message);
+    return res.status(500).json({ error: e.message });
+  }
+}
+
 // ── Telegram magic link: generate token ──────────────────────────────────────
 async function handleLinkTelegram(req, res) {
   const { wallet } = req.body;
@@ -824,6 +921,16 @@ export default async function handler(req, res) {
   // Notify rotation complete — POST ?action=notify-rotation-complete
   if (req.method === "POST" && req.query.action === "notify-rotation-complete") {
     return handleNotifyRotationComplete(req, res);
+  }
+
+  // Enable auto-harvest — POST ?action=enable-auto-harvest
+  if (req.method === "POST" && req.query.action === "enable-auto-harvest") {
+    return handleEnableAutoHarvest(req, res);
+  }
+
+  // Disable auto-harvest — POST ?action=disable-auto-harvest
+  if (req.method === "POST" && req.query.action === "disable-auto-harvest") {
+    return handleDisableAutoHarvest(req, res);
   }
 
   let db;
