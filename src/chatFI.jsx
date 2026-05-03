@@ -3878,9 +3878,11 @@ function JupChatInner() {
     }).join("\n");
   };
 
-  // ── Portfolio — rebuilt from scratch using Jupiter Portfolio API ─────────────
-  // Primary: https://api.jup.ag/portfolio/v1/positions/{wallet}
-  // Fallback for balances: Ultra holdings API + Helius /api/portfolio backend
+  // ── Portfolio — SPL token fetching ────────────────────────────────────────────
+  // Primary: Helius backend /api/portfolio (richest metadata, server-side key)
+  // Fallback 1: Jupiter Ultra holdings API (fills any gaps Helius missed)
+  // Fallback 2: Jupiter Portfolio Positions API (DeFi positions + any wallet tokens)
+  // Fallback 3: Raw RPC getTokenAccountsByOwner (last resort if all above fail)
   // All sections are individually try/caught — one failure never crashes the rest.
   const fetchPortfolioData = async (walletAddress) => {
     if (!walletAddress) return null;
@@ -3893,8 +3895,93 @@ function JupChatInner() {
 
     const SOL_MINT = "So11111111111111111111111111111111111111112";
 
-    // ── 1. Jupiter Portfolio Positions API (primary — all-in-one) ─────────────
-    // Returns wallet balances + DeFi positions (Earn, Lock, Perps, LP, DCA, etc.)
+    // ── 1. Helius backend /api/portfolio — PRIMARY SPL source ─────────────────
+    // Server-side Helius key gives richest metadata (symbols, logos) for all tokens
+    // including memecoins and unlisted SPL. This is the authoritative token list.
+    try {
+      const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
+      if (!r.ok) throw new Error(`Helius backend ${r.status}`);
+      const d = await r.json();
+      if (d && !d.error) {
+        const splTokens = d?.tokens || [];
+        results.walletBalances = {};
+        results.mintMap = {};
+        results.logoMap = { ...TOKEN_LOGO_URLS };
+        // SOL balance
+        if (d.nativeBalance != null) {
+          results.walletBalances["SOL"] = d.nativeBalance / 1e9;
+          results.mintMap["SOL"] = SOL_MINT;
+          results.logoMap["SOL"] = TOKEN_LOGO_URLS["SOL"] || "";
+        }
+        for (const t of splTokens) {
+          if (!t.mint || t.amount <= 0) continue;
+          const sym = t.symbol || t.mint.slice(0, 6);
+          results.walletBalances[sym] = t.amount;
+          results.mintMap[sym] = t.mint;
+          if (t.logoURI) results.logoMap[sym] = t.logoURI;
+        }
+        if (Object.keys(results.walletBalances).length > 0) {
+          setPortfolio({ ...results.walletBalances });
+        }
+        console.log("[ChatFi Portfolio] Helius primary — tokens:", Object.keys(results.walletBalances).length);
+      }
+    } catch (e) {
+      console.warn("[ChatFi Portfolio] Helius primary failed:", e?.message);
+    }
+
+    // ── 2. Jupiter Ultra holdings — Fallback 1 (fills gaps Helius missed) ───────
+    // Only runs if Helius returned 0 SPL tokens or failed entirely.
+    const splCountAfterHelius = Object.keys(results.walletBalances || {}).filter(k => k !== "SOL").length;
+    if (splCountAfterHelius === 0) {
+      try {
+        const apis = [
+          `https://api.jup.ag/ultra/v1/holdings/${walletAddress}`,
+          `https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`,
+        ];
+        let holdingsData = null;
+        for (const url of apis) {
+          try {
+            const r = await fetch(url, { signal: safeTimeout(10000) });
+            if (r.ok) { const d = await r.json(); if (d && !d.error) { holdingsData = d; break; } }
+          } catch {}
+        }
+        if (holdingsData) {
+          if (!results.walletBalances) results.walletBalances = {};
+          if (!results.mintMap) results.mintMap = {};
+          if (!results.logoMap) results.logoMap = { ...TOKEN_LOGO_URLS };
+
+          const solAmt = holdingsData.uiAmount ??
+            (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : null);
+          if (solAmt != null && solAmt >= 0) {
+            results.walletBalances["SOL"] = solAmt;
+            results.mintMap["SOL"] = SOL_MINT;
+            results.logoMap["SOL"] = TOKEN_LOGO_URLS["SOL"] || results.logoMap["SOL"] || "";
+          }
+
+          const tb = holdingsData.tokenBalances || holdingsData.tokens || {};
+          for (const [mint, data] of Object.entries(tb)) {
+            if (mint === SOL_MINT) continue;
+            const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null
+              ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
+            if (uiAmt <= 0) continue;
+            const sym = data?.symbol || mint.slice(0, 4) + "…" + mint.slice(-4);
+            if (!results.walletBalances[sym]) {
+              results.walletBalances[sym] = uiAmt;
+              results.mintMap[sym] = mint;
+              results.logoMap[sym] = data?.logoURI || `https://img.jup.ag/tokens/${mint}`;
+            }
+          }
+          setPortfolio({ ...results.walletBalances });
+          console.log("[ChatFi Portfolio] Ultra fallback — tokens:", Object.keys(results.walletBalances).length);
+        }
+      } catch (e) {
+        console.warn("[ChatFi Portfolio] Ultra holdings fallback failed:", e?.message);
+      }
+    }
+
+    // ── 3. Jupiter Portfolio Positions API — Fallback 2 (DeFi positions + balances) ──
+    // Always runs for DeFi data (Earn, Lock, Perps, LP). Also fills wallet balances
+    // if both Helius and Ultra failed.
     try {
       const portRaw = await fetch(
         `https://api.jup.ag/portfolio/v1/positions/${walletAddress}`,
@@ -3909,46 +3996,46 @@ function JupChatInner() {
 
         const tInfo = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
 
-        // ── Build wallet balances from Wallet element ──
-        const walletEls = results.portfolioElements.filter(
-          el => (el.label || "").toLowerCase() === "wallet"
-        );
-        const balances = {};
-        const mintMap  = {};
-        const logoMap  = { ...TOKEN_LOGO_URLS };
+        // Only fill wallet balances from Portfolio API if Helius + Ultra both failed
+        const splCountNow = Object.keys(results.walletBalances || {}).filter(k => k !== "SOL").length;
+        if (splCountNow === 0) {
+          const walletEls = results.portfolioElements.filter(
+            el => (el.label || "").toLowerCase() === "wallet"
+          );
+          const balances = {};
+          const mintMap  = {};
+          const logoMap  = { ...TOKEN_LOGO_URLS };
 
-        for (const el of walletEls) {
-          const assets = el.data?.assets || el.data?.positions || [];
-          for (const asset of assets) {
-            const mint     = asset.data?.address || asset.mint || asset.address || "";
-            const info     = mint ? (tInfo[mint] || {}) : {};
-            const sym      = info.symbol || asset.symbol || asset.name
-                           || (mint ? mint.slice(0,4) + "…" + mint.slice(-4) : "?");
-            const uiAmt    = parseFloat(asset.data?.amount ?? asset.balance ?? asset.amount ?? 0);
-            const logo     = info.logoURI || asset.logoURI || (mint ? `https://img.jup.ag/tokens/${mint}` : "");
-            if (uiAmt > 0 || mint === SOL_MINT) {
-              balances[sym] = uiAmt;
-              if (mint) mintMap[sym] = mint;
-              if (logo) logoMap[sym] = logo;
+          for (const el of walletEls) {
+            const assets = el.data?.assets || el.data?.positions || [];
+            for (const asset of assets) {
+              const mint  = asset.data?.address || asset.mint || asset.address || "";
+              const info  = mint ? (tInfo[mint] || {}) : {};
+              const sym   = info.symbol || asset.symbol || asset.name
+                          || (mint ? mint.slice(0, 4) + "…" + mint.slice(-4) : "?");
+              const uiAmt = parseFloat(asset.data?.amount ?? asset.balance ?? asset.amount ?? 0);
+              const logo  = info.logoURI || asset.logoURI || (mint ? `https://img.jup.ag/tokens/${mint}` : "");
+              if (uiAmt > 0 || mint === SOL_MINT) {
+                balances[sym] = uiAmt;
+                if (mint) mintMap[sym] = mint;
+                if (logo) logoMap[sym] = logo;
+              }
             }
+          }
+          if (balances["SOL"] == null && portRes.nativeBalance != null) {
+            balances["SOL"] = parseFloat(portRes.nativeBalance) / 1e9;
+            mintMap["SOL"]  = SOL_MINT;
+            logoMap["SOL"]  = TOKEN_LOGO_URLS["SOL"];
+          }
+          if (Object.keys(balances).length > 0) {
+            results.walletBalances = { ...(results.walletBalances || {}), ...balances };
+            results.mintMap = { ...(results.mintMap || {}), ...mintMap };
+            results.logoMap = { ...(results.logoMap || {}), ...logoMap };
+            setPortfolio({ ...results.walletBalances });
           }
         }
 
-        // SOL from top-level amount field if not in assets
-        if (balances["SOL"] == null && portRes.nativeBalance != null) {
-          balances["SOL"] = parseFloat(portRes.nativeBalance) / 1e9;
-          mintMap["SOL"]  = SOL_MINT;
-          logoMap["SOL"]  = TOKEN_LOGO_URLS["SOL"];
-        }
-
-        if (Object.keys(balances).length > 0) {
-          results.walletBalances = balances;
-          results.mintMap = mintMap;
-          results.logoMap = logoMap;
-          setPortfolio(balances);
-        }
-
-        // ── Classify non-wallet DeFi elements ──
+        // ── Classify DeFi elements (always parsed regardless of wallet balance source) ──
         const allDefi = results.portfolioElements.filter(el => {
           const label = (el.label || "").toLowerCase();
           return label !== "wallet" && parseFloat(el.value || 0) > 0;
@@ -4064,91 +4151,11 @@ function JupChatInner() {
         }
       }
     } catch (e) {
-      console.warn("[ChatFi Portfolio] Jupiter Portfolio API failed:", e?.message);
-    }
-
-    // ── 2. Ultra holdings — ALWAYS run and MERGE (not a fallback) ───────────────
-    // The Jupiter Portfolio API often returns only SOL or misses SPL tokens
-    // entirely (e.g. memecoins, unknown tokens). We always fetch Ultra holdings
-    // and RPC SPL in parallel and merge them ON TOP of whatever Portfolio returned.
-    // Portfolio data wins for tokens it already has; Ultra/RPC fill in the rest.
-    try {
-      const apis = [
-        `https://api.jup.ag/ultra/v1/holdings/${walletAddress}`,
-        `https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`,
-      ];
-      let holdingsData = null;
-      for (const url of apis) {
-        try {
-          const r = await fetch(url, { signal: safeTimeout(10000) });
-          if (r.ok) { const d = await r.json(); if (d && !d.error) { holdingsData = d; break; } }
-        } catch {}
-      }
-      if (holdingsData) {
-        // Ensure we have a balances/mintMap/logoMap to merge into
-        if (!results.walletBalances) results.walletBalances = {};
-        if (!results.mintMap) results.mintMap = {};
-        if (!results.logoMap) results.logoMap = { ...TOKEN_LOGO_URLS };
-
-        // SOL — prefer RPC value (more accurate than Portfolio API)
-        const solAmt = holdingsData.uiAmount ??
-          (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : null);
-        if (solAmt != null && solAmt >= 0) {
-          results.walletBalances["SOL"] = solAmt;
-          results.mintMap["SOL"] = SOL_MINT;
-          results.logoMap["SOL"] = TOKEN_LOGO_URLS["SOL"] || results.logoMap["SOL"] || "";
-        }
-
-        // SPL tokens — add any that Portfolio API didn't already include
-        const tb = holdingsData.tokenBalances || holdingsData.tokens || {};
-        for (const [mint, data] of Object.entries(tb)) {
-          if (mint === SOL_MINT) continue;
-          const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null
-            ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
-          if (uiAmt <= 0) continue;
-          const sym = data?.symbol || mint.slice(0,4) + "…" + mint.slice(-4);
-          // Don't overwrite a symbol that Portfolio API already resolved
-          if (!results.walletBalances[sym]) {
-            results.walletBalances[sym] = uiAmt;
-            results.mintMap[sym] = mint;
-            results.logoMap[sym] = data?.logoURI || `https://img.jup.ag/tokens/${mint}`;
-          }
-        }
-        setPortfolio({ ...results.walletBalances });
-      }
-    } catch (e) {
-      console.warn("[ChatFi Portfolio] Ultra holdings merge failed:", e?.message);
-    }
-
-    // ── 3. Helius backend — always run and merge SPL tokens ──────────────────
-    // /api/portfolio uses a server-side Helius key which can resolve token metadata
-    // for memecoins and unlisted tokens that Ultra may return with no symbol.
-    try {
-      const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
-      if (r.ok) {
-        const d = await r.json();
-        const splTokens = d?.tokens || [];
-        if (!results.walletBalances) results.walletBalances = {};
-        if (!results.mintMap) results.mintMap = {};
-        if (!results.logoMap) results.logoMap = { ...TOKEN_LOGO_URLS };
-        for (const t of splTokens) {
-          if (!t.mint || t.amount <= 0) continue;
-          const sym = t.symbol || t.mint.slice(0,6);
-          // Helius wins on symbol resolution — it has richer metadata
-          results.walletBalances[sym] = t.amount;
-          results.mintMap[sym] = t.mint;
-          if (t.logoURI) results.logoMap[sym] = t.logoURI;
-        }
-        if (Object.keys(results.walletBalances).length > 0) {
-          setPortfolio({ ...results.walletBalances });
-        }
-      }
-    } catch (e) {
-      console.warn("[ChatFi Portfolio] Helius backend merge failed:", e?.message);
+      console.warn("[ChatFi Portfolio] Jupiter Portfolio API fallback failed:", e?.message);
     }
 
     // ── 4. RPC getTokenAccountsByOwner — last-resort SPL sweep ───────────────
-    // Only runs if we still have no SPL tokens at all (covers rate-limited wallets).
+    // Only runs if we still have no SPL tokens after all 3 sources above failed.
     const splCount = Object.keys(results.walletBalances || {}).filter(k => k !== "SOL").length;
     if (splCount === 0) {
       try {
