@@ -1098,6 +1098,7 @@ function TrendingTicker({ onTokenClick }) {
     if (p >= 1000) return `$${p.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
     if (p >= 1)    return `$${p.toFixed(2)}`;
     if (p >= 0.01) return `$${p.toFixed(4)}`;
+    if (p >= 0.000001) return `$${p.toFixed(8).replace(/\.?0+$/, "")}`;
     return `$${p.toExponential(2)}`;
   };
 
@@ -12929,7 +12930,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                             : sym;
                           const displaySub = isTruncatedMint
                             ? (tokenName ? sym : null) // show truncated mint as sub if name exists
-                            : tokenName || (tokenPrice != null ? `$${tokenPrice < 0.0001 ? tokenPrice.toExponential(2) : tokenPrice < 1 ? tokenPrice.toFixed(4) : tokenPrice.toFixed(2)}` : null);
+                            : tokenName || (tokenPrice != null ? `$${tokenPrice < 0.000001 ? tokenPrice.toExponential(2) : tokenPrice < 0.0001 ? tokenPrice.toFixed(8).replace(/\.?0+$/, "") : tokenPrice < 1 ? tokenPrice.toFixed(6).replace(/\.?0+$/, "") : tokenPrice.toFixed(2)}` : null);
                           const fallbackInitials = (tokenName || sym).slice(0, 2).toUpperCase();
                           return (
                             <div key={sym} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", background:T.bg, border:"1px solid " + T.border, borderRadius:10 }}>
