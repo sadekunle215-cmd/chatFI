@@ -2501,7 +2501,18 @@ function JupChatWithLanding() {
     try { sessionStorage.setItem("chatfi-entered", "1"); } catch {}
     setShowLanding(false);
   }} />;
-  return <JupChatInner />;
+  return (
+    <ErrorBoundary fallback={
+      <div style={{ minHeight:"100vh", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", background:"#0d1117", color:"#c8f255", fontFamily:"monospace", gap:16, padding:24 }}>
+        <div style={{ fontSize:28 }}>⚠️</div>
+        <div style={{ fontSize:16, fontWeight:700 }}>Something went wrong</div>
+        <div style={{ fontSize:12, color:"#6b7280", textAlign:"center", maxWidth:320 }}>An unexpected error occurred. Please refresh the page to continue.</div>
+        <button onClick={() => window.location.reload()} style={{ marginTop:8, padding:"10px 24px", background:"#c8f255", color:"#0d1117", border:"none", borderRadius:8, fontWeight:700, fontSize:13, cursor:"pointer" }}>Refresh</button>
+      </div>
+    }>
+      <JupChatInner />
+    </ErrorBoundary>
+  );
 }
 
 function JupChatInner() {
@@ -12647,6 +12658,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 Close
               </button>
             </div>
+            </ErrorBoundary>
           )}
 
           {/* ── Yield Rotator Panel — standalone better APY finder ─────── */}
@@ -12968,6 +12980,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Portfolio panel ───────────────────────────────────────── */}
           {showPortfolio && (
+            <ErrorBoundary fallback={
+              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, padding:20 }}>
+                <div style={{ fontSize:13, color:T.text3, marginBottom:12 }}>Portfolio failed to render. Please try again.</div>
+                <button onClick={() => { setShowPortfolio(false); setPortfolioData(null); setPortfolioLoading(false); }} style={{ padding:"8px 16px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:12, cursor:"pointer" }}>Close</button>
+              </div>
+            }>
             <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:16, overflow:"hidden" }}>
               {/* Header */}
               <div style={{ padding:"16px 16px 12px", borderBottom:`1px solid ${T.border}`, background:`linear-gradient(135deg, #161e27 0%, #1a2535 100%)` }}>
