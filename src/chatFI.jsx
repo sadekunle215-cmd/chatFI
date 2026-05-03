@@ -6394,7 +6394,14 @@ function JupChatInner() {
     const colRaw  = Math.floor(parseFloat(colAmount)    * Math.pow(10, colDecimals  ?? 9)).toString();
     const debtRaw = Math.floor(parseFloat(borrowAmount) * Math.pow(10, debtDecimals ?? 6)).toString();
 
-    if (!checkBalance(collateral, parseFloat(colAmount), "collateral")) return;
+    // Balance check using the actual collateral token from the selected vault
+    const colSym = (collateral || "SOL").toUpperCase();
+    const colBal = portfolio[colSym] ?? 0;
+    if (colBal < parseFloat(colAmount)) {
+      push("ai", `Insufficient balance. You have **${colBal.toFixed(4)} ${colSym}** but need **${colAmount} ${colSym}**.`);
+      return;
+    }
+
     setBorrowStatus("signing");
     push("ai", `Depositing **${colAmount} ${collateral}** as collateral and borrowing **${borrowAmount} ${debt}**…`);
 
@@ -12590,31 +12597,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               </div>
             );
           })()}
-
-          {/* ── Borrow panel ─────────────────────────────────────────────── */}
-          {showBorrow && (
-            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-                <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Borrow from Jupiter Lend</div>
-                <span style={{ fontSize:10, padding:"2px 7px", background:T.tealBg, border:`1px solid ${T.teal}33`, borderRadius:10, color:T.teal, fontWeight:600 }}>COMING SOON</span>
-              </div>
-              <div style={{ textAlign:"center", padding:"24px 0 16px" }}>
-                <div style={{ fontSize:32, marginBottom:10 }}>🚧</div>
-                <div style={{ fontSize:14, fontWeight:700, color:T.text1, marginBottom:6 }}>Not available on ChatFi yet</div>
-                <div style={{ fontSize:12, color:T.text3, lineHeight:1.7, marginBottom:18 }}>
-                  Borrow is currently in integration. For now, you can deposit collateral and borrow directly on Jupiter Lend.
-                </div>
-                <a href="https://jup.ag/lend" target="_blank" rel="noreferrer"
-                  style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"10px 20px", background:T.teal, borderRadius:10, color:"#fff", fontSize:13, fontWeight:700, textDecoration:"none" }}>
-                  Open Jupiter Lend ↗
-                </a>
-              </div>
-              <button onClick={() => setShowBorrow(false)}
-                style={{ marginTop:8, width:"100%", padding:"8px", background:"none", border:`1px solid ${T.border}`, borderRadius:8, color:T.text2, fontSize:13, cursor:"pointer" }}>
-                Close
-              </button>
-            </div>
-          )}
 
           {/* ── Send panel ────────────────────────────────────────────── */}
           {showSend && (
