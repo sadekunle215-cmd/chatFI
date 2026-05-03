@@ -13221,23 +13221,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     );
                   })()}
 
-                  {/* ── Yield Rotator — better APY migration banners ── */}
-                  {walletFull && (
-                    <ErrorBoundary fallback={null}>
-                      <YieldRotatorPlugin
-                        walletFull={walletFull}
-                        earnPositions={yieldVaultPositions.length ? yieldVaultPositions : (portfolioData?._earnFromPortfolio || portfolioData?.earnPositions || [])}
-                        jupFetch={jupFetch}
-                        getActiveProvider={getActiveProvider}
-                        push={push}
-                        T={T}
-                        isMobile={isMobile}
-                        onMigrationDone={() => { try { fetchPortfolioData(walletFull); } catch(e) { console.warn("onMigrationDone:", e); } }}
-                        onDirectMigrateRef={directMigrateRef}
-                      />
-                    </ErrorBoundary>
-                  )}
-
                   {/* ── Earn Positions ── */}
                   {(() => {
                     // Prefer live yieldVaultPositions (from fetchEarnPositionsForVault) over
@@ -13550,6 +13533,25 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 </button>
               </div>
             </div>
+          )}
+
+          {/* ── Yield Rotator — shown below portfolio as its own block ── */}
+          {showPortfolio && !portfolioLoading && portfolioData && walletFull && (
+            <ErrorBoundary fallback={null}>
+              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px" }}>
+                <YieldRotatorPlugin
+                  walletFull={walletFull}
+                  earnPositions={yieldVaultPositions.length ? yieldVaultPositions : (portfolioData?._earnFromPortfolio || portfolioData?.earnPositions || [])}
+                  jupFetch={jupFetch}
+                  getActiveProvider={getActiveProvider}
+                  push={push}
+                  T={T}
+                  isMobile={isMobile}
+                  onMigrationDone={() => { try { fetchPortfolioData(walletFull); } catch(e) { console.warn("onMigrationDone:", e); } }}
+                  onDirectMigrateRef={directMigrateRef}
+                />
+              </div>
+            </ErrorBoundary>
           )}
 
           {/* ── Prediction Market CLI / Odds Scanner panel ───────────────────── */}
