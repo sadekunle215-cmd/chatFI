@@ -3915,7 +3915,9 @@ function JupChatInner() {
           if (mint === SOL_MINT) continue;
           const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : (typeof data === "number" ? data : 0));
           if (!uiAmt || uiAmt <= 0) continue;
-          allMints.push({ mint, uiAmt, decimals: data?.decimals ?? 6 });
+          // Carry any symbol already known from heliusTokens so resolveOneMint can skip API calls
+          const knownSym = data?.symbol || MINT_TO_SYM[mint] || null;
+          allMints.push({ mint, uiAmt, decimals: data?.decimals ?? 6, knownSym });
         }
 
         console.log(`[ChatFi Portfolio] holdings SOL=${balances.SOL} SPL mints=${allMints.length}`);
@@ -3930,11 +3932,11 @@ function JupChatInner() {
           return { symbol, name, logoURI, decimals };
         };
 
-        const resolveOneMint = async (mint) => {
+        const resolveOneMint = async (mint, knownSym) => {
           const cached = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0];
           if (cached) return { mint, meta: { symbol: cached, name: cached, logoURI: TOKEN_LOGO_URLS[cached] || `https://img.jup.ag/tokens/${mint}`, decimals: 6 } };
-          const knownSym = MINT_TO_SYM[mint] || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0];
-          if (knownSym) return { mint, meta: { symbol: knownSym, name: knownSym, logoURI: TOKEN_LOGO_URLS[knownSym] || `https://img.jup.ag/tokens/${mint}`, decimals: 6 } };
+          const staticSym = MINT_TO_SYM[mint] || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0] || knownSym;
+          if (staticSym) return { mint, meta: { symbol: staticSym, name: staticSym, logoURI: TOKEN_LOGO_URLS[staticSym] || `https://img.jup.ag/tokens/${mint}`, decimals: 6 } };
           try { const r = await fetch(`https://tokens.jup.ag/token/${mint}`, { signal: safeTimeout(4000) }); if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; } } catch {}
           try { const r = await fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`, { signal: safeTimeout(4000) }); if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; } } catch {}
           try { const r = await fetch(`https://api.solana.fm/v0/tokens/${mint}`, { signal: safeTimeout(4000) }); if (r.ok) { const d = await r.json(); const t = d?.tokenList || d?.result || d; if (t?.symbol || t?.name) return { mint, meta: normMeta(mint, { symbol: t.symbol, name: t.name, logoURI: t.imageUrl || t.image || t.logo, decimals: t.decimals ?? 6 }) }; } } catch {}
@@ -3943,7 +3945,7 @@ function JupChatInner() {
         };
 
         if (allMints.length > 0) {
-          const resolveResults = await Promise.allSettled(allMints.slice(0, 50).map(({ mint }) => resolveOneMint(mint)));
+          const resolveResults = await Promise.allSettled(allMints.slice(0, 50).map(({ mint, knownSym }) => resolveOneMint(mint, knownSym)));
           const tokenListMap = {};
           for (const r of resolveResults) {
             if (r.status === "fulfilled" && r.value?.meta) tokenListMap[r.value.mint] = r.value.meta;
@@ -4308,11 +4310,21 @@ function JupChatInner() {
     } catch {}
 
     // ── 11. Locks (token vesting) ─────────────────────────────────────────────
-    // Try Jupiter lock API directly first (public endpoint)
+    // Use jupFetch (sends API key header) and query both wallet + recipient so we
+    // catch locks where the user is the creator OR the beneficiary.
     try {
-      const lockDirect = await fetch(`${JUP_LOCK_API}/locks?wallet=${walletAddress}`).then(r => r.json());
-      const locks = Array.isArray(lockDirect) ? lockDirect
-        : lockDirect?.locks || lockDirect?.accounts || lockDirect?.data || [];
+      const [lockByWallet, lockByRecipient] = await Promise.all([
+        jupFetch(`${JUP_LOCK_API}/locks?wallet=${walletAddress}`).catch(() => null),
+        jupFetch(`${JUP_LOCK_API}/locks?recipient=${walletAddress}`).catch(() => null),
+      ]);
+      const normLockArr = (d) => Array.isArray(d) ? d : (d?.locks || d?.accounts || d?.data || []);
+      const seen = new Set();
+      const locks = [...normLockArr(lockByWallet), ...normLockArr(lockByRecipient)].filter(lk => {
+        const id = lk.pubkey || lk.id || lk.address || JSON.stringify(lk);
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
       if (locks.length > 0) {
         const KNOWN_MINT_SYMS = {
           "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
@@ -12905,12 +12917,15 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
                   {/* ── Earn Positions ── */}
                   {(() => {
-                    const earnPos = (portfolioData.earnPositions||[]).filter(e => {
-                      const ua  = parseFloat(e.underlyingBalance || e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
-                      const sh  = parseFloat(e.shares || 0);
-                      const val = parseFloat(e.value || 0);
-                      return ua > 0 || sh > 0 || val > 0;
-                    });
+                    // Prefer live yieldVaultPositions (from fetchEarnPositionsForVault) over
+                    // portfolioData.earnPositions which may be stale or empty from the portfolio API.
+                    const rawEarnSrc = yieldVaultPositions.length
+                      ? yieldVaultPositions
+                      : (portfolioData._earnFromPortfolio || portfolioData.earnPositions || []);
+                    const earnPos = rawEarnSrc.filter(e =>
+                      e.hasActivePosition !== false &&
+                      (parseFloat(e.amount ?? 0) > 0 || parseFloat(e.shares ?? 0) > 1000)
+                    );
                     return earnPos.length > 0 ? (
                       <div>
                         <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:10 }}>
@@ -12922,12 +12937,15 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           {earnPos.slice(0,5).map((e, i) => {
                             const sym = e.sym || e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
                             const dec = e.asset?.decimals ?? e.decimals ?? 6;
-                            // Use e.amount (USD-normalised) first, then e.value, then underlyingAssets
-                            // Raw share counts are always > 10000 — treat those as invalid
-                            const rawAmt = parseFloat(e.amount ?? e.value ?? e.underlyingAssets ?? 0);
-                            const ua = rawAmt > 100000 ? 0 : rawAmt; // cap at $100k — anything above is raw shares
-                            const amt = ua > 0 ? `$${ua.toFixed(ua < 1 ? 4 : 2)}`
-                                      : `$0.00`;
+                            // e.amount from yieldVaultPositions is already human-readable token amount
+                            // (divided by decimals in fetchEarnPositionsForVault). Multiply by price for USD.
+                            const tokenAmt = parseFloat(e.amount ?? 0);
+                            const priceKey = sym.toUpperCase();
+                            const price = portfolioData.prices?.[priceKey] ?? (["USDC","USDT","JUPUSD"].includes(priceKey) ? 1 : 0);
+                            const usdVal = tokenAmt * price;
+                            const amt = usdVal > 0
+                              ? `$${usdVal.toFixed(usdVal < 1 ? 4 : 2)}`
+                              : tokenAmt > 0 ? `${tokenAmt.toFixed(tokenAmt < 1 ? 6 : 4)} ${sym}` : `$0.00`;
                             const label = e.label ? ` · ${e.label}` : "";
                             return (
                               <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
