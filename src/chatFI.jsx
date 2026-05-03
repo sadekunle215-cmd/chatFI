@@ -14265,6 +14265,154 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             </div>
           )}
 
+          {/* ── Jupiter Borrow panel ─────────────────────────────────────── */}
+          {showBorrow && (() => {
+            const vault = MULTIPLY_VAULTS.find(v => v.vaultId === borrowCfg.vaultId) || MULTIPLY_VAULTS[0];
+            const ltvNum   = parseFloat(vault.ltv);
+            const colAmt   = parseFloat(borrowCfg.colAmount  || 0);
+            const debtAmt  = parseFloat(borrowCfg.borrowAmount || 0);
+            const maxBorrow = colAmt * (ltvNum / 100);
+            const riskPct  = maxBorrow > 0 ? Math.min(100, Math.round((debtAmt / maxBorrow) * 100)) : 0;
+            const riskColor = riskPct > 80 ? T.red : riskPct > 60 ? "#f59e0b" : T.green;
+            const colBal   = portfolio[(vault.collateral || "SOL").toUpperCase()] ?? 0;
+            const isSigning = borrowStatus === "signing";
+            return (
+              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
+
+                {/* Header */}
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14 }}>
+                  <div>
+                    <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:500, color:T.text1 }}>Jupiter Borrow</div>
+                    <div style={{ fontSize:11, color:T.text3, marginTop:2 }}>Deposit collateral · borrow against it · isolated vaults</div>
+                  </div>
+                  <button onClick={() => setShowBorrow(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:18, cursor:"pointer", lineHeight:1 }}>✕</button>
+                </div>
+
+                {/* Vault selector */}
+                <div style={{ marginBottom:14 }}>
+                  <div style={{ fontSize:11, color:T.text3, marginBottom:6 }}>Select vault</div>
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                    {MULTIPLY_VAULTS.map(v => (
+                      <button key={v.id}
+                        onClick={() => setBorrowCfg(c => ({ ...c, vaultId:v.vaultId, collateral:v.collateral, debt:v.debt, colDecimals:v.colDecimals, debtDecimals:v.debtDecimals, colAmount:"", borrowAmount:"" }))}
+                        style={{ padding:"5px 11px", fontSize:11, borderRadius:8, cursor:"pointer", fontWeight:600,
+                          background: borrowCfg.vaultId === v.vaultId ? T.accentBg : T.bg,
+                          border: `1px solid ${borrowCfg.vaultId === v.vaultId ? T.accent : T.border}`,
+                          color: borrowCfg.vaultId === v.vaultId ? T.accent : T.text2 }}>
+                        {v.collateral}/{v.debt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Vault info chips */}
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:14 }}>
+                  {[["Max LTV", vault.ltv], ["Max Leverage", vault.maxLev], ["Risk", vault.risk]].map(([k, val]) => (
+                    <span key={k} style={{ fontSize:11, padding:"3px 9px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, color:T.text3 }}>
+                      {k}: <strong style={{ color:T.text1 }}>{val}</strong>
+                    </span>
+                  ))}
+                </div>
+
+                {/* Collateral input */}
+                <div style={{ marginBottom:10 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:T.text3, marginBottom:4 }}>
+                    <span>Collateral ({vault.collateral})</span>
+                    {colBal > 0 && (
+                      <button onClick={() => setBorrowCfg(c => ({ ...c, colAmount: (colBal * 0.99).toFixed(6).replace(/\.?0+$/,"") }))}
+                        style={{ background:"none", border:"none", color:T.accent, fontSize:11, cursor:"pointer", padding:0 }}>
+                        Max: {colBal.toFixed(4)}
+                      </button>
+                    )}
+                  </div>
+                  {colBal > 0 && (
+                    <div style={{ display:"flex", gap:6, marginBottom:6 }}>
+                      {[["25%",0.25],["50%",0.5],["75%",0.75],["Max",0.99]].map(([lbl,frac]) => (
+                        <button key={lbl}
+                          onClick={() => setBorrowCfg(c => ({ ...c, colAmount: (colBal*frac).toFixed(6).replace(/\.?0+$/,"") }))}
+                          style={{ flex:1, padding:"4px 0", background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, color:T.text2, fontSize:11, cursor:"pointer" }}>
+                          {lbl}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <input type="number" min="0" placeholder="0" value={borrowCfg.colAmount}
+                    onChange={e => setBorrowCfg(c => ({ ...c, colAmount: e.target.value }))}
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  />
+                </div>
+
+                {/* Borrow amount input */}
+                <div style={{ marginBottom:14 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:T.text3, marginBottom:4 }}>
+                    <span>Borrow ({vault.debt})</span>
+                    {colAmt > 0 && (
+                      <button onClick={() => setBorrowCfg(c => ({ ...c, borrowAmount: (maxBorrow * 0.8).toFixed(4).replace(/\.?0+$/,"") }))}
+                        style={{ background:"none", border:"none", color:T.accent, fontSize:11, cursor:"pointer", padding:0 }}>
+                        Safe (80% LTV): {(maxBorrow * 0.8).toFixed(4)}
+                      </button>
+                    )}
+                  </div>
+                  <input type="number" min="0" placeholder="0" value={borrowCfg.borrowAmount}
+                    onChange={e => setBorrowCfg(c => ({ ...c, borrowAmount: e.target.value }))}
+                    style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                  />
+                </div>
+
+                {/* Health / LTV meter */}
+                {colAmt > 0 && debtAmt > 0 && (
+                  <div style={{ marginBottom:14, padding:"10px 12px", background:T.bg, border:`1px solid ${riskPct > 80 ? T.redBd : T.border}`, borderRadius:8 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:T.text3, marginBottom:5 }}>
+                      <span>Position LTV</span>
+                      <span style={{ color:riskColor, fontWeight:700 }}>{riskPct}% / {vault.ltv} max</span>
+                    </div>
+                    <div style={{ height:5, background:T.border, borderRadius:5, overflow:"hidden" }}>
+                      <div style={{ height:"100%", width:`${riskPct}%`, background:riskColor, borderRadius:5, transition:"width 0.3s" }}/>
+                    </div>
+                    {riskPct > 80 && <div style={{ fontSize:11, color:T.red, marginTop:6 }}>⚠ High LTV — reduce borrow amount to lower liquidation risk</div>}
+                    {riskPct > 0 && riskPct <= 80 && <div style={{ fontSize:11, color:T.green, marginTop:6 }}>✓ Healthy position</div>}
+                  </div>
+                )}
+
+                {/* Summary */}
+                {colAmt > 0 && debtAmt > 0 && (
+                  <div style={{ padding:"10px 12px", background:T.accentBg, border:`1px solid ${T.accent}22`, borderRadius:8, marginBottom:14, fontSize:12, color:T.text3 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                      <span>Depositing</span>
+                      <strong style={{ color:T.text1 }}>{borrowCfg.colAmount} {vault.collateral}</strong>
+                    </div>
+                    <div style={{ display:"flex", justifyContent:"space-between" }}>
+                      <span>Borrowing</span>
+                      <strong style={{ color:T.accent }}>{borrowCfg.borrowAmount} {vault.debt}</strong>
+                    </div>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                <div style={{ display:"flex", gap:8 }}>
+                  <button onClick={doBorrow}
+                    disabled={!walletFull || !borrowCfg.colAmount || !borrowCfg.borrowAmount || parseFloat(borrowCfg.colAmount)<=0 || parseFloat(borrowCfg.borrowAmount)<=0 || isSigning}
+                    className="hov-btn"
+                    style={{ flex:1, padding:"10px", background:(!walletFull||!borrowCfg.colAmount||!borrowCfg.borrowAmount||isSigning)?T.border:T.accent, border:"none", borderRadius:8, color:(!walletFull||!borrowCfg.colAmount||!borrowCfg.borrowAmount||isSigning)?T.text3:"#0d1117", fontSize:13, fontWeight:700, cursor:isSigning?"default":"pointer" }}>
+                    {isSigning ? "Signing…" : !walletFull ? "Connect wallet" : "Deposit & Borrow"}
+                  </button>
+                  <a href="https://jup.ag/lend/borrow" target="_blank" rel="noreferrer"
+                    style={{ padding:"10px 14px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:8, color:T.accent, fontSize:12, fontWeight:600, textDecoration:"none", display:"flex", alignItems:"center", whiteSpace:"nowrap" }}>
+                    jup.ag ↗
+                  </a>
+                </div>
+
+                {/* Vault description */}
+                <div style={{ marginTop:12, fontSize:11, color:T.text3, lineHeight:1.6 }}>{vault.desc}</div>
+
+                {/* Warning */}
+                <div style={{ marginTop:10, padding:"8px 12px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, fontSize:11, color:T.red }}>
+                  ⚠ Monitor your LTV at <a href="https://jup.ag/lend" target="_blank" rel="noreferrer" style={{ color:T.red, fontWeight:700 }}>jup.ag/lend</a> to avoid liquidation. Closing positions requires the Jupiter UI.
+                </div>
+              </div>
+            );
+          })()}
+
           {/* ── Earn deposit panel ────────────────────────────────────────── */}
           {showEarnDeposit && earnDeposit.vault && (
             <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
