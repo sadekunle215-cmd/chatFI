@@ -12321,6 +12321,38 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             </div>
           )}
 
+          {/* ── Yield Rotator Panel — standalone better APY finder ─────── */}
+          {showEarn && walletFull && (
+            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px" }}>
+              <YieldRotatorPlugin
+                walletFull={walletFull}
+                earnPositions={(() => {
+                  if (yieldVaultPositions.length) return yieldVaultPositions;
+                  if (portfolioData?._earnFromPortfolio?.length) return portfolioData._earnFromPortfolio;
+                  if (portfolioData?.earnPositions?.length) return portfolioData.earnPositions;
+                  // Build positions from earnVaults + earnUserPositions if available
+                  const fromVaults = Object.entries(earnUserPositions || {})
+                    .filter(([, pos]) => pos && parseFloat(pos.amount || 0) > 0)
+                    .map(([sym, pos]) => ({
+                      sym, symbol: sym,
+                      amount: parseFloat(pos.amount || 0),
+                      value: parseFloat(pos.valueUSD || pos.amount || 0),
+                      apy: parseFloat(pos.apy || 0),
+                      mint: pos.mint || "",
+                      planId: pos.planId || pos.poolId || "",
+                    }));
+                  return fromVaults;
+                })()}
+                jupFetch={jupFetch}
+                getActiveProvider={getActiveProvider}
+                push={push}
+                T={T}
+                isMobile={isMobile}
+                onMigrationDone={() => { fetchPortfolio(); fetchEarnPositionsForVault(); }}
+              />
+            </div>
+          )}
+
           {/* ── Borrow panel ─────────────────────────────────────────────── */}
           {showBorrow && (
             <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
