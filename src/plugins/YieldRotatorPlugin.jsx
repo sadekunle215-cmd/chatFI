@@ -167,16 +167,19 @@ export default function YieldRotatorPlugin({
       // Support both raw API shape AND yieldVaultPositions shape { sym, mint, amount, apy, logo, dec }
       // Jupiter uses asset.address (not asset.mint) for the mint field
       const posMint   = pos.mint || pos.asset?.address || pos.asset?.mint || pos.tokenMint || pos.assetMint || "";
-      const posSym    = pos.sym  || pos.asset?.symbol || pos.assetSymbol || pos.symbol || mintToSym(posMint);
+      // Try every possible symbol field — portfolio API uses pos.symbol, yieldVaultPositions uses pos.sym
+      const posSym    = pos.sym || pos.symbol || pos.asset?.symbol || pos.assetSymbol
+                     || pos.token?.symbol || pos.tokenSymbol
+                     || mintToSym(posMint) || "";
 
       // pos.apy from yieldVaultPositions is already stored as a percent number (e.g. 4.15)
-      // via chatFI's fetchEarnVaults parseRate(). Apply toPercent() defensively.
-      const rawApy = pos.apy ?? pos.supplyApy ?? pos.apyPct ?? pos.lendingApy ?? pos.rate ?? 0;
+      // portfolio API uses totalApy/supplyApy. Apply toPercent() defensively.
+      const rawApy = pos.apy ?? pos.totalApy ?? pos.supplyApy ?? pos.apyPct ?? pos.lendingApy ?? pos.rate ?? 0;
       const posApy = toPercent(rawApy);
 
       const posAmt    = parseFloat(
-        pos.amount ?? pos.underlyingBalance ?? pos.underlyingAssets ??
-        pos.depositedAmount ?? pos.value ?? 0
+        pos.amount ?? pos.depositedAmount ?? pos.underlyingBalance ?? pos.underlyingAssets ??
+        pos.depositedUSD ?? pos.value ?? 0
       );
       // Also accept symbol from _fromPortfolio shape
       const resolvedSym = posSym === "Token" || !posSym
@@ -588,7 +591,14 @@ export default function YieldRotatorPlugin({
       {opportunities.map((op, i) => {
         const key     = op.posPoolId || op.posSym + i;
         const isBusy  = migrating === key || migrating === (op.posPoolId || op.posSym);
-        const usdVal  = op.posAmt; // already in display units if coming from portfolio
+        // Normalize posAmt to human-readable units — raw units check
+        // If posAmt > 1e6 it's likely raw units (e.g. 1300000 = 1.3 USDC with 6 decimals)
+        const dec     = KNOWN_DECIMALS[op.posSym] ?? KNOWN_DECIMALS[op.posMint] ?? 6;
+        const posAmtHuman = op.posAmt > 1e6
+          ? op.posAmt / Math.pow(10, dec)
+          : op.posAmt;
+        // Use depositedUSD from position if available, otherwise estimate from amount
+        const usdVal  = op.position?.depositedUSD || op.position?.usdValue || posAmtHuman;
         const amtFmt  = usdVal > 0 ? `$${parseFloat(usdVal).toFixed(2)}` : "";
         const apyDiff = op.apyGap.toFixed(2);
         // Token logos — use img.jup.ag CDN which works for all Solana tokens
