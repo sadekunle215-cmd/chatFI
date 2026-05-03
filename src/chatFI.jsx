@@ -4042,81 +4042,92 @@ function JupChatInner() {
           return s.includes("lock") || s.includes("vest");
         };
 
+        // ── Actual Jupiter Portfolio API shape (confirmed from docs + live response) ──
+        // elements[i].value                  = element-level USD (may be stale/shares)
+        // elements[i].data.assets[j].value   = asset USD value ✓ USE THIS
+        // elements[i].data.assets[j].data.address = mint address
+        // elements[i].data.assets[j].data.amount  = token amount (human-readable)
+        // elements[i].data.assets[j].data.price   = token price USD
+        // portRes.tokenInfo[mint] = { symbol, logoURI, decimals, name }
+
+        // Shared tokenInfo lookup (mint → metadata)
+        const tInfo = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
+
+        const resolveSymFromMint = (mint, fallbackLabel) => {
+          if (mint && tInfo[mint]?.symbol) return tInfo[mint].symbol;
+          // Strip common earn/lock junk from label as last resort
+          return (fallbackLabel || "").replace(/\s*(earn|vault|lend|yield|pool|lock|vest|position)/gi, "").trim() || "?";
+        };
+
         const toEarnPos = (el) => {
           const assets = el.data?.assets || el.data?.positions || [];
-          // tokenInfo is a mint→{symbol,logoURI,decimals} map from the portfolio API response
-          const tInfo = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
-
-          // Resolve best symbol for an element or asset:
-          // 1. Use asset.symbol from API  2. Look up mint in tokenInfo  3. Strip junk from el.name/label
-          const resolveSym = (a, fallbackLabel) => {
-            const raw = a?.symbol || a?.name || "";
-            if (raw && raw.toLowerCase() !== "token") return raw.replace(/^jl/i, "").replace(/\s*(earn|vault|lend)/gi, "").trim();
-            const mint = a?.mint || a?.tokenMint || a?.assetMint || "";
-            if (mint && tInfo[mint]?.symbol) return tInfo[mint].symbol;
-            const fromLabel = (fallbackLabel || "").replace(/\s*(earn|vault|lend|yield|pool|position)/gi, "").trim();
-            return fromLabel || "?";
-          };
-
-          // USD value: ONLY use explicit usdValue/valueUsd fields — NEVER el.value which is
-          // raw jlToken shares (causes the $308k / $40M garbage values seen in prod)
-          const getUSD = (a) => {
-            const v = a?.usdValue ?? a?.valueUsd ?? a?.priceUsd ?? a?.usdAmount ?? null;
-            return (v != null && parseFloat(v) > 0) ? parseFloat(v) : 0;
-          };
 
           if (assets.length === 0) {
-            const usd = getUSD(el.data) || getUSD(el);
-            const sym = resolveSym(el.data, el.name || el.label);
+            // No assets array — use element-level value only if it looks like USD (< 1M)
+            const usd = parseFloat(el.value ?? 0);
+            const safeUsd = usd > 0 && usd < 1_000_000 ? usd : 0;
+            const sym = resolveSymFromMint("", el.name || el.label);
             return [{ _fromPortfolio: true, label: el.label,
-              sym, symbol: sym,
-              amount: usd, value: usd, underlyingAssets: usd,
+              sym, symbol: sym, mint: "", logoURI: "",
+              amount: safeUsd, value: safeUsd, underlyingAssets: safeUsd,
               apy: parseFloat(el.data?.apy || el.data?.supplyApy || el.data?.rate || 0),
               shares: 0, asset: { decimals: 6 } }];
           }
+
           return assets.map(a => {
-            const sym  = resolveSym(a, el.name || el.label);
-            const mint = a.mint || a.tokenMint || a.assetMint || "";
-            const dec  = a.decimals ?? tInfo[mint]?.decimals ?? a.asset?.decimals ?? 6;
-            const usd  = getUSD(a);
-            const logo = a.logoURI || tInfo[mint]?.logoURI || "";
+            // Mint is in a.data.address per actual API shape
+            const mint    = a.data?.address || a.data?.mint || a.mint || a.tokenMint || "";
+            const sym     = tInfo[mint]?.symbol
+                          || a.symbol || a.name
+                          || resolveSymFromMint(mint, el.name || el.label);
+            const cleanSym = sym.replace(/^jl/i, "").trim();
+            const dec     = tInfo[mint]?.decimals ?? a.decimals ?? a.data?.decimals ?? 6;
+            const logo    = tInfo[mint]?.logoURI || a.logoURI || `https://img.jup.ag/tokens/${mint}`;
+            // a.value = USD value per asset (confirmed correct field)
+            const usd     = parseFloat(a.value ?? 0);
+            const safeUsd = usd > 0 && usd < 1_000_000 ? usd : 0;
+            const tokenAmt = parseFloat(a.data?.amount ?? a.amount ?? 0);
+            const price    = parseFloat(a.data?.price ?? 0);
             return {
               _fromPortfolio: true, label: el.label,
-              sym, symbol: sym, mint, logoURI: logo,
-              amount: usd, value: usd, underlyingAssets: usd,
-              apy: parseFloat(a.apy || a.supplyApy || a.rate || el.data?.apy || 0),
-              shares: parseFloat(a.shares || 0),
+              sym: cleanSym, symbol: cleanSym, mint, logoURI: logo,
+              amount: safeUsd, value: safeUsd, underlyingAssets: tokenAmt || safeUsd,
+              price,
+              apy: parseFloat(a.data?.apy || a.apy || a.supplyApy || el.data?.apy || 0),
+              shares: parseFloat(a.data?.shares || a.shares || 0),
               asset: { decimals: dec },
             };
           });
         };
+
         const toLockPos = (el) => {
           const assets = el.data?.assets || el.data?.positions || [];
-          const tInfo  = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
-          const resolveLockSym = (a) => {
-            const raw = a?.symbol || a?.name || el.name || "";
-            if (raw && raw.toLowerCase() !== "token") return raw;
-            const mint = a?.mint || a?.tokenMint || "";
-            if (mint && tInfo[mint]?.symbol) return tInfo[mint].symbol;
-            return el.label?.replace(/lock|vest/gi, "").trim() || "?";
-          };
+
           if (assets.length === 0) {
-            // el.value is raw shares — only use it if it looks human-readable (< 1e9)
             const rawVal = parseFloat(el.value ?? 0);
             const amt = rawVal > 0 && rawVal < 1e9 ? rawVal.toFixed(4) : "0";
             return [{ _fromPortfolio: true, label: el.label,
-              symbol: resolveLockSym(null),
+              symbol: resolveSymFromMint("", el.name || el.label),
               totalAmount: amt, claimableAmount: "0", vestedPercent: "0" }];
           }
-          return assets.map(a => ({
-            _fromPortfolio: true, label: el.label,
-            symbol: resolveLockSym(a),
-            mint: a.mint || a.tokenMint || "",
-            totalAmount: a.amount != null ? parseFloat(a.amount).toFixed(4) : "0",
-            claimableAmount: a.claimableAmount ? parseFloat(a.claimableAmount).toFixed(4) : "0",
-            vestedPercent: a.vestedPercent ?? a.percentVested ?? "0",
-            cliff: a.cliff || a.cliffTime || null,
-          }));
+
+          return assets.map(a => {
+            // Mint in a.data.address per actual API shape
+            const mint = a.data?.address || a.data?.mint || a.mint || a.tokenMint || "";
+            const sym  = tInfo[mint]?.symbol || a.symbol || a.name
+                       || resolveSymFromMint(mint, el.name || el.label);
+            // Token amount in a.data.amount (human-readable)
+            const tokenAmt = a.data?.amount ?? a.amount ?? null;
+            return {
+              _fromPortfolio: true, label: el.label,
+              symbol: sym, mint,
+              totalAmount: tokenAmt != null ? parseFloat(tokenAmt).toFixed(4) : "0",
+              claimableAmount: (a.data?.claimableAmount ?? a.claimableAmount)
+                ? parseFloat(a.data?.claimableAmount ?? a.claimableAmount).toFixed(4) : "0",
+              vestedPercent: a.data?.vestedPercent ?? a.vestedPercent ?? a.percentVested ?? "0",
+              cliff: a.data?.cliff || a.cliff || a.cliffTime || null,
+            };
+          });
         };
 
         const earnEls = allDefi.filter(isEarnEl);
