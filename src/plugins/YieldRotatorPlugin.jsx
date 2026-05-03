@@ -110,8 +110,27 @@ export default function YieldRotatorPlugin({
       const data = await jupFetch(`${JUP_EARN_API}/tokens`);
       const arr = Array.isArray(data) ? data
                 : data?.markets || data?.tokens || data?.data || data?.pools || [];
-      setAllPools(arr);
-      return arr;
+
+      // Normalise each pool: Jupiter returns APY as totalRate/supplyRate percent strings
+      // e.g. "4.8" = 4.8%. Guard: if > 100, it was in bps — divide by 100.
+      const parseRate = (raw) => {
+        const n = parseFloat(raw || 0);
+        if (!n || n <= 0) return 0;
+        return n > 100 ? n / 100 : n; // bps → percent OR already percent
+      };
+      const normalised = arr.map(pool => ({
+        ...pool,
+        // Expose a unified _apy field the detector can rely on
+        _apy: parseRate(pool.totalRate) || parseRate(pool.supplyRate) ||
+              parseFloat(pool.totalApy ?? pool.supplyApy ?? pool.apy ?? pool.lendingApy ?? pool.rate ?? 0),
+        // Normalise mint: Jupiter uses asset.address not asset.mint
+        _mint: pool.asset?.address || pool.asset?.mint || pool.mint || pool.tokenMint || pool.assetMint || "",
+        _sym:  pool.asset?.symbol  || pool.symbol || "",
+        _id:   pool.planId || pool.id || pool.poolId || pool.marketId || "",
+      }));
+
+      setAllPools(normalised);
+      return normalised;
     } catch {
       return [];
     }
@@ -122,19 +141,25 @@ export default function YieldRotatorPlugin({
     if (!positions?.length || !pools?.length) return [];
     const ops = [];
 
+    // Normalise a raw APY value to a percent number (e.g. 4.15, not 0.0415 or 41500)
+    const toPercent = (raw) => {
+      const n = parseFloat(raw || 0);
+      if (!n || n <= 0) return 0;
+      if (n > 100) return n / 100;   // bps encoded (e.g. 415 → 4.15%)
+      if (n < 1)   return n * 100;   // decimal (e.g. 0.0415 → 4.15%)
+      return n;                       // already percent (e.g. 4.15)
+    };
+
     for (const pos of positions) {
       // Support both raw API shape AND yieldVaultPositions shape { sym, mint, amount, apy, logo, dec }
-      const posMint   = pos.mint || pos.asset?.mint || pos.tokenMint || pos.assetMint || "";
+      // Jupiter uses asset.address (not asset.mint) for the mint field
+      const posMint   = pos.mint || pos.asset?.address || pos.asset?.mint || pos.tokenMint || pos.assetMint || "";
       const posSym    = pos.sym  || pos.asset?.symbol || pos.assetSymbol || pos.symbol || mintToSym(posMint);
 
-      // APY: yieldVaultPositions stores basis points (e.g. 41500 = 4.15%)
-      // Raw API stores decimal (0.0415) or percent (4.15)
+      // pos.apy from yieldVaultPositions is already stored as a percent number (e.g. 4.15)
+      // via chatFI's fetchEarnVaults parseRate(). Apply toPercent() defensively.
       const rawApy = pos.apy ?? pos.supplyApy ?? pos.apyPct ?? pos.lendingApy ?? pos.rate ?? 0;
-      const posApy = rawApy > 1000
-        ? parseFloat(rawApy) / 10000 * 100  // basis points → percent
-        : rawApy > 1
-        ? parseFloat(rawApy)                 // already percent
-        : parseFloat(rawApy) * 100;          // decimal → percent
+      const posApy = toPercent(rawApy);
 
       const posAmt    = parseFloat(
         pos.amount ?? pos.underlyingBalance ?? pos.underlyingAssets ??
@@ -154,24 +179,17 @@ export default function YieldRotatorPlugin({
       let bestApy  = -Infinity;
 
       for (const pool of pools) {
-        const poolApyRaw = pool.totalApy ?? pool.supplyApy ?? pool.apy ??
-                           pool.lendingApy ?? pool.rate ?? pool.apyPct ?? null;
-        if (poolApyRaw === null) continue;
-        const poolApyParsed = parseFloat(poolApyRaw);
-        if (isNaN(poolApyParsed) || poolApyParsed <= 0) continue;
-        // Normalise pool APY to percent
-        const poolApy = poolApyParsed > 1000
-          ? poolApyParsed / 10000 * 100   // basis points
-          : poolApyParsed > 1
-          ? poolApyParsed                  // already percent
-          : poolApyParsed * 100;           // decimal
+        // Use pre-normalised _apy field set in fetchAllPools (accounts for totalRate/supplyRate)
+        const poolApy = pool._apy ?? 0;
+        if (!poolApy || poolApy <= 0) continue;
 
-        const poolMint = pool.asset?.mint || pool.mint || pool.tokenMint || pool.assetMint || "";
-        const poolId   = pool.planId || pool.id || pool.poolId || pool.marketId || "";
+        // Use pre-normalised _mint and _id fields set in fetchAllPools
+        const poolMint = pool._mint || "";
+        const poolId   = pool._id   || "";
 
         // Skip the user's current pool
         const sameById  = poolId && posPoolId && poolId === posPoolId;
-        const sameByVal = !poolId && poolMint === posMint && Math.abs(poolApy - posApy) < 0.5;
+        const sameByVal = !sameById && poolMint && poolMint === posMint && Math.abs(poolApy - posApy) < 0.5;
         if (sameById || sameByVal) continue;
 
         if (poolApy > bestApy) {
@@ -182,7 +200,7 @@ export default function YieldRotatorPlugin({
 
       // Only show banner if the best pool actually beats current APY
       if (bestPool && bestApy > posApy) {
-        const bestMint = bestPool.asset?.mint || bestPool.mint || bestPool.tokenMint || "";
+        const bestMint = bestPool._mint || "";
         ops.push({
           position:     pos,
           posSym:       resolvedSym,
@@ -191,7 +209,7 @@ export default function YieldRotatorPlugin({
           posAmt,
           posPoolId,
           bestPool,
-          bestSym:      bestPool.asset?.symbol || bestPool.symbol || mintToSym(bestMint),
+          bestSym:      bestPool._sym || bestPool.asset?.symbol || bestPool.symbol || mintToSym(bestMint),
           bestMint,
           bestApy,
           apyGap:       bestApy - posApy,
@@ -262,7 +280,7 @@ export default function YieldRotatorPlugin({
       setStep("Withdrawing from current pool…");
       push("ai", `🔄 **Migrating ${posSym} Earn → ${bestSym} Earn**\nStep 1/3 — withdrawing from current pool…`);
 
-      const dec = KNOWN_DECIMALS[posSym] ?? 6;
+      const dec = KNOWN_DECIMALS[posSym] ?? KNOWN_DECIMALS[posMint] ?? 6;
       const withdrawAmtRaw = posAmt > 1e6
         ? Math.floor(posAmt)                           // already in raw units
         : Math.floor(posAmt * Math.pow(10, dec));      // convert from human-readable
@@ -294,6 +312,7 @@ export default function YieldRotatorPlugin({
       // received token quantity, not a re-scaled estimate from the source asset
       let depositAmtRaw  = withdrawAmtRaw;
 
+      // isCrossAsset uses _mint which was set from asset.address in fetchAllPools
       if (isCrossAsset && bestMint && bestMint !== depositMint) {
         setStep("Swapping to target asset…");
         push("ai", `🔄 Step 2/3 — swapping ${posSym} → ${bestSym}…`);
