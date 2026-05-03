@@ -3846,37 +3846,31 @@ function JupChatInner() {
         } catch {}
       }
 
-      // ── Helius fallback: ALWAYS fetch SPL tokens and merge with Jupiter data ──
-      // Jupiter's holdings API intermittently returns tokenBalances:{} even when
-      // the wallet has SPL tokens. We always call /api/portfolio (Helius RPC) and
-      // merge results so tokens from both sources are combined — Jupiter wins on
-      // any mint it already has (to keep its richer metadata), Helius fills gaps.
+      // ── Helius: ALWAYS fetch SPL tokens and merge — Jupiter intermittently returns
+      // empty tokenBalances even for wallets with SPL tokens. Run unconditionally
+      // and merge: Jupiter wins on overlap (richer metadata), Helius fills gaps.
       try {
         const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
         if (r.ok) {
           const d = await r.json();
           const splTokens = d?.tokens || [];
           if (splTokens.length > 0) {
-            // Build a tokens map from Helius results
             const heliusTokens = {};
             for (const t of splTokens) {
               if (!t.mint || t.mint === SOL_MINT) continue;
               heliusTokens[t.mint] = { uiAmount: t.amount, symbol: t.symbol, decimals: t.decimals ?? 6, logoURI: t.logoURI };
             }
             if (holdingsData) {
-              // Merge: keep existing Jupiter entries, add any Helius mints Jupiter missed
               const jupTokens = holdingsData.tokenBalances || holdingsData.tokens || {};
-              const merged = { ...heliusTokens, ...jupTokens }; // Jupiter overwrites Helius on overlap
-              const solAmt = holdingsData.uiAmount ?? splTokens.find(t => t.mint === SOL_MINT)?.amount ?? 0;
-              holdingsData = { uiAmount: solAmt, tokenBalances: merged };
+              const merged = { ...heliusTokens, ...jupTokens }; // Jupiter overwrites on overlap
+              holdingsData = { uiAmount: holdingsData.uiAmount, tokenBalances: merged };
             } else {
-              // Jupiter failed entirely — use Helius as sole source
               const solAmt = splTokens.find(t => t.mint === SOL_MINT)?.amount ?? 0;
               holdingsData = { uiAmount: solAmt, tokenBalances: heliusTokens };
             }
           }
         }
-      } catch (e) { console.warn("[ChatFi Portfolio] Helius SPL fallback failed:", e?.message); }
+      } catch (e) { console.warn("[ChatFi Portfolio] Helius SPL merge failed:", e?.message); }
 
       if (holdingsData) {
         const solUiAmt2 = holdingsData.uiAmount ?? (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : holdingsData.amount != null ? Number(holdingsData.amount) / 1e9 : 0);
@@ -4050,56 +4044,78 @@ function JupChatInner() {
 
         const toEarnPos = (el) => {
           const assets = el.data?.assets || el.data?.positions || [];
-          const elSym = (el.name || el.label || "")
-            .replace(/\s*(earn|vault|lend|yield|pool|position)/gi, "").trim() || "Token";
-          // Jupiter portfolio API returns el.value as raw jlToken shares, NOT USD.
-          // Real USD is in assets[].usdValue or assets[].value when < $100k
-          const getUSD = (a, fallbackEl) => {
-            const explicit = a?.usdValue ?? a?.valueUsd ?? a?.priceUsd ?? null;
-            if (explicit != null && parseFloat(explicit) > 0) return parseFloat(explicit);
-            const av = parseFloat(a?.value ?? 0);
-            if (av > 0 && av < 100000) return av;
-            const ev = parseFloat(fallbackEl?.usdValue ?? fallbackEl?.valueUsd ?? 0);
-            if (ev > 0 && ev < 100000) return ev;
-            return 0;
+          // tokenInfo is a mint→{symbol,logoURI,decimals} map from the portfolio API response
+          const tInfo = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
+
+          // Resolve best symbol for an element or asset:
+          // 1. Use asset.symbol from API  2. Look up mint in tokenInfo  3. Strip junk from el.name/label
+          const resolveSym = (a, fallbackLabel) => {
+            const raw = a?.symbol || a?.name || "";
+            if (raw && raw.toLowerCase() !== "token") return raw.replace(/^jl/i, "").replace(/\s*(earn|vault|lend)/gi, "").trim();
+            const mint = a?.mint || a?.tokenMint || a?.assetMint || "";
+            if (mint && tInfo[mint]?.symbol) return tInfo[mint].symbol;
+            const fromLabel = (fallbackLabel || "").replace(/\s*(earn|vault|lend|yield|pool|position)/gi, "").trim();
+            return fromLabel || "?";
           };
+
+          // USD value: ONLY use explicit usdValue/valueUsd fields — NEVER el.value which is
+          // raw jlToken shares (causes the $308k / $40M garbage values seen in prod)
+          const getUSD = (a) => {
+            const v = a?.usdValue ?? a?.valueUsd ?? a?.priceUsd ?? a?.usdAmount ?? null;
+            return (v != null && parseFloat(v) > 0) ? parseFloat(v) : 0;
+          };
+
           if (assets.length === 0) {
-            const usd = getUSD(null, el);
+            const usd = getUSD(el.data) || getUSD(el);
+            const sym = resolveSym(el.data, el.name || el.label);
             return [{ _fromPortfolio: true, label: el.label,
-              sym: elSym, symbol: elSym,
+              sym, symbol: sym,
               amount: usd, value: usd, underlyingAssets: usd,
               apy: parseFloat(el.data?.apy || el.data?.supplyApy || el.data?.rate || 0),
               shares: 0, asset: { decimals: 6 } }];
           }
           return assets.map(a => {
-            const aSym = (a.symbol || a.name || elSym)
-              .replace(/^jl/i, "").replace(/\s*(earn|vault|lend)/gi, "").trim();
-            const usd = getUSD(a, el);
+            const sym  = resolveSym(a, el.name || el.label);
+            const mint = a.mint || a.tokenMint || a.assetMint || "";
+            const dec  = a.decimals ?? tInfo[mint]?.decimals ?? a.asset?.decimals ?? 6;
+            const usd  = getUSD(a);
+            const logo = a.logoURI || tInfo[mint]?.logoURI || "";
             return {
               _fromPortfolio: true, label: el.label,
-              sym: aSym, symbol: aSym,
+              sym, symbol: sym, mint, logoURI: logo,
               amount: usd, value: usd, underlyingAssets: usd,
               apy: parseFloat(a.apy || a.supplyApy || a.rate || el.data?.apy || 0),
               shares: parseFloat(a.shares || 0),
-              mint: a.mint || a.tokenMint || a.assetMint || "",
-              asset: { decimals: a.decimals ?? a.asset?.decimals ?? 6 },
+              asset: { decimals: dec },
             };
           });
         };
         const toLockPos = (el) => {
           const assets = el.data?.assets || el.data?.positions || [];
+          const tInfo  = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
+          const resolveLockSym = (a) => {
+            const raw = a?.symbol || a?.name || el.name || "";
+            if (raw && raw.toLowerCase() !== "token") return raw;
+            const mint = a?.mint || a?.tokenMint || "";
+            if (mint && tInfo[mint]?.symbol) return tInfo[mint].symbol;
+            return el.label?.replace(/lock|vest/gi, "").trim() || "?";
+          };
           if (assets.length === 0) {
-            return [{ _fromPortfolio: true, label: el.label, symbol: el.name || "Token",
-              totalAmount: el.value ? parseFloat(el.value).toFixed(2) : "0",
-              claimableAmount: "0", vestedPercent: "0" }];
+            // el.value is raw shares — only use it if it looks human-readable (< 1e9)
+            const rawVal = parseFloat(el.value ?? 0);
+            const amt = rawVal > 0 && rawVal < 1e9 ? rawVal.toFixed(4) : "0";
+            return [{ _fromPortfolio: true, label: el.label,
+              symbol: resolveLockSym(null),
+              totalAmount: amt, claimableAmount: "0", vestedPercent: "0" }];
           }
           return assets.map(a => ({
             _fromPortfolio: true, label: el.label,
-            symbol: a.symbol || a.name || el.name || "Token",
-            totalAmount: a.amount != null ? parseFloat(a.amount).toFixed(4)
-                       : el.value ? parseFloat(el.value).toFixed(2) : "0",
+            symbol: resolveLockSym(a),
+            mint: a.mint || a.tokenMint || "",
+            totalAmount: a.amount != null ? parseFloat(a.amount).toFixed(4) : "0",
             claimableAmount: a.claimableAmount ? parseFloat(a.claimableAmount).toFixed(4) : "0",
-            vestedPercent: "0", cliff: a.cliff || a.cliffTime || null,
+            vestedPercent: a.vestedPercent ?? a.percentVested ?? "0",
+            cliff: a.cliff || a.cliffTime || null,
           }));
         };
 
