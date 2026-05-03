@@ -338,6 +338,10 @@ Available actions:
 - "FETCH_EARN"       → actionData: { "filter": "highest_apy" or null, "vault": "USDC" or null, "amount": "10" or null, "portion": "10%" or null } — portion: "all"|"half"|"quarter"|"N%"
 - "SET_YIELD_VAULT"  → actionData: {} — open the Yield Vault setup panel so user can auto-rotate their Jupiter Earn yield into any token
 - "SHOW_YIELD_VAULT" → actionData: {} — show user's active yield vault positions and stats
+- "HARVEST_YIELD"    → actionData: { "vaultId": null, "sym": "USDC" } — harvest yield from a Jupiter Earn vault. vaultId from user's active vaults. sym = earn token symbol. Use when user says "harvest", "claim yield", "collect my earnings", "auto-harvest".
+- "MIGRATE_EARN"     → actionData: { "fromSym": "USDC", "toSym": "USDG", "fromApy": "4.09", "toApy": "5.63" } — migrate earn position to better APY pool. Use when user says "migrate", "move to better yield", "switch pool", "move my USDC earn to USDG".
+- "EARN_DEPOSIT"     → actionData: { "sym": "USDC", "amount": "100", "portion": null } — deposit into Jupiter Earn vault directly from chat. portion: "all"|"half"|"N%"
+- "EARN_WITHDRAW"    → actionData: { "sym": "USDC", "amount": "50", "portion": null } — withdraw from Jupiter Earn vault directly from chat. portion: "all"|"half"|"N%"
 - "SHOW_MULTIPLY"    → actionData: { "asset": "SOL" or null, "leverage": "3x" or null } — leveraged looping via Jupiter Lend flashloans. Explain mechanics + show vaults.
 - "SHOW_BORROW"        → actionData: { "collateral": "SOL", "debt": "USDC", "colAmount": "10", "borrowAmount": "200", "reason": "brief why" } — deposit collateral into a Jupiter Lend vault and borrow against it. colAmount = collateral to deposit; borrowAmount = debt token to receive. Available vaults: SOL→USDC (vault 1, 80% LTV), JitoSOL→SOL (vault 2, 90%), JupSOL→SOL (vault 3, 90%), WBTC→USDC (vault 4, 80%), JLP→USDC (vault 5, 90%), JUP→USDC (vault 6, 75%), USDC→USDT (vault 7, 95%).
 - "SHOW_LEND_POSITIONS" → actionData: {} — show user's open Lend positions (borrow/multiply) with unwind buttons AND earn positions with withdraw buttons
@@ -381,7 +385,7 @@ Rules:
 - "predictions" / "show markets" / "what can I bet on" / "sport prediction" / "new predictions" / "show predictions" / "prediction markets" / any mention of predict/bet + sport/crypto/politics → FETCH_PREDICTIONS — infer category from context. If user says "sport" or "sports" set sport:"sports". If user says "show me top N" extract limit:N.
 - "show new sport prediction" / "sport prediction to predict on" / "new sport markets" → FETCH_PREDICTIONS with sport:"sports"
 - "earn" / "yield" / "APY" / "lend" / "passive income" / "staking" → FETCH_EARN
-- "migrate earn" / "migrate my position" / "move to better yield" / "better APY" / "find better yield" / "rotate yield" / "switch earn pool" / "compare earn" / "best earn pool" / "higher APY" / "compare my earn" → action:null, text: tell user the Yield Rotator automatically scans all Jupiter Earn pools. Ask them to open Portfolio → scroll to Earn Positions — a blue "Better APY Available" banner will appear there if a better pool exists. They can tap Migrate to move funds in one click (withdraw → optional swap → deposit).
+- "migrate earn" / "migrate my position" / "move to better yield" / "better APY" / "find better yield" / "rotate yield" / "switch earn pool" / "compare earn" / "best earn pool" / "higher APY" / "compare my earn" / "move my X earn to Y" → MIGRATE_EARN with fromSym/toSym/fromApy/toApy if user specifies, otherwise action:null and tell user to open Portfolio → Earn Positions where the Yield Rotator shows migration options automatically.
 - "withdraw from earn" / "redeem jlTokens" / "take out my earn" → SHOW_LEND_POSITIONS (earn panel has withdraw buttons)
 - "multiply" / "leverage" / "loop" / "leveraged yield" / "amplify" / "2x" / "3x" on Jupiter → SHOW_MULTIPLY
 - "borrow" / "I want to borrow" / "use borrow" / "deposit collateral" / "take a loan" / "borrow USDC" / "borrow against SOL" / "lend borrow" / "use SOL as collateral" / "how do I borrow" / "open borrow" → SHOW_BORROW — fire this IMMEDIATELY even if no amounts given; open the panel and let the user fill in details. Extract collateral/debt/amounts if present, otherwise leave blank.
@@ -8547,6 +8551,34 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         if      (type === "swap")        { setShowSwap(false);        await doSwap(); }
         else if (type === "earnDeposit") { setShowEarnDeposit(false); await doEarnDeposit(); }
         else if (type === "earnWithdraw"){ setShowEarnWithdraw(false);await doEarnWithdraw(); }
+        else if (type === "harvestYield") {
+          // Harvest yield — find the vault and withdraw yield portion only
+          push("ai", "Harvesting yield…");
+          const sym = pendingDirectAction.sym || "USDC";
+          const earnPos = (yieldVaultPositions || []).find(p => (p.sym || "").toUpperCase() === sym);
+          if (!earnPos) { push("ai", "No active " + sym + " Earn position found."); return; }
+          await fetchEarnVaults();
+          setTimeout(async () => {
+            setEarnVaults(vaults => {
+              const match = vaults.find(v => v.token?.toUpperCase() === sym || v.name?.toUpperCase().includes(sym));
+              if (match) {
+                const yieldAmt = Math.max(0, parseFloat(earnPos.amount ?? 0) - parseFloat(earnPos.depositedAmount ?? 0));
+                if (yieldAmt <= 0) { push("ai", "No harvestable yield found yet. Your position is still accumulating."); return vaults; }
+                setEarnWithdraw({ vault: match, amount: yieldAmt.toFixed(6).replace(/\.?0+$/, "") });
+                doEarnWithdraw();
+              } else {
+                push("ai", "Could not find " + sym + " Earn vault.");
+              }
+              return vaults;
+            });
+          }, 800);
+        }
+        else if (type === "migrateEarn") {
+          // Trigger the YieldRotator migration for the specified pair
+          push("ai", "Opening Yield Rotator to migrate your position…");
+          setShowPortfolio(true);
+          push("ai", "Your portfolio is open — tap Migrate on the " + pendingDirectAction.fromSym + " → " + pendingDirectAction.toSym + " card to confirm.");
+        }
         else if (type === "send")        { setShowSend(false);        await doSend(); }
         else if (type === "lock")        { setShowLock(false);        await doCreateLock(); }
         else if (type === "trigger")     { setShowTrig(false);        await doTrigger(); }
@@ -9040,6 +9072,144 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               return vaults;
             });
           }, 800);
+        }
+
+      } else if (action === "HARVEST_YIELD") {
+        // Direct mode: harvest yield from a specific vault
+        if (!walletFull) {
+          push("ai", text + "
+
+Connect your wallet first to harvest yield.");
+        } else {
+          const sym = (actionData?.sym || "").toUpperCase() || "your";
+          push("ai", text);
+          if (directMode) {
+            push("ai", `⚡ **Direct Mode** — Harvest yield from **${sym} Earn**`);
+            setPendingDirectAction({
+              type: "harvestYield",
+              label: `Harvest ${sym} Earn yield`,
+              sym,
+              vaultId: actionData?.vaultId || null,
+            });
+          } else {
+            // Non-direct: open portfolio earn positions
+            setShowPortfolio(true);
+            push("ai", "Open your Portfolio → Earn Positions to harvest your yield.");
+          }
+        }
+
+      } else if (action === "MIGRATE_EARN") {
+        if (!walletFull) {
+          push("ai", text + "
+
+Connect your wallet first to migrate your earn position.");
+        } else {
+          const fromSym = (actionData?.fromSym || "current").toUpperCase();
+          const toSym   = (actionData?.toSym   || "better").toUpperCase();
+          const fromApy = actionData?.fromApy ? `${parseFloat(actionData.fromApy).toFixed(2)}%` : "";
+          const toApy   = actionData?.toApy   ? `${parseFloat(actionData.toApy).toFixed(2)}%`   : "";
+          push("ai", text);
+          if (directMode && actionData?.fromSym && actionData?.toSym) {
+            push("ai",
+              `⚡ **Direct Mode** — Migrate **${fromSym} Earn**${fromApy ? ` (${fromApy})` : ""} → **${toSym} Earn**${toApy ? ` (${toApy})` : ""}`
+            );
+            setPendingDirectAction({
+              type: "migrateEarn",
+              label: `${fromSym} → ${toSym} Earn`,
+              fromSym,
+              toSym,
+              fromApy: actionData?.fromApy,
+              toApy:   actionData?.toApy,
+            });
+          } else {
+            // No specific pool specified — show rotator in portfolio
+            setShowPortfolio(true);
+            push("ai", "Open your Portfolio → the Yield Rotator will show available migration options.");
+          }
+        }
+
+      } else if (action === "EARN_DEPOSIT") {
+        if (!walletFull) {
+          push("ai", text + "
+
+Connect your wallet first to deposit into Earn.");
+        } else {
+          const sym = (actionData?.sym || "USDC").toUpperCase();
+          // Resolve portion
+          let amt = actionData?.amount || "";
+          if (actionData?.portion) {
+            const bal = portfolio[sym] ?? 0;
+            const p = actionData.portion.toLowerCase().trim();
+            if (p === "all")         amt = bal.toString();
+            else if (p === "half")   amt = (bal / 2).toFixed(6).replace(/\.?0+$/, "");
+            else {
+              const m = p.match(/^(\d+(?:\.\d+)?)%$/);
+              if (m) amt = (bal * parseFloat(m[1]) / 100).toFixed(6).replace(/\.?0+$/, "");
+            }
+          }
+          push("ai", text);
+          if (directMode && amt && parseFloat(amt) > 0) {
+            push("ai", `⚡ **Direct Mode** — Deposit **${amt} ${sym}** into ${sym} Earn`);
+            // Find the vault
+            await fetchEarnVaults();
+            setTimeout(() => {
+              setEarnVaults(vaults => {
+                const match = vaults.find(v => v.token?.toUpperCase() === sym || v.name?.toUpperCase().includes(sym));
+                if (match) {
+                  setEarnDeposit({ vault: match, amount: amt });
+                  setPendingDirectAction({ type: "earnDeposit", label: `${amt} ${sym} into ${match.name}` });
+                } else {
+                  push("ai", `Could not find ${sym} Earn vault. Try opening Earn from the menu.`);
+                }
+                return vaults;
+              });
+            }, 800);
+          } else {
+            await fetchEarnVaults();
+            setShowEarn(true);
+          }
+        }
+
+      } else if (action === "EARN_WITHDRAW") {
+        if (!walletFull) {
+          push("ai", text + "
+
+Connect your wallet first to withdraw from Earn.");
+        } else {
+          const sym = (actionData?.sym || "USDC").toUpperCase();
+          let amt = actionData?.amount || "";
+          if (actionData?.portion) {
+            // Find position amount
+            const pos = (yieldVaultPositions || []).find(p => (p.sym || p.asset?.symbol || "").toUpperCase() === sym);
+            const bal = pos ? parseFloat(pos.amount ?? 0) : 0;
+            const p = actionData.portion.toLowerCase().trim();
+            if (p === "all")         amt = bal.toString();
+            else if (p === "half")   amt = (bal / 2).toFixed(6).replace(/\.?0+$/, "");
+            else {
+              const m = p.match(/^(\d+(?:\.\d+)?)%$/);
+              if (m) amt = (bal * parseFloat(m[1]) / 100).toFixed(6).replace(/\.?0+$/, "");
+            }
+          }
+          push("ai", text);
+          if (directMode && amt && parseFloat(amt) > 0) {
+            push("ai", `⚡ **Direct Mode** — Withdraw **${amt} ${sym}** from ${sym} Earn`);
+            await fetchEarnVaults();
+            setTimeout(() => {
+              setEarnVaults(vaults => {
+                const match = vaults.find(v => v.token?.toUpperCase() === sym || v.name?.toUpperCase().includes(sym));
+                if (match) {
+                  setEarnWithdraw({ vault: match, amount: amt });
+                  setPendingDirectAction({ type: "earnWithdraw", label: `${amt} ${sym} from ${match.name}` });
+                } else {
+                  push("ai", `Could not find ${sym} Earn vault. Try opening Earn from the menu.`);
+                }
+                return vaults;
+              });
+            }, 800);
+          } else {
+            await fetchEarnVaults();
+            setShowEarn(true);
+          }
         }
 
       } else if (action === "SHOW_BORROW") {
