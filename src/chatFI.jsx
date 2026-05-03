@@ -12322,36 +12322,46 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           )}
 
           {/* ── Yield Rotator Panel — standalone better APY finder ─────── */}
-          {showEarn && walletFull && (
-            <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px" }}>
-              <YieldRotatorPlugin
-                walletFull={walletFull}
-                earnPositions={(() => {
-                  if (yieldVaultPositions.length) return yieldVaultPositions;
-                  if (portfolioData?._earnFromPortfolio?.length) return portfolioData._earnFromPortfolio;
-                  if (portfolioData?.earnPositions?.length) return portfolioData.earnPositions;
-                  // Build positions from earnVaults + earnUserPositions if available
-                  const fromVaults = Object.entries(earnUserPositions || {})
-                    .filter(([, pos]) => pos && parseFloat(pos.amount || 0) > 0)
-                    .map(([sym, pos]) => ({
-                      sym, symbol: sym,
-                      amount: parseFloat(pos.amount || 0),
-                      value: parseFloat(pos.valueUSD || pos.amount || 0),
-                      apy: parseFloat(pos.apy || 0),
-                      mint: pos.mint || "",
-                      planId: pos.planId || pos.poolId || "",
-                    }));
-                  return fromVaults;
-                })()}
-                jupFetch={jupFetch}
-                getActiveProvider={getActiveProvider}
-                push={push}
-                T={T}
-                isMobile={isMobile}
-                onMigrationDone={() => { fetchPortfolio(); fetchEarnPositionsForVault(); }}
-              />
-            </div>
-          )}
+          {showEarn && walletFull && (() => {
+            // Build positions by joining earnUserPositions with earnVaults for APY + mint
+            const rotatorPositions = (() => {
+              if (yieldVaultPositions.length) return yieldVaultPositions;
+              if (portfolioData?._earnFromPortfolio?.length) return portfolioData._earnFromPortfolio;
+              // Build from earnVaults + earnUserPositions
+              const positions = [];
+              for (const [sym, pos] of Object.entries(earnUserPositions || {})) {
+                if (!pos || parseFloat(pos.amount || 0) <= 0) continue;
+                const vault = earnVaults.find(v =>
+                  (v.token || "").toUpperCase() === sym ||
+                  (v.symbol || "").toUpperCase() === sym
+                );
+                positions.push({
+                  sym, symbol: sym,
+                  amount: parseFloat(pos.amount || 0),
+                  value:  parseFloat(pos.amount || 0),
+                  apy:    parseFloat(vault?.apy || vault?.totalApy || vault?.supplyApy || 0),
+                  mint:   vault?.mint || vault?.tokenMint || vault?.assetAddress || "",
+                  planId: vault?.planId || vault?.poolId || vault?.id || "",
+                });
+              }
+              return positions;
+            })();
+            if (!rotatorPositions.length) return null;
+            return (
+              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px" }}>
+                <YieldRotatorPlugin
+                  walletFull={walletFull}
+                  earnPositions={rotatorPositions}
+                  jupFetch={jupFetch}
+                  getActiveProvider={getActiveProvider}
+                  push={push}
+                  T={T}
+                  isMobile={isMobile}
+                  onMigrationDone={() => { fetchPortfolio(); fetchEarnPositionsForVault(); }}
+                />
+              </div>
+            );
+          })()}
 
           {/* ── Borrow panel ─────────────────────────────────────────────── */}
           {showBorrow && (
