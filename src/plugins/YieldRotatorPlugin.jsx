@@ -94,6 +94,7 @@ export default function YieldRotatorPlugin({
   T,
   isMobile,
   onMigrationDone,
+  onDirectMigrateRef,
 }) {
   // ── State ────────────────────────────────────────────────────────────────
   const [allPools, setAllPools]           = useState([]);
@@ -103,6 +104,17 @@ export default function YieldRotatorPlugin({
   const [lastChecked, setLastChecked]     = useState(null);
   const [successCard, setSuccessCard]     = useState(null); // { posSym, bestSym, posApy, bestApy, depositSig }
   const pollRef = useRef(null);
+
+  // Expose doMigrate to parent for direct mode — parent passes a ref
+  // and can call rotatorRef.current.migrate(op) or rotatorRef.current.getOpportunities()
+  useEffect(() => {
+    if (onDirectMigrateRef) {
+      onDirectMigrateRef.current = {
+        migrate: (op) => doMigrate(op),
+        getOpportunities: () => opportunities,
+      };
+    }
+  });
 
   // ── Fetch all Jupiter Earn pools with live APYs ───────────────────────────
   const fetchAllPools = useCallback(async () => {
