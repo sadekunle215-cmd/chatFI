@@ -3878,297 +3878,82 @@ function JupChatInner() {
     }).join("\n");
   };
 
-  // ── Portfolio — full on-demand, always fresh ─────────────────────────────────
-  // Uses Jupiter Ultra balances API + Portfolio positions API for complete data
+  // ── Portfolio — rebuilt from scratch using Jupiter Portfolio API ─────────────
+  // Primary: https://api.jup.ag/portfolio/v1/positions/{wallet}
+  // Fallback for balances: Ultra holdings API + Helius /api/portfolio backend
+  // All sections are individually try/caught — one failure never crashes the rest.
   const fetchPortfolioData = async (walletAddress) => {
     if (!walletAddress) return null;
     const results = {};
 
-    // ── 1. Jupiter Holdings API — primary source for ALL token balances ────────
-    // GET /ultra/v1/holdings/{address} (official current endpoint, /balances is deprecated)
-    // Response: { amount (lamports str), uiAmount (SOL float), tokens: { mint: { uiAmount, amount, decimals, isFrozen } } }
+    const safeTimeout = (ms) => {
+      try { return AbortSignal.timeout(ms); }
+      catch { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; }
+    };
+
+    const SOL_MINT = "So11111111111111111111111111111111111111112";
+
+    // ── 1. Jupiter Portfolio Positions API (primary — all-in-one) ─────────────
+    // Returns wallet balances + DeFi positions (Earn, Lock, Perps, LP, DCA, etc.)
     try {
-      const safeTimeout = (ms) => { try { return AbortSignal.timeout(ms); } catch { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; } };
-      const SOL_MINT = "So11111111111111111111111111111111111111112";
-      const MINT_TO_SYM = {
-        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
-        "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
-        "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD":  "JUPUSD",
-        "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
-        "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
-        "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
-        "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1":  "BSOL",
-        "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v":  "jupSOL",
-        "Jito4APyf642JPzcbhPdHtTkuLFkHy5SfxGgwGiRBGP":  "JitoSOL",
-        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
-        "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
-        "So11111111111111111111111111111111111111112":   "SOL",
-      };
-
-      // Fetch holdings — try main API then lite fallback
-      // Jupiter uses "tokenBalances" (not "tokens") for SPL tokens in current API versions
-      const isValidHoldings = (d) => d && !d.error && (d.uiAmount != null || d.nativeBalance != null || d.amount != null);
-      let holdingsData = null;
-      try {
-        const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(8000) });
-        if (r.ok) { const d = await r.json(); if (isValidHoldings(d)) holdingsData = d; }
-      } catch {}
-      if (!holdingsData) {
-        try {
-          const r = await fetch(`https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(8000) });
-          if (r.ok) { const d = await r.json(); if (isValidHoldings(d)) holdingsData = d; }
-        } catch {}
-      }
-      // Fallback: deprecated /balances — normalize into holdings shape
-      if (!holdingsData) {
-        try {
-          const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${walletAddress}`, { signal: safeTimeout(7000) });
-          if (r.ok) {
-            const d = await r.json();
-            if (d && !d.error) {
-              const solEntry = d["SOL"] ?? d[SOL_MINT];
-              const solUiAmt = solEntry?.uiAmount ?? (typeof solEntry === "number" ? solEntry : 0);
-              const tokens = {};
-              for (const [k, v] of Object.entries(d)) {
-                if (k === "SOL" || k === SOL_MINT) continue;
-                tokens[k] = v;
-              }
-              holdingsData = { uiAmount: solUiAmt, tokens };
-            }
-          }
-        } catch {}
-      }
-
-      // ── SPL tokens: fetch directly from Jupiter APIs (no backend dependency) ──
-      // Strategy: always pull from Jupiter Ultra holdings (primary) + lite-api (fallback)
-      // then merge with whatever holdingsData already has from the initial call above.
-      let extraTokens = {};
-
-      // Path A: /api/portfolio backend (Helius RPC) — most reliable for SPL tokens
-      // Helius has no rate limits on our plan and returns all SPL accounts directly
-      try {
-        const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
-        if (r.ok) {
-          const d = await r.json();
-          const splTokens = d?.tokens || [];
-          console.log(`[ChatFi Portfolio] /api/portfolio (Helius) returned ${splTokens.length} tokens`);
-          for (const t of splTokens) {
-            if (!t.mint || t.mint === SOL_MINT) continue;
-            if (t.amount > 0) extraTokens[t.mint] = { uiAmount: t.amount, symbol: t.symbol || "", decimals: t.decimals ?? 6, logoURI: t.logoURI || "" };
-          }
-        }
-      } catch (e) { console.warn("[ChatFi Portfolio] /api/portfolio (Helius) failed:", e?.message); }
-
-      // Path B: Jupiter Ultra holdings via jupFetch (API key) — merge on top
-      try {
-        const d = await jupFetch(`https://api.jup.ag/ultra/v1/holdings/${walletAddress}`);
-        const tb = d?.tokenBalances || d?.tokens || {};
-        console.log(`[ChatFi Portfolio] Jupiter Ultra SPL fetch returned ${Object.keys(tb).length} mints`);
-        for (const [mint, data] of Object.entries(tb)) {
-          if (mint === SOL_MINT) continue;
-          const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
-          if (uiAmt > 0) {
-            // Jupiter wins on overlap — more accurate prices
-            extraTokens[mint] = { uiAmount: uiAmt, symbol: data?.symbol || extraTokens[mint]?.symbol || "", decimals: data?.decimals ?? 6, logoURI: data?.logoURI || extraTokens[mint]?.logoURI || "" };
-          }
-        }
-      } catch (e) { console.warn("[ChatFi Portfolio] Jupiter Ultra SPL fetch failed:", e?.message); }
-
-      // Path C: lite-api fallback if both above returned nothing
-      if (Object.keys(extraTokens).length === 0) {
-        try {
-          const r = await fetch(`https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(12000) });
-          if (r.ok) {
-            const d = await r.json();
-            const tb = d?.tokenBalances || d?.tokens || {};
-            console.log(`[ChatFi Portfolio] lite-api SPL fallback returned ${Object.keys(tb).length} mints`);
-            for (const [mint, data] of Object.entries(tb)) {
-              if (mint === SOL_MINT) continue;
-              const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
-              if (uiAmt > 0) extraTokens[mint] = { uiAmount: uiAmt, symbol: data?.symbol || "", decimals: data?.decimals ?? 6, logoURI: data?.logoURI || "" };
-            }
-          }
-        } catch (e) { console.warn("[ChatFi Portfolio] lite-api SPL fallback failed:", e?.message); }
-      }
-
-      // Merge extraTokens into holdingsData — Jupiter Ultra wins on any overlap
-      if (Object.keys(extraTokens).length > 0) {
-        if (holdingsData) {
-          const jupTokens = holdingsData.tokenBalances || holdingsData.tokens || {};
-          const merged = { ...extraTokens, ...jupTokens }; // existing holdingsData wins on overlap
-          holdingsData = { uiAmount: holdingsData.uiAmount, tokenBalances: merged };
-        } else {
-          holdingsData = { uiAmount: 0, tokenBalances: extraTokens };
-        }
-      }
-      console.log(`[ChatFi Portfolio] after merge: ${Object.keys(holdingsData?.tokenBalances || holdingsData?.tokens || {}).length} SPL mints`);
-
-      if (holdingsData) {
-        const solUiAmt2 = holdingsData.uiAmount ?? (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : holdingsData.amount != null ? Number(holdingsData.amount) / 1e9 : 0);
-        const balances = { SOL: solUiAmt2 };
-        const mintMap  = { SOL: SOL_MINT };
-        const logoMap  = { SOL: TOKEN_LOGO_URLS["SOL"] };
-        if (!results.nameMap) results.nameMap = {};
-
-        // Collect all non-SOL mints with nonzero balance
-        // Jupiter uses "tokenBalances" in current API — fall back to "tokens" for resilience
-        const allMints = [];
-        for (const [mint, data] of Object.entries(holdingsData.tokenBalances || holdingsData.tokens || {})) {
-          if (mint === SOL_MINT) continue;
-          const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : (typeof data === "number" ? data : 0));
-          if (!uiAmt || uiAmt <= 0) continue;
-          // Carry any symbol already known from heliusTokens so resolveOneMint can skip API calls
-          const knownSym = data?.symbol || MINT_TO_SYM[mint] || null;
-          allMints.push({ mint, uiAmt, decimals: data?.decimals ?? 6, knownSym });
-        }
-
-        console.log(`[ChatFi Portfolio] holdings SOL=${balances.SOL} SPL mints=${allMints.length}`);
-
-        const normMeta = (mint, raw) => {
-          if (!raw || typeof raw !== "object") return null;
-          const symbol  = raw.symbol || raw.ticker || null;
-          const name    = raw.name || null;
-          const logoURI = raw.logoURI || raw.logo_uri || raw.icon || raw.imageUrl || raw.image || raw.logo || null;
-          const decimals = raw.decimals ?? 6;
-          if (!symbol && !name && !logoURI) return null;
-          return { symbol, name, logoURI, decimals };
-        };
-
-        const resolveOneMint = async (mint, knownSym) => {
-          const cached = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0];
-          if (cached) return { mint, meta: { symbol: cached, name: cached, logoURI: TOKEN_LOGO_URLS[cached] || `https://img.jup.ag/tokens/${mint}`, decimals: 6 } };
-          const staticSym = MINT_TO_SYM[mint] || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0] || knownSym;
-          if (staticSym) return { mint, meta: { symbol: staticSym, name: staticSym, logoURI: TOKEN_LOGO_URLS[staticSym] || `https://img.jup.ag/tokens/${mint}`, decimals: 6 } };
-          try { const r = await fetch(`https://tokens.jup.ag/token/${mint}`, { signal: safeTimeout(4000) }); if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; } } catch {}
-          try { const r = await fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`, { signal: safeTimeout(4000) }); if (r.ok) { const d = await r.json(); if (d?.symbol || d?.name) return { mint, meta: normMeta(mint, d) }; } } catch {}
-          try { const r = await fetch(`https://api.solana.fm/v0/tokens/${mint}`, { signal: safeTimeout(4000) }); if (r.ok) { const d = await r.json(); const t = d?.tokenList || d?.result || d; if (t?.symbol || t?.name) return { mint, meta: normMeta(mint, { symbol: t.symbol, name: t.name, logoURI: t.imageUrl || t.image || t.logo, decimals: t.decimals ?? 6 }) }; } } catch {}
-          try { const r = await fetch(`https://tokens.jup.ag/tokens?search=${mint}&verify_only=false`, { signal: safeTimeout(4000) }); if (r.ok) { const arr = await r.json(); const found = Array.isArray(arr) ? arr.find(t => t.address === mint) : null; if (found?.symbol || found?.name) return { mint, meta: normMeta(mint, found) }; } } catch {}
-          return { mint, meta: null };
-        };
-
-        if (allMints.length > 0) {
-          const resolveResults = await Promise.allSettled(allMints.slice(0, 50).map(({ mint, knownSym }) => resolveOneMint(mint, knownSym)));
-          const tokenListMap = {};
-          for (const r of resolveResults) {
-            if (r.status === "fulfilled" && r.value?.meta) tokenListMap[r.value.mint] = r.value.meta;
-          }
-
-          for (const { mint, uiAmt } of allMints.slice(0, 50)) {
-            const meta = tokenListMap[mint];
-            const apiSym = meta?.symbol || null;
-            const fallbackSym = MINT_TO_SYM[mint] || Object.entries(TOKEN_MINTS).find(([, m]) => m === mint)?.[0] || null;
-            const rawSym = apiSym || fallbackSym || `${mint.slice(0,4)}\u2026${mint.slice(-4)}`;
-            const sym = balances[rawSym] !== undefined && !apiSym ? `${mint.slice(0,4)}\u2026${mint.slice(-3)}` : rawSym;
-
-            balances[sym] = uiAmt;
-            mintMap[sym]  = mint;
-            logoMap[sym]  = meta?.logoURI || TOKEN_LOGO_URLS[sym] || `https://img.jup.ag/tokens/${mint}`;
-            if (meta?.name) results.nameMap[sym] = meta.name;
-            if (apiSym && !tokenCacheRef.current[apiSym.toUpperCase()]) tokenCacheRef.current[apiSym.toUpperCase()] = mint;
-            if (!tokenCacheRef.current[sym]) tokenCacheRef.current[sym] = mint;
-          }
-        }
-
-        results.walletBalances = balances;
-        results.mintMap        = mintMap;
-        results.logoMap        = logoMap;
-        setPortfolio(balances);
-        console.log(`[ChatFi Portfolio] resolved ${Object.keys(balances).length} tokens`);
-      }
-    } catch (e) { console.error("[ChatFi Portfolio] balances fetch failed:", e); }
-
-    // ── Safety: if all APIs failed, build SOL from Helius RPC directly ────────
-    if (!results.walletBalances || Object.keys(results.walletBalances).length === 0) {
-      try {
-        const solJson = await fetch(SOLANA_RPC, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"getBalance", params:[walletAddress, { commitment:"confirmed" }] }),
-        }).then(r => r.json());
-        const solAmt = (solJson?.result?.value || 0) / 1e9;
-        results.walletBalances = { SOL: solAmt };
-        results.mintMap  = { SOL: "So11111111111111111111111111111111111111112" };
-        results.logoMap  = { SOL: TOKEN_LOGO_URLS["SOL"] };
-        results.nameMap  = {};
-      } catch {}
-    }
-
-        // ── 2. Jupiter Portfolio positions API — wallet + all DeFi positions ───────
-    // https://api.jup.ag/portfolio/v1/positions/{wallet}
-    // Returns: { elements: [{type, label, platformId, value, data}], tokenInfo, fetcherReports }
-    // label="Wallet" → token balances with USD values
-    // label="LimitOrder","DCA","Staked","LiquidityPool","Leverage" → DeFi positions
-    try {
-      const portRaw = await fetch("https://api.jup.ag/portfolio/v1/positions/" + walletAddress);
-      if (!portRaw.ok) {
-        console.warn("[ChatFi Portfolio] API returned", portRaw.status, portRaw.statusText);
-      }
+      const portRaw = await fetch(
+        `https://api.jup.ag/portfolio/v1/positions/${walletAddress}`,
+        { signal: safeTimeout(20000) }
+      );
+      if (!portRaw.ok) throw new Error(`Portfolio API ${portRaw.status}`);
       const portRes = await portRaw.json();
 
       if (portRes && !portRes.error) {
-        results.portfolioElements = portRes.elements || [];
-        results.portfolioTokenInfo = portRes.tokenInfo || {};
+        results.portfolioElements  = portRes.elements   || [];
+        results.portfolioTokenInfo = portRes.tokenInfo  || {};
 
-        // Debug: log all element labels/platformIds to console so we can see what the API returns
-        console.log("[ChatFi Portfolio] elements count:", results.portfolioElements.length);
-        if (portRes.elements?.length) {
-          console.log("[JupChat Portfolio] elements:", portRes.elements.map(e => ({
-            label: e.label, platformId: e.platformId, name: e.name, value: e.value,
-            // Log first asset's full structure so we can verify field names
-            firstAsset: e.data?.assets?.[0] || e.data?.positions?.[0] || null,
-            tokenInfoKeys: Object.keys(portRes.tokenInfo?.solana || portRes.tokenInfo || {}).slice(0, 3),
-          })));
-        } else {
-          console.log("[ChatFi Portfolio] No elements returned — wallet may have no DeFi positions");
-        }
+        const tInfo = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
 
-        // Extract logos from tokenInfo for any tokens we still don't have logos for
-        const tokenInfoSolana = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
-        for (const [mint, info] of Object.entries(tokenInfoSolana)) {
-          if (info?.logoURI && results.logoMap) {
-            // Find sym for this mint and update logoMap
-            const sym = Object.entries(results.mintMap || {}).find(([, m]) => m === mint)?.[0];
-            if (sym && !results.logoMap[sym]) results.logoMap[sym] = info.logoURI;
-          }
-        }
+        // ── Build wallet balances from Wallet element ──
+        const walletEls = results.portfolioElements.filter(
+          el => (el.label || "").toLowerCase() === "wallet"
+        );
+        const balances = {};
+        const mintMap  = {};
+        const logoMap  = { ...TOKEN_LOGO_URLS };
 
-        // If Ultra balances failed, try to build balances from wallet elements
-        if (!results.walletBalances) {
-          const walletEl = (portRes.elements || []).filter(e => e.label === "Wallet");
-          const balances = {};
-          const mintMap  = {};
-          const logoMap  = {};
-          for (const el of walletEl) {
-            const assets = el.data?.assets || el.data?.positions || [];
-            for (const asset of assets) {
-              const sym   = asset.symbol || asset.name || "?";
-              const uiAmt = asset.balance || asset.amount || 0;
-              const mint  = asset.mint || asset.address || "";
-              const logo  = asset.logoURI || asset.logo || "";
-              if (uiAmt > 0) {
-                balances[sym] = uiAmt;
-                if (mint) mintMap[sym] = mint;
-                if (logo) logoMap[sym] = logo;
-              }
+        for (const el of walletEls) {
+          const assets = el.data?.assets || el.data?.positions || [];
+          for (const asset of assets) {
+            const mint     = asset.data?.address || asset.mint || asset.address || "";
+            const info     = mint ? (tInfo[mint] || {}) : {};
+            const sym      = info.symbol || asset.symbol || asset.name
+                           || (mint ? mint.slice(0,4) + "…" + mint.slice(-4) : "?");
+            const uiAmt    = parseFloat(asset.data?.amount ?? asset.balance ?? asset.amount ?? 0);
+            const logo     = info.logoURI || asset.logoURI || (mint ? `https://img.jup.ag/tokens/${mint}` : "");
+            if (uiAmt > 0 || mint === SOL_MINT) {
+              balances[sym] = uiAmt;
+              if (mint) mintMap[sym] = mint;
+              if (logo) logoMap[sym] = logo;
             }
           }
-          if (Object.keys(balances).length > 0) {
-            results.walletBalances = balances;
-            results.mintMap = mintMap;
-            results.logoMap = logoMap;
-            setPortfolio(balances);
-          }
         }
 
-        // ── Capture ALL non-wallet DeFi elements from portfolio API ────────
-        // We don't filter by label name because Jupiter uses many different labels
-        // (JupiterLend, Earn, Vault, JupiterLock, Vested, etc.) and they change.
-        // Instead we take everything with value > 0 that isn't a plain wallet balance.
-        const allDefi = (portRes.elements || []).filter(el => {
+        // SOL from top-level amount field if not in assets
+        if (balances["SOL"] == null && portRes.nativeBalance != null) {
+          balances["SOL"] = parseFloat(portRes.nativeBalance) / 1e9;
+          mintMap["SOL"]  = SOL_MINT;
+          logoMap["SOL"]  = TOKEN_LOGO_URLS["SOL"];
+        }
+
+        if (Object.keys(balances).length > 0) {
+          results.walletBalances = balances;
+          results.mintMap = mintMap;
+          results.logoMap = logoMap;
+          setPortfolio(balances);
+        }
+
+        // ── Classify non-wallet DeFi elements ──
+        const allDefi = results.portfolioElements.filter(el => {
           const label = (el.label || "").toLowerCase();
           return label !== "wallet" && parseFloat(el.value || 0) > 0;
         });
 
-        // Sort into earn vs lock vs other based on best-effort label/platformId matching
         const isEarnEl = (el) => {
           const s = ((el.label || "") + (el.platformId || "") + (el.name || "")).toLowerCase();
           return s.includes("earn") || s.includes("lend") || s.includes("vault") || s.includes("yield");
@@ -4178,110 +3963,197 @@ function JupChatInner() {
           return s.includes("lock") || s.includes("vest");
         };
 
-        // ── Actual Jupiter Portfolio API shape (confirmed from docs + live response) ──
-        // elements[i].value                  = element-level USD (may be stale/shares)
-        // elements[i].data.assets[j].value   = asset USD value ✓ USE THIS
-        // elements[i].data.assets[j].data.address = mint address
-        // elements[i].data.assets[j].data.amount  = token amount (human-readable)
-        // elements[i].data.assets[j].data.price   = token price USD
-        // portRes.tokenInfo[mint] = { symbol, logoURI, decimals, name }
-
-        // Shared tokenInfo lookup (mint → metadata)
-        const tInfo = portRes.tokenInfo?.solana || portRes.tokenInfo || {};
-
-        const resolveSymFromMint = (mint, fallbackLabel) => {
-          if (mint && tInfo[mint]?.symbol) return tInfo[mint].symbol;
-          // Strip common earn/lock junk from label as last resort
-          return (fallbackLabel || "").replace(/\s*(earn|vault|lend|yield|pool|lock|vest|position)/gi, "").trim() || "?";
-        };
-
         const toEarnPos = (el) => {
           const assets = el.data?.assets || el.data?.positions || [];
-
-          if (assets.length === 0) {
-            // No assets array — use element-level value only if it looks like USD (< 1M)
+          if (!assets.length) {
             const usd = parseFloat(el.value ?? 0);
-            const safeUsd = usd > 0 && usd < 1_000_000 ? usd : 0;
-            const sym = resolveSymFromMint("", el.name || el.label);
-            return [{ _fromPortfolio: true, label: el.label,
-              sym, symbol: sym, mint: "", logoURI: "",
-              amount: safeUsd, value: safeUsd, underlyingAssets: safeUsd,
-              apy: parseFloat(el.data?.apy || el.data?.supplyApy || el.data?.rate || 0),
-              shares: 0, asset: { decimals: 6 } }];
+            const sym = (el.name || el.label || "?").replace(/\s*(earn|vault|lend|yield|pool)/gi, "").trim();
+            return usd > 0 ? [{ _fromPortfolio:true, label:el.label, sym, symbol:sym, mint:"", logoURI:"",
+              amount:usd, value:usd, underlyingAssets:usd,
+              apy:parseFloat(el.data?.apy || el.data?.supplyApy || 0), shares:0, asset:{decimals:6} }] : [];
           }
-
           return assets.map(a => {
-            // Mint is in a.data.address per actual API shape
-            const mint    = a.data?.address || a.data?.mint || a.mint || a.tokenMint || "";
-            const sym     = tInfo[mint]?.symbol
-                          || a.symbol || a.name
-                          || resolveSymFromMint(mint, el.name || el.label);
-            const cleanSym = sym.replace(/^jl/i, "").trim();
-            const dec     = tInfo[mint]?.decimals ?? a.decimals ?? a.data?.decimals ?? 6;
-            const logo    = tInfo[mint]?.logoURI || a.logoURI || `https://img.jup.ag/tokens/${mint}`;
-            // a.value = USD value per asset (confirmed correct field)
+            const mint    = a.data?.address || a.data?.mint || a.mint || "";
+            const info2   = tInfo[mint] || {};
+            const sym     = (info2.symbol || a.symbol || a.name || el.name || "?")
+                            .replace(/^jl/i,"").trim();
+            const logo    = info2.logoURI || a.logoURI || (mint ? `https://img.jup.ag/tokens/${mint}` : "");
             const usd     = parseFloat(a.value ?? 0);
-            const safeUsd = usd > 0 && usd < 1_000_000 ? usd : 0;
             const tokenAmt = parseFloat(a.data?.amount ?? a.amount ?? 0);
-            const price    = parseFloat(a.data?.price ?? 0);
-            return {
-              _fromPortfolio: true, label: el.label,
-              sym: cleanSym, symbol: cleanSym, mint, logoURI: logo,
-              amount: safeUsd, value: safeUsd, underlyingAssets: tokenAmt || safeUsd,
-              price,
-              apy: parseFloat(a.data?.apy || a.apy || a.supplyApy || el.data?.apy || 0),
-              shares: parseFloat(a.data?.shares || a.shares || 0),
-              asset: { decimals: dec },
-            };
-          });
+            return usd > 0 ? {
+              _fromPortfolio:true, label:el.label,
+              sym, symbol:sym, mint, logoURI:logo,
+              amount:usd, value:usd, underlyingAssets:tokenAmt || usd,
+              price:parseFloat(a.data?.price ?? 0),
+              apy:parseFloat(a.data?.apy || a.apy || a.supplyApy || el.data?.apy || 0),
+              shares:parseFloat(a.data?.shares || a.shares || 0),
+              asset:{ decimals: info2.decimals ?? a.decimals ?? 6 },
+            } : null;
+          }).filter(Boolean);
         };
 
         const toLockPos = (el) => {
           const assets = el.data?.assets || el.data?.positions || [];
-
-          if (assets.length === 0) {
+          if (!assets.length) {
             const rawVal = parseFloat(el.value ?? 0);
-            const amt = rawVal > 0 && rawVal < 1e9 ? rawVal.toFixed(4) : "0";
-            return [{ _fromPortfolio: true, label: el.label,
-              symbol: resolveSymFromMint("", el.name || el.label),
-              totalAmount: amt, claimableAmount: "0", vestedPercent: "0" }];
+            return rawVal > 0 ? [{ _fromPortfolio:true, label:el.label,
+              symbol:(el.name || el.label || "?").replace(/\s*(lock|vest)/gi,"").trim(),
+              totalAmount:rawVal.toFixed(4), claimableAmount:"0", vestedPercent:"0" }] : [];
           }
-
           return assets.map(a => {
-            // Mint in a.data.address per actual API shape
-            const mint = a.data?.address || a.data?.mint || a.mint || a.tokenMint || "";
-            const sym  = tInfo[mint]?.symbol || a.symbol || a.name
-                       || resolveSymFromMint(mint, el.name || el.label);
-            // Token amount in a.data.amount (human-readable)
+            const mint = a.data?.address || a.data?.mint || a.mint || "";
+            const info2 = tInfo[mint] || {};
+            const sym  = info2.symbol || a.symbol || a.name || el.name || "?";
             const tokenAmt = a.data?.amount ?? a.amount ?? null;
             return {
-              _fromPortfolio: true, label: el.label,
-              symbol: sym, mint,
+              _fromPortfolio:true, label:el.label, symbol:sym, mint,
               totalAmount: tokenAmt != null ? parseFloat(tokenAmt).toFixed(4) : "0",
-              claimableAmount: (a.data?.claimableAmount ?? a.claimableAmount)
-                ? parseFloat(a.data?.claimableAmount ?? a.claimableAmount).toFixed(4) : "0",
+              claimableAmount: parseFloat(a.data?.claimableAmount ?? a.claimableAmount ?? 0).toFixed(4),
               vestedPercent: a.data?.vestedPercent ?? a.vestedPercent ?? a.percentVested ?? "0",
-              cliff: a.data?.cliff || a.cliff || a.cliffTime || null,
+              cliff: a.data?.cliff || a.cliff || null,
             };
           });
         };
 
-        const earnEls = allDefi.filter(isEarnEl);
-        const lockEls = allDefi.filter(isLockEl);
-        // Any element that didn't match earn or lock → treat as earn (generic DeFi yield)
+        const earnEls  = allDefi.filter(isEarnEl);
+        const lockEls  = allDefi.filter(isLockEl);
         const otherEls = allDefi.filter(el => !isEarnEl(el) && !isLockEl(el));
 
         if (earnEls.length || otherEls.length) {
-          results._earnFromPortfolio = [...earnEls, ...otherEls].flatMap(toEarnPos)
-            .filter(e => parseFloat(e.value || e.underlyingAssets || 0) > 0 || parseFloat(e.shares || 0) > 1000);
+          results._earnFromPortfolio = [...earnEls, ...otherEls]
+            .flatMap(toEarnPos)
+            .filter(e => parseFloat(e.value || e.underlyingAssets || 0) > 0);
         }
         if (lockEls.length) {
           results._lockFromPortfolio = lockEls.flatMap(toLockPos);
         }
-      }
-    } catch {}
 
-    // ── 3. Trigger orders — v2 (JWT) or v1 public fallback ───────────────────
+        // ── LP positions ──
+        const lpEls = results.portfolioElements.filter(el =>
+          el.label === "LiquidityPool" || el.type === "liquidity-position" ||
+          ["orca","raydium","meteora"].some(p => el.platformId?.includes(p))
+        );
+        if (lpEls.length) {
+          results.lpPositions = lpEls.map(el => ({
+            platform: el.platformId || el.name || "LP",
+            name:     el.name || el.label || "Liquidity Position",
+            value:    el.value || el.data?.value || null,
+            assets:   el.data?.assets || [],
+            id:       el.id || Math.random().toString(),
+          }));
+        }
+
+        // ── Perps from portfolio API ──
+        const perpEls = results.portfolioElements.filter(el =>
+          el.platformId === "jupiter-perps" || el.name?.toLowerCase().includes("perp")
+        );
+        if (perpEls.length) {
+          results.perpPositions = perpEls.flatMap(el => {
+            const assets = el.data?.assets || el.data?.borrows || [];
+            return assets.map(asset => ({
+              market:   asset.data?.symbol || el.name || "PERP",
+              side:     el.data?.side || asset.data?.side || "long",
+              sizeUsd:  asset.value ?? el.value ?? null,
+              entryPrice:       asset.data?.price ?? null,
+              unrealizedPnlUsd: el.data?.pnl ?? asset.data?.pnl ?? null,
+              leverage:         el.data?.leverage ?? null,
+              liquidationPrice: el.data?.liquidationPrice ?? null,
+              positionKey:      el.id || asset.data?.address || Math.random().toString(),
+            }));
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("[ChatFi Portfolio] Jupiter Portfolio API failed:", e?.message);
+    }
+
+    // ── 2. Fallback: build balances from Ultra holdings if Portfolio API missed them ──
+    if (!results.walletBalances || Object.keys(results.walletBalances).length === 0) {
+      try {
+        // Try Helius backend first (most reliable for ALL SPL tokens)
+        const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
+        if (r.ok) {
+          const d = await r.json();
+          const splTokens = d?.tokens || [];
+          const balances = {};
+          const mintMap  = {};
+          const logoMap  = { ...TOKEN_LOGO_URLS };
+          for (const t of splTokens) {
+            if (!t.mint || t.amount <= 0) continue;
+            const sym = t.symbol || t.mint.slice(0,6);
+            balances[sym] = t.amount;
+            mintMap[sym]  = t.mint;
+            if (t.logoURI) logoMap[sym] = t.logoURI;
+          }
+          if (Object.keys(balances).length > 0) {
+            results.walletBalances = balances;
+            results.mintMap = { ...mintMap, ...(results.mintMap || {}) };
+            results.logoMap = { ...logoMap, ...(results.logoMap || {}) };
+            setPortfolio(balances);
+          }
+        }
+      } catch (e) {
+        console.warn("[ChatFi Portfolio] Helius backend failed:", e?.message);
+      }
+    }
+
+    // ── 3. Ultra holdings fallback (if still no balances) ────────────────────
+    if (!results.walletBalances || Object.keys(results.walletBalances).length === 0) {
+      try {
+        const apis = [
+          `https://api.jup.ag/ultra/v1/holdings/${walletAddress}`,
+          `https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`,
+        ];
+        let holdingsData = null;
+        for (const url of apis) {
+          try {
+            const r = await fetch(url, { signal: safeTimeout(8000) });
+            if (r.ok) { const d = await r.json(); if (d && !d.error) { holdingsData = d; break; } }
+          } catch {}
+        }
+        if (holdingsData) {
+          const solAmt = holdingsData.uiAmount ?? (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : 0);
+          const balances  = { SOL: solAmt };
+          const mintMap   = { SOL: SOL_MINT };
+          const logoMap   = { ...TOKEN_LOGO_URLS };
+          const tb = holdingsData.tokenBalances || holdingsData.tokens || {};
+          for (const [mint, data] of Object.entries(tb)) {
+            if (mint === SOL_MINT) continue;
+            const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null
+              ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
+            if (uiAmt <= 0) continue;
+            const sym = data?.symbol || mint.slice(0,4) + "…" + mint.slice(-4);
+            balances[sym] = uiAmt;
+            mintMap[sym]  = mint;
+            logoMap[sym]  = data?.logoURI || `https://img.jup.ag/tokens/${mint}`;
+          }
+          results.walletBalances = balances;
+          results.mintMap = mintMap;
+          results.logoMap = logoMap;
+          setPortfolio(balances);
+        }
+      } catch (e) {
+        console.warn("[ChatFi Portfolio] Ultra holdings fallback failed:", e?.message);
+      }
+    }
+
+    // ── 4. Last-resort: SOL balance via RPC if everything else failed ─────────
+    if (!results.walletBalances || Object.keys(results.walletBalances).length === 0) {
+      try {
+        const solJson = await fetch(SOLANA_RPC, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"getBalance", params:[walletAddress] }),
+          signal: safeTimeout(8000),
+        }).then(r => r.json());
+        const solAmt = (solJson?.result?.value || 0) / 1e9;
+        results.walletBalances = { SOL: solAmt };
+        results.mintMap = { SOL: SOL_MINT };
+        results.logoMap = { ...TOKEN_LOGO_URLS };
+      } catch {}
+    }
+
+    // ── 5. Trigger orders ─────────────────────────────────────────────────────
     if (trigJwtRef.current) {
       try {
         const trigRes = await fetch("/api/jupiter", {
@@ -4292,44 +4164,41 @@ function JupChatInner() {
             method: "GET",
             triggerJwt: trigJwtRef.current,
           }),
+          signal: safeTimeout(10000),
         });
         const trigData = await trigRes.json();
         results.triggerOrders = Array.isArray(trigData?.orders) ? trigData.orders : [];
       } catch {}
     }
-    // Public v1 fallback — no JWT needed
     if (!results.triggerOrders?.length) {
       try {
         const trigV1 = await jupFetch(`${JUP_TRIGGER_BASE}/getTriggerOrders?wallet=${walletAddress}&status=open`);
-        const orders = Array.isArray(trigV1?.orders) ? trigV1.orders
-                     : Array.isArray(trigV1) ? trigV1 : [];
+        const orders = Array.isArray(trigV1?.orders) ? trigV1.orders : Array.isArray(trigV1) ? trigV1 : [];
         if (orders.length) results.triggerOrders = orders;
       } catch {}
     }
 
-    // ── 4. Recurring / DCA orders ─────────────────────────────────────────────
+    // ── 6. Recurring / DCA orders ─────────────────────────────────────────────
     try {
       const recur = await jupFetch(JUP_RECUR_BASE + "/getRecurringOrders?wallets=" + walletAddress + "&status=active");
       results.recurringOrders = Array.isArray(recur?.recurringOrders) ? recur.recurringOrders
                               : Array.isArray(recur) ? recur : [];
     } catch {}
 
-    // ── 5. Prediction positions ───────────────────────────────────────────────
+    // ── 7. Prediction positions ───────────────────────────────────────────────
     try {
       const pred = await predFetch(JUP_PRED_API + "/positions?ownerPubkey=" + walletAddress);
       results.predPositions = Array.isArray(pred) ? pred : (pred?.data || []);
     } catch {}
 
-    // ── 6. Prediction orders ──────────────────────────────────────────────────
+    // ── 8. Prediction orders ──────────────────────────────────────────────────
     try {
       const orders = await predFetch(JUP_PRED_API + "/orders?ownerPubkey=" + walletAddress);
       results.predOrders = Array.isArray(orders) ? orders : (orders?.data || []);
     } catch {}
 
-    // ── 7. Earn positions ─────────────────────────────────────────────────────
-    // Prefer _earnFromPortfolio (already normalised with USD values).
-    // Only call earn API if portfolio didn't return earn elements.
-    if (!results._earnFromPortfolio?.length && !results.earnPositions?.length) {
+    // ── 9. Earn positions (only if Portfolio API didn't return them) ──────────
+    if (!results._earnFromPortfolio?.length) {
       try {
         const earn = await jupFetch(JUP_EARN_API + "/positions?users=" + walletAddress);
         if (earn && !earn.error) {
@@ -4342,78 +4211,29 @@ function JupChatInner() {
         }
       } catch {}
     }
-    // Always prefer _earnFromPortfolio over raw earn API (has USD values + clean symbols)
     if (results._earnFromPortfolio?.length) {
       results.earnPositions = results._earnFromPortfolio;
     }
-    // Final fallback: earn elements extracted from portfolio API
-    if (!results.earnPositions?.length && results._earnFromPortfolio?.length) {
-      results.earnPositions = results._earnFromPortfolio;
-    }
 
-    // ── 8. Staked JUP ─────────────────────────────────────────────────────────
+    // ── 10. Staked JUP ────────────────────────────────────────────────────────
     try {
-      const stakedRes = await fetch("https://api.jup.ag/portfolio/v1/staked-jup/" + walletAddress)
+      const stakedRes = await fetch(`https://api.jup.ag/portfolio/v1/staked-jup/${walletAddress}`, { signal: safeTimeout(8000) })
         .then(r => r.json());
       if (stakedRes && !stakedRes.error) results.stakedJup = stakedRes;
     } catch {}
 
-    // ── 8b. JUP ASR (Active Staking Rewards) ─────────────────────────────────
+    // ── 11. JUP ASR rewards ───────────────────────────────────────────────────
     try {
-      // Jupiter ASR: claimable governance rewards for staked JUP holders
-      // epoch-based, claimable at vote.jup.ag/asr
-      const asrRes = await fetch(`https://vote.jup.ag/api/asr/claimable?wallet=${walletAddress}`)
+      const asrRes = await fetch(`https://vote.jup.ag/api/asr/claimable?wallet=${walletAddress}`, { signal: safeTimeout(8000) })
         .then(r => r.json()).catch(() => null);
       if (asrRes && !asrRes.error) {
-        // asrRes shape: { claimable: true/false, amount: number, epoch: number, token: "USDC"|"JUP" }
-        // or array of epochs
         const asrArr = Array.isArray(asrRes) ? asrRes : [asrRes];
-        const claimableEpochs = asrArr.filter(a => a && (a.claimable || parseFloat(a.amount || 0) > 0));
-        if (claimableEpochs.length > 0) results.asrRewards = claimableEpochs;
+        const claimable = asrArr.filter(a => a && (a.claimable || parseFloat(a.amount || 0) > 0));
+        if (claimable.length) results.asrRewards = claimable;
       }
     } catch {}
 
-    // ── 9. Perps positions ────────────────────────────────────────────────────
-    try {
-      const perpData = await jupFetch(`${JUP_PORTFOLIO}/positions/${walletAddress}?platforms=jupiter-perps`);
-      const perpElements = (perpData?.elements || []).filter(el =>
-        el.platformId === "jupiter-perps" || el.name?.toLowerCase().includes("perp")
-      );
-      const perpPositionsList = perpElements.flatMap(el => {
-        const assets = el.data?.assets || el.data?.borrows || [];
-        return assets.map(asset => ({
-          market:   asset.data?.symbol || el.name || "PERP",
-          side:     el.data?.side || asset.data?.side || "long",
-          sizeUsd:  asset.value ?? el.value ?? null,
-          entryPrice: asset.data?.price ?? null,
-          unrealizedPnlUsd: el.data?.pnl ?? asset.data?.pnl ?? null,
-          leverage:   el.data?.leverage ?? null,
-          liquidationPrice: el.data?.liquidationPrice ?? null,
-          positionKey: el.id || asset.data?.address || Math.random().toString(),
-        }));
-      });
-      if (perpPositionsList.length > 0) results.perpPositions = perpPositionsList;
-    } catch {}
-
-    // ── 10. LP / Liquidity positions from portfolioElements ───────────────────
-    try {
-      const lpElements = (results.portfolioElements || []).filter(el =>
-        el.label === "LiquidityPool" || el.type === "liquidity-position" || el.platformId?.includes("orca") || el.platformId?.includes("raydium") || el.platformId?.includes("meteora")
-      );
-      if (lpElements.length > 0) {
-        results.lpPositions = lpElements.map(el => ({
-          platform: el.platformId || el.name || "LP",
-          name:     el.name || el.label || "Liquidity Position",
-          value:    el.value || el.data?.value || null,
-          assets:   el.data?.assets || [],
-          id:       el.id || Math.random().toString(),
-        }));
-      }
-    } catch {}
-
-    // ── 11. Locks (token vesting) ─────────────────────────────────────────────
-    // Use jupFetch (sends API key header) and query both wallet + recipient so we
-    // catch locks where the user is the creator OR the beneficiary.
+    // ── 12. Lock positions ────────────────────────────────────────────────────
     try {
       const [lockByWallet, lockByRecipient] = await Promise.all([
         jupFetch(`${JUP_LOCK_API}/locks?wallet=${walletAddress}`).catch(() => null),
@@ -4424,10 +4244,9 @@ function JupChatInner() {
       const locks = [...normLockArr(lockByWallet), ...normLockArr(lockByRecipient)].filter(lk => {
         const id = lk.pubkey || lk.id || lk.address || JSON.stringify(lk);
         if (seen.has(id)) return false;
-        seen.add(id);
-        return true;
+        seen.add(id); return true;
       });
-      if (locks.length > 0) {
+      if (locks.length) {
         const KNOWN_MINT_SYMS = {
           "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
           "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":  "JUP",
@@ -4441,75 +4260,40 @@ function JupChatInner() {
             || KNOWN_MINT_SYMS[mint] || mint.slice(0, 6);
           const dec = tokenDecimalsRef.current[sym] || KNOWN_DECIMALS[sym] || 6;
           const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
-          const totalRaw = lk.totalRaw || lk.totalAmount || lk.amount || lk.depositedAmount || 0;
-          const claimRaw = lk.claimableRaw || lk.claimableAmount || lk.unlockedAmount || 0;
-          // Compute claimable: check if cliff has passed and tokens are unvested
-          const cliffTs = lk.cliff || lk.cliffTime || lk.cliffTimestamp || 0;
-          const cliffPassed = cliffTs ? (Date.now() / 1000 > cliffTs) : true;
-          const claimedRaw = lk.claimedAmount || lk.claimedRaw || 0;
-          const unlockedPct = lk.unlockedPercent || lk.vestedPercent || 0;
-          // If claimRaw is 0 but cliff passed and unlockedPct > 0 and totalRaw > 0
-          // → compute from unlockedPercent minus already-claimed
-          let effectiveClaimRaw = claimRaw;
-          if (!effectiveClaimRaw && cliffPassed && unlockedPct > 0 && totalRaw > 0) {
+          const totalRaw     = lk.totalRaw || lk.totalAmount || lk.amount || lk.depositedAmount || 0;
+          const claimRaw     = lk.claimableRaw || lk.claimableAmount || lk.unlockedAmount || 0;
+          const cliffTs      = lk.cliff || lk.cliffTime || lk.cliffTimestamp || 0;
+          const cliffPassed  = cliffTs ? (Date.now() / 1000 > cliffTs) : true;
+          const claimedRaw   = lk.claimedAmount || lk.claimedRaw || 0;
+          const unlockedPct  = lk.unlockedPercent || lk.vestedPercent || 0;
+          let effectiveClaimRaw = parseFloat(claimRaw);
+          if ((!effectiveClaimRaw || effectiveClaimRaw <= 0) && unlockedPct > 0 && cliffPassed) {
             effectiveClaimRaw = Math.max(0, (totalRaw * unlockedPct / 100) - claimedRaw);
           }
           return {
             ...lk,
             lockId:          lk.pubkey || lk.id || lk.address,
             symbol:          sym,
-            claimableAmount: typeof effectiveClaimRaw === "number" && effectiveClaimRaw > 1000 ? fmtAmt(effectiveClaimRaw) : parseFloat(effectiveClaimRaw || 0).toFixed(4),
-            totalAmount:     typeof totalRaw === "number" && totalRaw > 1000 ? fmtAmt(totalRaw) : parseFloat(totalRaw || 0).toFixed(4),
-            vestedPercent:   totalRaw > 0 ? ((parseFloat(effectiveClaimRaw + claimedRaw) / parseFloat(totalRaw)) * 100).toFixed(1) : (unlockedPct ? String(unlockedPct) : "0"),
+            claimableAmount: effectiveClaimRaw > 1000 ? fmtAmt(effectiveClaimRaw) : parseFloat(effectiveClaimRaw || 0).toFixed(4),
+            totalAmount:     totalRaw > 1000 ? fmtAmt(totalRaw) : parseFloat(totalRaw || 0).toFixed(4),
+            vestedPercent:   totalRaw > 0
+              ? ((parseFloat(effectiveClaimRaw + claimedRaw) / parseFloat(totalRaw)) * 100).toFixed(1)
+              : String(unlockedPct || "0"),
             cliff:           cliffTs || null,
             cliffPassed,
           };
         });
       }
     } catch {}
-    // Server proxy fallback (/api/lock)
-    if (!results.lockPositions?.length) {
-      try {
-        const lockRes = await fetch("/api/lock", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "accounts", wallet: walletAddress }),
-        });
-        const lockData = await lockRes.json();
-        if (!lockData.error && lockData.accounts?.length > 0) {
-          const KNOWN_MINT_SYMS = {
-            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
-            "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN":  "JUP",
-            "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
-            "So11111111111111111111111111111111111111112":   "SOL",
-            "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
-            "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm": "WIF",
-          };
-          const KNOWN_DECIMALS = { USDC:6, USDT:6, JUP:6, SOL:9, BONK:5, WIF:6, JUPUSD:6 };
-          results.lockPositions = lockData.accounts.map(acct => {
-            const sym = Object.entries(tokenCacheRef.current).find(([, v]) => v === acct.mint)?.[0]
-              || KNOWN_MINT_SYMS[acct.mint] || `${acct.mint.slice(0, 6)}…`;
-            const dec = tokenDecimalsRef.current[sym] || KNOWN_DECIMALS[sym] || 6;
-            const fmtAmt = (raw) => (raw / Math.pow(10, dec)).toFixed(dec >= 9 ? 4 : 2);
-            return {
-              ...acct,
-              lockId:          acct.pubkey,
-              symbol:          sym,
-              claimableAmount: fmtAmt(acct.claimableRaw || 0),
-              totalAmount:     fmtAmt(acct.totalRaw || 0),
-              vestedPercent:   acct.totalRaw > 0 ? ((acct.claimableRaw / acct.totalRaw) * 100).toFixed(1) : "0",
-            };
-          });
-        }
-      } catch {}
-    }
-    // Final fallback: lock elements from portfolio API
+
+    // Merge lock positions from Portfolio API elements
     if (results._lockFromPortfolio?.length) {
       results.lockPositions = [...(results.lockPositions || []), ...results._lockFromPortfolio];
     }
 
     return results;
   };
+
 
   // ── Studio: fetch unclaimed DBC creator fees ────────────────────────────────
   const fetchStudioFees = async () => {
