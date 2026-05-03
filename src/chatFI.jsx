@@ -2697,6 +2697,7 @@ function JupChatInner() {
   // ── Price Alerts ──────────────────────────────────────────────────────────────
   const [priceAlerts, setPriceAlerts] = useState([]);
   const alertIntervalRef = useRef(null);
+  const directMigrateRef = useRef(null); // exposes YieldRotatorPlugin.migrate() for direct mode
 
   // ── Volatility Monitor ────────────────────────────────────────────────────────
   const [volMonitors, setVolMonitors] = useState([]);
@@ -9100,28 +9101,47 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         if (!walletFull) {
           push("ai", text + "\n\nConnect your wallet first to migrate your earn position.");
         } else {
-          const fromSym = (actionData?.fromSym || "current").toUpperCase();
-          const toSym   = (actionData?.toSym   || "better").toUpperCase();
+          const fromSym = (actionData?.fromSym || "").toUpperCase();
+          const toSym   = (actionData?.toSym   || "").toUpperCase();
           const fromApy = actionData?.fromApy ? `${parseFloat(actionData.fromApy).toFixed(2)}%` : "";
           const toApy   = actionData?.toApy   ? `${parseFloat(actionData.toApy).toFixed(2)}%`   : "";
           push("ai", text);
-          if (directMode && actionData?.fromSym && actionData?.toSym) {
-            push("ai",
-              `⚡ **Direct Mode** — Migrate **${fromSym} Earn**${fromApy ? ` (${fromApy})` : ""} → **${toSym} Earn**${toApy ? ` (${toApy})` : ""}`
+          if (directMode && fromSym && toSym) {
+            const rotator = directMigrateRef?.current;
+            const ops = rotator?.getOpportunities?.() || [];
+            const match = ops.find(op =>
+              op.posSym?.toUpperCase() === fromSym && op.bestSym?.toUpperCase() === toSym
             );
-            setPendingDirectAction({
-              type: "migrateEarn",
-              label: `${fromSym} → ${toSym} Earn`,
-              fromSym,
-              toSym,
-              fromApy: actionData?.fromApy,
-              toApy:   actionData?.toApy,
-            });
+            if (match && rotator?.migrate) {
+              push("ai", `⚡ **Direct Mode** — Migrating **${fromSym} Earn**${fromApy ? ` (${fromApy})` : ""} → **${toSym} Earn**${toApy ? ` (${toApy})` : ""} now…`);
+              rotator.migrate(match);
+            } else {
+              push("ai", `⚡ **Direct Mode** — Opening portfolio to find ${fromSym} → ${toSym} migration…`);
+              setShowPortfolio(true);
+              let attempts = 0;
+              const tryMigrate = setInterval(() => {
+                attempts++;
+                const r = directMigrateRef?.current;
+                const o = r?.getOpportunities?.() || [];
+                const m = o.find(op =>
+                  op.posSym?.toUpperCase() === fromSym && op.bestSym?.toUpperCase() === toSym
+                );
+                if (m && r?.migrate) {
+                  clearInterval(tryMigrate);
+                  push("ai", `Found migration — starting now…`);
+                  r.migrate(m);
+                } else if (attempts >= 10) {
+                  clearInterval(tryMigrate);
+                  push("ai", `Tap the **Migrate** button on the ${fromSym} → ${toSym} card in your portfolio.`);
+                }
+              }, 1500);
+            }
           } else {
-            // No specific pool specified — show rotator in portfolio
             setShowPortfolio(true);
             push("ai", "Open your Portfolio → the Yield Rotator will show available migration options.");
           }
+        }
+
         }
 
       } else if (action === "EARN_DEPOSIT") {
@@ -12541,6 +12561,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   T={T}
                   isMobile={isMobile}
                   onMigrationDone={() => { try { fetchPortfolioData(walletFull); fetchEarnUserPositions(); } catch(e) { console.warn("onMigrationDone:", e); } }}
+                  onDirectMigrateRef={directMigrateRef}
                 />
               </div>
             );
@@ -13097,6 +13118,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       T={T}
                       isMobile={isMobile}
                       onMigrationDone={() => { try { fetchPortfolioData(walletFull); } catch(e) { console.warn("onMigrationDone:", e); } }}
+                      onDirectMigrateRef={directMigrateRef}
                     />
                   )}
 
