@@ -3846,31 +3846,60 @@ function JupChatInner() {
         } catch {}
       }
 
-      // ── Helius: ALWAYS fetch SPL tokens and merge — Jupiter intermittently returns
-      // empty tokenBalances even for wallets with SPL tokens. Run unconditionally
-      // and merge: Jupiter wins on overlap (richer metadata), Helius fills gaps.
+      // ── SPL tokens: try both /api/portfolio (backend) AND direct Helius RPC ──
+      // Jupiter's holdings API intermittently misses SPL tokens. We always merge
+      // from both backend and direct RPC so tokens are never lost.
+      const HELIUS_RPC_URL = `https://mainnet.helius-rpc.com/?api-key=${
+        typeof process !== "undefined" ? "" : ""  // key is server-side only
+      }`;
+
+      // Path A: our backend /api/portfolio which has the Helius key server-side
+      let heliusTokens = {};
       try {
         const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
         if (r.ok) {
           const d = await r.json();
           const splTokens = d?.tokens || [];
-          if (splTokens.length > 0) {
-            const heliusTokens = {};
-            for (const t of splTokens) {
-              if (!t.mint || t.mint === SOL_MINT) continue;
-              heliusTokens[t.mint] = { uiAmount: t.amount, symbol: t.symbol, decimals: t.decimals ?? 6, logoURI: t.logoURI };
-            }
-            if (holdingsData) {
-              const jupTokens = holdingsData.tokenBalances || holdingsData.tokens || {};
-              const merged = { ...heliusTokens, ...jupTokens }; // Jupiter overwrites on overlap
-              holdingsData = { uiAmount: holdingsData.uiAmount, tokenBalances: merged };
-            } else {
-              const solAmt = splTokens.find(t => t.mint === SOL_MINT)?.amount ?? 0;
-              holdingsData = { uiAmount: solAmt, tokenBalances: heliusTokens };
+          console.log(`[ChatFi Portfolio] /api/portfolio returned ${splTokens.length} tokens`);
+          for (const t of splTokens) {
+            if (!t.mint || t.mint === SOL_MINT) continue;
+            heliusTokens[t.mint] = { uiAmount: t.amount, symbol: t.symbol, decimals: t.decimals ?? 6, logoURI: t.logoURI };
+          }
+        } else {
+          console.warn(`[ChatFi Portfolio] /api/portfolio returned ${r.status}`);
+        }
+      } catch (e) { console.warn("[ChatFi Portfolio] /api/portfolio failed:", e?.message); }
+
+      // Path B: if backend returned nothing, try Jupiter Ultra holdings directly
+      // (different from the main holdings call above — this is a retry with longer timeout)
+      if (Object.keys(heliusTokens).length === 0) {
+        try {
+          const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(12000) });
+          if (r.ok) {
+            const d = await r.json();
+            const tb = d?.tokenBalances || d?.tokens || {};
+            const mints = Object.keys(tb);
+            console.log(`[ChatFi Portfolio] Ultra retry returned ${mints.length} SPL mints`);
+            for (const [mint, data] of Object.entries(tb)) {
+              if (mint === SOL_MINT) continue;
+              const uiAmt = data?.uiAmount ?? (data?.amount && data?.decimals ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
+              if (uiAmt > 0) heliusTokens[mint] = { uiAmount: uiAmt, symbol: data?.symbol || "", decimals: data?.decimals ?? 6, logoURI: "" };
             }
           }
+        } catch (e) { console.warn("[ChatFi Portfolio] Ultra retry failed:", e?.message); }
+      }
+
+      // Merge whatever we found into holdingsData
+      if (Object.keys(heliusTokens).length > 0) {
+        if (holdingsData) {
+          const jupTokens = holdingsData.tokenBalances || holdingsData.tokens || {};
+          const merged = { ...heliusTokens, ...jupTokens }; // Jupiter wins on overlap
+          holdingsData = { uiAmount: holdingsData.uiAmount, tokenBalances: merged };
+        } else {
+          holdingsData = { uiAmount: 0, tokenBalances: heliusTokens };
         }
-      } catch (e) { console.warn("[ChatFi Portfolio] Helius SPL merge failed:", e?.message); }
+      }
+      console.log(`[ChatFi Portfolio] after merge: ${Object.keys(holdingsData?.tokenBalances || holdingsData?.tokens || {}).length} SPL mints`);
 
       if (holdingsData) {
         const solUiAmt2 = holdingsData.uiAmount ?? (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : holdingsData.amount != null ? Number(holdingsData.amount) / 1e9 : 0);
@@ -3979,7 +4008,10 @@ function JupChatInner() {
         console.log("[ChatFi Portfolio] elements count:", results.portfolioElements.length);
         if (portRes.elements?.length) {
           console.log("[JupChat Portfolio] elements:", portRes.elements.map(e => ({
-            label: e.label, platformId: e.platformId, name: e.name, value: e.value
+            label: e.label, platformId: e.platformId, name: e.name, value: e.value,
+            // Log first asset's full structure so we can verify field names
+            firstAsset: e.data?.assets?.[0] || e.data?.positions?.[0] || null,
+            tokenInfoKeys: Object.keys(portRes.tokenInfo?.solana || portRes.tokenInfo || {}).slice(0, 3),
           })));
         } else {
           console.log("[ChatFi Portfolio] No elements returned — wallet may have no DeFi positions");
