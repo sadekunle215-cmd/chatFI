@@ -5586,10 +5586,15 @@ function JupChatInner() {
   };
 
   // Jupiter spec: 13 random bytes → base58 encoded → first 12 chars
+  // Guard: regenerate if base58 output is somehow < 12 chars (leading zero bytes edge case)
   const generateInviteCode = () => {
-    const buf = new Uint8Array(13);
-    crypto.getRandomValues(buf);
-    return binaryToBase58(buf).substring(0, 12);
+    let code = "";
+    while (code.length < 12) {
+      const buf = new Uint8Array(13);
+      crypto.getRandomValues(buf);
+      code = binaryToBase58(buf).substring(0, 12);
+    }
+    return code;
   };
 
   // Jupiter spec: SHA-256("invite:" + code) → 32-byte privkey
@@ -5806,8 +5811,24 @@ function JupChatInner() {
 
       const { partiallySignedTx } = serverData;
       if (!provider.signTransaction) throw new Error("Wallet does not support transaction signing.");
-      const tx       = VersionedTransaction.deserialize(b64ToBytes(partiallySignedTx));
-      const signedTx = await provider.signTransaction(tx);
+      const tx = VersionedTransaction.deserialize(b64ToBytes(partiallySignedTx));
+
+      // Prefer raw injected wallet to avoid Reown wiping the invite keypair sig slot
+      const clawbackInj = window?.phantom?.solana || window?.backpack?.solana ||
+                          window?.solflare || window?.solana || null;
+      let signedTx;
+      if (clawbackInj?.signTransaction) {
+        signedTx = await clawbackInj.signTransaction(tx);
+      } else {
+        // Reown fallback — re-inject invite keypair sig after signing
+        signedTx = await provider.signTransaction(tx);
+        const clawbackKeypair = await inviteCodeToKeypair(inviteCode);
+        const msgBytes    = signedTx.message.serialize();
+        const inviteSig   = nacl.sign.detached(msgBytes, clawbackKeypair.secretKey);
+        const inviteIdx   = signedTx.message.staticAccountKeys
+          .findIndex(k => k.equals(clawbackKeypair.publicKey));
+        if (inviteIdx >= 0) signedTx.signatures[inviteIdx] = inviteSig;
+      }
 
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
@@ -12637,7 +12658,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 <div style={{ fontSize:11, color:T.text3, background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:8, padding:"7px 10px", marginBottom:12 }}>
                   The invite link is generated on-chain. Share it via any app — the recipient creates a wallet when claiming.
                 </div>
-                <button onClick={doSend}
+                <button onClick={() => doSend()}
                   disabled={!sendCfg.amount || parseFloat(sendCfg.amount) <= 0 || sendStatus === "signing"}
                   style={{ width:"100%", padding:"11px", background: (!sendCfg.amount || sendStatus==="signing") ? T.border : T.accent, border:"none", borderRadius:10, color:"#0d1117", fontSize:14, fontWeight:700, cursor:"pointer", marginBottom:8 }}>
                   {sendStatus === "signing" ? <><span className="spinner" style={{ borderTopColor:"#0d1117", display:"inline-block", marginRight:6 }}/> Signing…</> : `Send ${sendCfg.amount||""} ${sendCfg.token} via Invite Link`}
