@@ -4156,9 +4156,9 @@ function JupChatInner() {
     } catch {}
 
     // ── 7. Earn positions ─────────────────────────────────────────────────────
-    // Use jupFetch proxy — injects x-api-key required by Jupiter Earn API.
-    // Query param is ?users= per official Jupiter docs (not ?wallets=).
-    if (!results.earnPositions?.length) {
+    // Prefer _earnFromPortfolio (already normalised with USD values).
+    // Only call earn API if portfolio didn't return earn elements.
+    if (!results._earnFromPortfolio?.length && !results.earnPositions?.length) {
       try {
         const earn = await jupFetch(JUP_EARN_API + "/positions?users=" + walletAddress);
         if (earn && !earn.error) {
@@ -4170,6 +4170,10 @@ function JupChatInner() {
           if (earnArr.length) results.earnPositions = earnArr;
         }
       } catch {}
+    }
+    // Always prefer _earnFromPortfolio over raw earn API (has USD values + clean symbols)
+    if (results._earnFromPortfolio?.length) {
+      results.earnPositions = results._earnFromPortfolio;
     }
     // Final fallback: earn elements extracted from portfolio API
     if (!results.earnPositions?.length && results._earnFromPortfolio?.length) {
