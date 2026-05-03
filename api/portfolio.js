@@ -136,6 +136,22 @@ async function fetchTokenBalances(wallet) {
       jFetch(SOL_PRICE_URL, {}, 8000),
     ]);
 
+    // Helius DAS getAsset — resolves symbol + logo for any on-chain token not in Jupiter list
+    const dasLookup = async (mint) => {
+      try {
+        const res = await fetch(HELIUS_RPC, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: "das", method: "getAsset", params: { id: mint } }),
+        });
+        const d = await res.json();
+        const asset = d?.result;
+        const symbol  = asset?.content?.metadata?.symbol || asset?.symbol || null;
+        const logoURI = asset?.content?.links?.image || asset?.content?.files?.[0]?.uri || null;
+        return { symbol, logoURI };
+      } catch { return { symbol: null, logoURI: null }; }
+    };
+
     const prices   = priceRes?.data || {};
     const solPrice = parseFloat(prices[SOL_MINT]?.price || 0);
     const solUSD   = solAmt * solPrice;
@@ -145,16 +161,19 @@ async function fetchTokenBalances(wallet) {
       mint:     SOL_MINT,
       amount:   solAmt,
       usdValue: solUSD,
-      logoURI:  solMeta?.logoURI || solMeta?.icon || `https://img.jup.ag/tokens/${SOL_MINT}`,
+      logoURI:  solMeta?.logoURI || solMeta?.icon || solMeta?.image || `https://img.jup.ag/tokens/${SOL_MINT}`,
       price:    solPrice,
     }];
 
     for (let i = 0; i < splMints.length; i++) {
       const { mint, amount } = splMints[i];
-      const meta    = metaResults[i]?.status === "fulfilled" ? metaResults[i].value : null;
-      const symbol  = meta?.symbol || mint.slice(0, 6) + "…";
-      const logoURI = meta?.logoURI || `https://img.jup.ag/tokens/${mint}`;
-      const price   = parseFloat(prices[mint]?.price || 0);
+      const jupMeta = metaResults[i]?.status === "fulfilled" ? metaResults[i].value : null;
+      // Fall back to Helius DAS if Jupiter doesn't know this token
+      const dasMeta = (!jupMeta?.symbol) ? await dasLookup(mint) : { symbol: null, logoURI: null };
+      const symbol  = jupMeta?.symbol || dasMeta.symbol || mint.slice(0, 6) + "…";
+      const logoURI = jupMeta?.logoURI || jupMeta?.icon || jupMeta?.image
+                    || dasMeta.logoURI || `https://img.jup.ag/tokens/${mint}`;
+      const price    = parseFloat(prices[mint]?.price || 0);
       const usdValue = amount * price;
       tokens.push({ symbol, mint, amount, usdValue, logoURI, price });
     }
