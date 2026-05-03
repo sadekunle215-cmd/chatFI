@@ -12658,7 +12658,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 Close
               </button>
             </div>
-            </ErrorBoundary>
           )}
 
           {/* ── Yield Rotator Panel — standalone better APY finder ─────── */}
@@ -13563,6 +13562,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 </button>
               </div>
             </div>
+            </ErrorBoundary>
           )}
 
           {/* ── Yield Rotator — shown below portfolio as its own block ── */}
