@@ -41,9 +41,24 @@ function getDb() {
 
 // ── Delegate keypair ─────────────────────────────────────────────────────────
 function getDelegateKeypair() {
-  const raw = process.env.DELEGATE_PRIVATE_KEY;
+  const raw = process.env.DELEGATE_PRIVATE_KEY?.trim();
   if (!raw) throw new Error("DELEGATE_PRIVATE_KEY not set");
-  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw)));
+  // Support both JSON array [1,2,3...] and base58 string formats
+  if (raw.startsWith("[")) {
+    return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw)));
+  }
+  // Base58 decode — manual implementation (no bs58 dependency needed)
+  const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  let bytes = BigInt(0);
+  for (const char of raw) {
+    const idx = ALPHABET.indexOf(char);
+    if (idx === -1) throw new Error("Invalid base58 character in DELEGATE_PRIVATE_KEY");
+    bytes = bytes * BigInt(58) + BigInt(idx);
+  }
+  const hex = bytes.toString(16).padStart(128, "0");
+  const arr = new Uint8Array(64);
+  for (let i = 0; i < 64; i++) arr[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return Keypair.fromSecretKey(arr);
 }
 
 const SOLANA_RPC =
