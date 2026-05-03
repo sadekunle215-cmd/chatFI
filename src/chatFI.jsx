@@ -4042,33 +4042,37 @@ function JupChatInner() {
 
         const toEarnPos = (el) => {
           const assets = el.data?.assets || el.data?.positions || [];
-          // el.name is typically "USDT Earn", "USDC Vault" etc — extract base symbol
           const elSym = (el.name || el.label || "")
             .replace(/\s*(earn|vault|lend|yield|pool|position)/gi, "").trim() || "Token";
+          // Jupiter portfolio API returns el.value as raw jlToken shares, NOT USD.
+          // Real USD is in assets[].usdValue or assets[].value when < $100k
+          const getUSD = (a, fallbackEl) => {
+            const explicit = a?.usdValue ?? a?.valueUsd ?? a?.priceUsd ?? null;
+            if (explicit != null && parseFloat(explicit) > 0) return parseFloat(explicit);
+            const av = parseFloat(a?.value ?? 0);
+            if (av > 0 && av < 100000) return av;
+            const ev = parseFloat(fallbackEl?.usdValue ?? fallbackEl?.valueUsd ?? 0);
+            if (ev > 0 && ev < 100000) return ev;
+            return 0;
+          };
           if (assets.length === 0) {
+            const usd = getUSD(null, el);
             return [{ _fromPortfolio: true, label: el.label,
               sym: elSym, symbol: elSym,
-              // value is USD amount from portfolio API — use as amount for comparisons
-              amount: parseFloat(el.value || 0),
-              value: el.value,
-              underlyingAssets: el.value,
-              // APY from portfolio element if available
+              amount: usd, value: usd, underlyingAssets: usd,
               apy: parseFloat(el.data?.apy || el.data?.supplyApy || el.data?.rate || 0),
               shares: 0, asset: { decimals: 6 } }];
           }
           return assets.map(a => {
             const aSym = (a.symbol || a.name || elSym)
               .replace(/^jl/i, "").replace(/\s*(earn|vault|lend)/gi, "").trim();
-            const usdVal = parseFloat(a.value ?? el.value ?? 0);
+            const usd = getUSD(a, el);
             return {
               _fromPortfolio: true, label: el.label,
               sym: aSym, symbol: aSym,
-              amount: usdVal,
-              value: usdVal,
-              underlyingBalance: a.underlyingBalance || 0,
-              underlyingAssets: usdVal, // use USD value not raw shares
+              amount: usd, value: usd, underlyingAssets: usd,
               apy: parseFloat(a.apy || a.supplyApy || a.rate || el.data?.apy || 0),
-              shares: a.shares || 0,
+              shares: parseFloat(a.shares || 0),
               mint: a.mint || a.tokenMint || a.assetMint || "",
               asset: { decimals: a.decimals ?? a.asset?.decimals ?? 6 },
             };
@@ -4098,7 +4102,7 @@ function JupChatInner() {
 
         if (earnEls.length || otherEls.length) {
           results._earnFromPortfolio = [...earnEls, ...otherEls].flatMap(toEarnPos)
-            .filter(e => parseFloat(e.value || e.underlyingAssets || 0) > 0);
+            .filter(e => parseFloat(e.value || e.underlyingAssets || 0) > 0 || parseFloat(e.shares || 0) > 1000);
         }
         if (lockEls.length) {
           results._lockFromPortfolio = lockEls.flatMap(toLockPos);
