@@ -466,6 +466,23 @@ export default function YieldRotatorPlugin({
       // Show success card in the panel
       setSuccessCard({ posSym, bestSym, posApy, bestApy, depositSig });
 
+      // Notify user via Telegram if they have it linked
+      try {
+        await fetch("/api/yield-vault?action=notify-rotation-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wallet:      walletFull,
+            posSym,
+            bestSym,
+            posApy,
+            bestApy,
+            depositSig,
+            isCrossAsset,
+          }),
+        });
+      } catch { /* non-fatal — migration already succeeded */ }
+
       // Refresh opportunities after successful migration
       await runCheck();
       onMigrationDone?.();
