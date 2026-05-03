@@ -214,8 +214,10 @@ export default function YieldRotatorPlugin({
         }
       }
 
-      // Only show banner if the best pool actually beats current APY
-      if (bestPool && bestApy > posApy) {
+      // Only show banner if:
+      // 1. Current position has a real APY > 0 (avoids ghost banners when APY lookup failed)
+      // 2. Best pool is at least 0.10% better (filters noise / rounding artefacts)
+      if (bestPool && posApy > 0 && bestApy > posApy && (bestApy - posApy) >= 0.1) {
         const bestMint = bestPool._mint || "";
         ops.push({
           position:     pos,
