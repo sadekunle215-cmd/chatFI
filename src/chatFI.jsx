@@ -6407,10 +6407,11 @@ function JupChatInner() {
 
     try {
       // 1. Build transactions on server
-      const { ok, data } = await safeApiFetch("/api/borrow", {
+      // Route through /api/lend-positions (POST) — no extra API file needed
+      const { ok, data } = await safeApiFetch("/api/lend-positions", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action:"operate", vaultId, positionId:0, colAmount:colRaw, debtAmount:debtRaw, signer:walletFull }),
+        body: JSON.stringify({ action:"borrow", vaultId, positionId:0, colAmount:colRaw, debtAmount:debtRaw, signer:walletFull }),
       });
       if (!ok || data.error) throw new Error(data.error || "Borrow API error");
       if (!data.transaction) throw new Error("No transaction returned from borrow API.");
