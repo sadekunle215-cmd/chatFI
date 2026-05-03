@@ -9077,9 +9077,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       } else if (action === "HARVEST_YIELD") {
         // Direct mode: harvest yield from a specific vault
         if (!walletFull) {
-          push("ai", text + "
-
-Connect your wallet first to harvest yield.");
+          push("ai", text + "\n\nConnect your wallet first to harvest yield.");
         } else {
           const sym = (actionData?.sym || "").toUpperCase() || "your";
           push("ai", text);
@@ -9100,9 +9098,7 @@ Connect your wallet first to harvest yield.");
 
       } else if (action === "MIGRATE_EARN") {
         if (!walletFull) {
-          push("ai", text + "
-
-Connect your wallet first to migrate your earn position.");
+          push("ai", text + "\n\nConnect your wallet first to migrate your earn position.");
         } else {
           const fromSym = (actionData?.fromSym || "current").toUpperCase();
           const toSym   = (actionData?.toSym   || "better").toUpperCase();
@@ -9130,9 +9126,7 @@ Connect your wallet first to migrate your earn position.");
 
       } else if (action === "EARN_DEPOSIT") {
         if (!walletFull) {
-          push("ai", text + "
-
-Connect your wallet first to deposit into Earn.");
+          push("ai", text + "\n\nConnect your wallet first to deposit into Earn.");
         } else {
           const sym = (actionData?.sym || "USDC").toUpperCase();
           // Resolve portion
@@ -9172,9 +9166,7 @@ Connect your wallet first to deposit into Earn.");
 
       } else if (action === "EARN_WITHDRAW") {
         if (!walletFull) {
-          push("ai", text + "
-
-Connect your wallet first to withdraw from Earn.");
+          push("ai", text + "\n\nConnect your wallet first to withdraw from Earn.");
         } else {
           const sym = (actionData?.sym || "USDC").toUpperCase();
           let amt = actionData?.amount || "";
