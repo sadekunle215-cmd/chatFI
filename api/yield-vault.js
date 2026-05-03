@@ -606,6 +606,63 @@ async function handleNotifyVaultUpdated(req, res) {
   }
 }
 
+// ── Telegram: notify rotation complete ───────────────────────────────────────
+async function handleNotifyRotationComplete(req, res) {
+  const { wallet, posSym, bestSym, posApy, bestApy, depositSig, isCrossAsset } = req.body;
+  if (!wallet) return res.status(400).json({ error: "wallet required" });
+
+  try {
+    const db = getDb();
+    const userSnap = await db.collection("chatfi_users").where("wallet", "==", wallet).limit(1).get();
+    if (userSnap.empty || !userSnap.docs[0].data().telegramChatId) {
+      return res.status(200).json({ sent: false, reason: "no telegram linked" });
+    }
+
+    const chatId = userSnap.docs[0].data().telegramChatId;
+    const apyGain = bestApy && posApy ? (parseFloat(bestApy) - parseFloat(posApy)).toFixed(2) : null;
+    const solscanUrl = depositSig ? `https://solscan.io/tx/${depositSig}` : null;
+
+    const message =
+      `✅ <b>Yield Migration Complete — ChatFi</b>
+
+` +
+      `Your position has been successfully migrated.
+
+` +
+      `<b>${posSym || "?"} Earn</b> (${parseFloat(posApy).toFixed(2)}% APY)
+` +
+      `➜ <b>${bestSym || "?"} Earn</b> (${parseFloat(bestApy).toFixed(2)}% APY)
+
+` +
+      (apyGain ? `You are now earning <b>+${apyGain}% more APY</b>.
+
+` : "") +
+      (isCrossAsset ? `<i>A cross-asset swap was performed automatically.</i>
+
+` : "") +
+      (solscanUrl ? `<a href="${solscanUrl}">View transaction on Solscan</a>` : "");
+
+    const markup = {
+      inline_keyboard: [[
+        { text: "Open ChatFi", url: APP_URL },
+      ]],
+    };
+
+    await sendTelegramMessage(chatId, message, markup);
+
+    // Clear rotator alert state so next check starts fresh after migration
+    try {
+      const rotatorRef = db.collection("yield_rotators").doc(wallet.slice(0, 32));
+      await rotatorRef.set({ lastAlertPool: "", lastAlertAt: null, alertCount: 0 }, { merge: true });
+    } catch { /* non-fatal */ }
+
+    return res.status(200).json({ sent: true });
+  } catch (e) {
+    console.error("[notifyRotationComplete]", e.message);
+    return res.status(500).json({ error: e.message });
+  }
+}
+
 // ── Telegram magic link: generate token ──────────────────────────────────────
 async function handleLinkTelegram(req, res) {
   const { wallet } = req.body;
@@ -762,6 +819,11 @@ export default async function handler(req, res) {
   // Notify vault updated — POST ?action=notify-vault-updated
   if (req.method === "POST" && req.query.action === "notify-vault-updated") {
     return handleNotifyVaultUpdated(req, res);
+  }
+
+  // Notify rotation complete — POST ?action=notify-rotation-complete
+  if (req.method === "POST" && req.query.action === "notify-rotation-complete") {
+    return handleNotifyRotationComplete(req, res);
   }
 
   let db;
