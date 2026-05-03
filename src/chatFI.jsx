@@ -3856,20 +3856,37 @@ function JupChatInner() {
       // then merge with whatever holdingsData already has from the initial call above.
       let extraTokens = {};
 
-      // Path A: Jupiter Ultra holdings — primary, with auth header via jupFetch
+      // Path A: /api/portfolio backend (Helius RPC) — most reliable for SPL tokens
+      // Helius has no rate limits on our plan and returns all SPL accounts directly
+      try {
+        const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
+        if (r.ok) {
+          const d = await r.json();
+          const splTokens = d?.tokens || [];
+          console.log(`[ChatFi Portfolio] /api/portfolio (Helius) returned ${splTokens.length} tokens`);
+          for (const t of splTokens) {
+            if (!t.mint || t.mint === SOL_MINT) continue;
+            if (t.amount > 0) extraTokens[t.mint] = { uiAmount: t.amount, symbol: t.symbol || "", decimals: t.decimals ?? 6, logoURI: t.logoURI || "" };
+          }
+        }
+      } catch (e) { console.warn("[ChatFi Portfolio] /api/portfolio (Helius) failed:", e?.message); }
+
+      // Path B: Jupiter Ultra holdings via jupFetch (API key) — merge on top
       try {
         const d = await jupFetch(`https://api.jup.ag/ultra/v1/holdings/${walletAddress}`);
         const tb = d?.tokenBalances || d?.tokens || {};
-        const mints = Object.keys(tb);
-        console.log(`[ChatFi Portfolio] Jupiter Ultra SPL fetch returned ${mints.length} mints`);
+        console.log(`[ChatFi Portfolio] Jupiter Ultra SPL fetch returned ${Object.keys(tb).length} mints`);
         for (const [mint, data] of Object.entries(tb)) {
           if (mint === SOL_MINT) continue;
           const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
-          if (uiAmt > 0) extraTokens[mint] = { uiAmount: uiAmt, symbol: data?.symbol || "", decimals: data?.decimals ?? 6, logoURI: data?.logoURI || "" };
+          if (uiAmt > 0) {
+            // Jupiter wins on overlap — more accurate prices
+            extraTokens[mint] = { uiAmount: uiAmt, symbol: data?.symbol || extraTokens[mint]?.symbol || "", decimals: data?.decimals ?? 6, logoURI: data?.logoURI || extraTokens[mint]?.logoURI || "" };
+          }
         }
       } catch (e) { console.warn("[ChatFi Portfolio] Jupiter Ultra SPL fetch failed:", e?.message); }
 
-      // Path B: lite-api fallback if Ultra returned nothing
+      // Path C: lite-api fallback if both above returned nothing
       if (Object.keys(extraTokens).length === 0) {
         try {
           const r = await fetch(`https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`, { signal: safeTimeout(12000) });
@@ -3885,23 +3902,6 @@ function JupChatInner() {
           }
         } catch (e) { console.warn("[ChatFi Portfolio] lite-api SPL fallback failed:", e?.message); }
       }
-
-      // Path C: /api/portfolio backend (Helius) as additional supplement — merge on top
-      try {
-        const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(10000) });
-        if (r.ok) {
-          const d = await r.json();
-          const splTokens = d?.tokens || [];
-          console.log(`[ChatFi Portfolio] /api/portfolio supplemental returned ${splTokens.length} tokens`);
-          for (const t of splTokens) {
-            if (!t.mint || t.mint === SOL_MINT) continue;
-            // Only add if not already found — Jupiter data takes priority
-            if (!extraTokens[t.mint]) {
-              extraTokens[t.mint] = { uiAmount: t.amount, symbol: t.symbol || "", decimals: t.decimals ?? 6, logoURI: t.logoURI || "" };
-            }
-          }
-        }
-      } catch (e) { console.warn("[ChatFi Portfolio] /api/portfolio supplement failed:", e?.message); }
 
       // Merge extraTokens into holdingsData — Jupiter Ultra wins on any overlap
       if (Object.keys(extraTokens).length > 0) {
@@ -6681,12 +6681,28 @@ function JupChatInner() {
       // NOTE: Jupiter uses "tokenBalances" not "tokens" — both are checked for resilience.
       let holdingsData = null;
       const isValidHoldings = (d) => d && !d.error && (d.uiAmount != null || d.nativeBalance != null || d.amount != null);
+
+      // PRIMARY: jupFetch passes API key header — required for full SPL token list
       try {
-        const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(7000) });
-        if (r.ok) { const d = await r.json(); if (isValidHoldings(d)) holdingsData = d; }
+        const d = await jupFetch(`https://api.jup.ag/ultra/v1/holdings/${pubkey}`);
+        if (isValidHoldings(d)) holdingsData = d;
       } catch {}
 
-      // Lite API fallback for holdings
+      // Fallback A: lite-api with jupFetch
+      if (!holdingsData) {
+        try {
+          const d = await jupFetch(`https://lite-api.jup.ag/ultra/v1/holdings/${pubkey}`);
+          if (isValidHoldings(d)) holdingsData = d;
+        } catch {}
+      }
+
+      // Fallback B: raw fetch (no API key) — last resort
+      if (!holdingsData) {
+        try {
+          const r = await fetch(`https://api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(7000) });
+          if (r.ok) { const d = await r.json(); if (isValidHoldings(d)) holdingsData = d; }
+        } catch {}
+      }
       if (!holdingsData) {
         try {
           const r = await fetch(`https://lite-api.jup.ag/ultra/v1/holdings/${pubkey}`, { signal: safeTimeout(7000) });
@@ -6732,12 +6748,17 @@ function JupChatInner() {
       }
 
       // ── SECONDARY: /ultra/v1/balances (deprecated but still works) ──
-      // Response: { SOL: { uiAmount, amount, slot }, <mint>: { uiAmount, amount, decimals }, ... }
       let balancesData = null;
       try {
-        const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(7000) });
-        if (r.ok) { const d = await r.json(); if (d && !d.error) balancesData = d; }
+        const d = await jupFetch(`https://api.jup.ag/ultra/v1/balances/${pubkey}`);
+        if (d && !d.error) balancesData = d;
       } catch {}
+      if (!balancesData) {
+        try {
+          const r = await fetch(`https://api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(7000) });
+          if (r.ok) { const d = await r.json(); if (d && !d.error) balancesData = d; }
+        } catch {}
+      }
       if (!balancesData) {
         try {
           const r = await fetch(`https://lite-api.jup.ag/ultra/v1/balances/${pubkey}`, { signal: safeTimeout(7000) });
