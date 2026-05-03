@@ -12378,7 +12378,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   push={push}
                   T={T}
                   isMobile={isMobile}
-                  onMigrationDone={() => { fetchPortfolio(); fetchEarnUserPositions(); }}
+                  onMigrationDone={() => { try { fetchPortfolioData(walletFull); fetchEarnUserPositions(); } catch(e) { console.warn("onMigrationDone:", e); } }}
                 />
               </div>
             );
@@ -12924,6 +12924,20 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     );
                   })()}
 
+                  {/* ── Yield Rotator — better APY migration banners ── */}
+                  {walletFull && (
+                    <YieldRotatorPlugin
+                      walletFull={walletFull}
+                      earnPositions={yieldVaultPositions.length ? yieldVaultPositions : (portfolioData?._earnFromPortfolio || portfolioData?.earnPositions || [])}
+                      jupFetch={jupFetch}
+                      getActiveProvider={getActiveProvider}
+                      push={push}
+                      T={T}
+                      isMobile={isMobile}
+                      onMigrationDone={() => { try { fetchPortfolioData(walletFull); } catch(e) { console.warn("onMigrationDone:", e); } }}
+                    />
+                  )}
+
                   {/* ── Earn Positions ── */}
                   {(() => {
                     // Prefer live yieldVaultPositions (from fetchEarnPositionsForVault) over
@@ -12974,17 +12988,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     ) : null;
                   })()}
 
-                  {/* ── Yield Rotator — better APY migration banners ── */}
-                  <YieldRotatorPlugin
-                    walletFull={walletFull}
-                    earnPositions={yieldVaultPositions.length ? yieldVaultPositions : (portfolioData?._earnFromPortfolio || portfolioData?.earnPositions || [])}
-                    jupFetch={jupFetch}
-                    getActiveProvider={getActiveProvider}
-                    push={push}
-                    T={T}
-                    isMobile={isMobile}
-                    onMigrationDone={() => fetchPortfolio()}
-                  />
+
 
                   {/* ── Prediction Positions ── */}
                   {(portfolioData.predPositions||[]).length > 0 && (
