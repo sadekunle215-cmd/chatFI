@@ -228,7 +228,7 @@ export default function YieldRotatorPlugin({
     const { position, posSym, posMint, posAmt, posPoolId, bestPool, bestSym, bestMint, isCrossAsset, posApy, bestApy } = op;
 
     setMigrating(posPoolId || posSym);
-    const rpcUrl = import.meta.env?.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+    const rpcUrl = process.env?.NEXT_PUBLIC_SOLANA_RPC || import.meta.env?.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
     const conn   = new Connection(rpcUrl, "confirmed");
 
     const waitConfirm = async (sig, maxMs = 30000) => {
