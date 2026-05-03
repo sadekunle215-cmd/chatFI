@@ -12446,35 +12446,35 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Yield Rotator Panel — standalone better APY finder ─────── */}
           {showEarn && walletFull && (() => {
-            // Build positions: earnUserPositions joined with earnVaults for APY/mint
-            // earnUserPositions is populated by fetchEarnUserPositions() called in FETCH_EARN
+            // Build positions exclusively from the LIVE on-chain earnUserPositions map
+            // (populated by fetchEarnUserPositions). Stale fallbacks are intentionally
+            // removed — they caused ghost banners when the wallet had no real position.
             const positions = [];
             for (const [sym, pos] of Object.entries(earnUserPositions || {})) {
               if (!pos || parseFloat(pos.amount || 0) <= 0) continue;
+              // Case-insensitive vault lookup — skips position if vault not found so
+              // apy never silently becomes 0 (which triggered a false "+X%" banner).
               const vault = earnVaults.find(v =>
-                (v.token || "").toUpperCase() === sym ||
-                (v.symbol || "").toUpperCase() === sym
+                (v.token  || "").toUpperCase() === sym.toUpperCase() ||
+                (v.symbol || "").toUpperCase() === sym.toUpperCase()
               );
+              if (!vault) continue; // no vault data → APY unknown → skip to avoid ghost
               positions.push({
                 sym, symbol: sym,
                 amount: parseFloat(pos.amount || 0),
                 value:  parseFloat(pos.amount || 0),
-                // earnVaults uses: apy (number), assetMint, id
-                apy:    parseFloat(vault?.apy || 0),
-                mint:   vault?.assetMint || "",
-                planId: vault?.id || "",
+                apy:    parseFloat(vault.apy || 0), // already percent e.g. 4.8
+                mint:   vault.assetMint || "",
+                planId: vault.id || "",
               });
             }
-            // Also check yieldVaultPositions and _earnFromPortfolio as fallbacks
-            const rotatorPositions = positions.length ? positions
-              : yieldVaultPositions.length ? yieldVaultPositions
-              : (portfolioData?._earnFromPortfolio || []).filter(p => parseFloat(p.amount||0) > 0 && parseFloat(p.amount||0) < 100000);
-            if (!rotatorPositions.length) return null;
+            // Only render if we have at least one real live position with known APY
+            if (!positions.length) return null;
             return (
               <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px" }}>
                 <YieldRotatorPlugin
                   walletFull={walletFull}
-                  earnPositions={rotatorPositions}
+                  earnPositions={positions}
                   jupFetch={jupFetch}
                   getActiveProvider={getActiveProvider}
                   push={push}
@@ -13350,12 +13350,33 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           )}
 
           {/* ── Yield Rotator — shown below portfolio as its own block ── */}
-          {showPortfolio && !portfolioLoading && portfolioData && walletFull && (
+          {showPortfolio && !portfolioLoading && portfolioData && walletFull &&
+            Object.values(earnUserPositions || {}).some(p => parseFloat(p?.amount || 0) > 0) && (
             <ErrorBoundary fallback={null}>
               <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px" }}>
                 <YieldRotatorPlugin
                   walletFull={walletFull}
-                  earnPositions={yieldVaultPositions.length ? yieldVaultPositions : (portfolioData?._earnFromPortfolio || portfolioData?.earnPositions || [])}
+                  earnPositions={
+                    // Build from live earnUserPositions + earnVaults (same logic as Earn panel).
+                    // Only include positions where we resolved a real vault APY.
+                    Object.entries(earnUserPositions || {})
+                      .filter(([, pos]) => parseFloat(pos?.amount || 0) > 0)
+                      .flatMap(([sym, pos]) => {
+                        const vault = earnVaults.find(v =>
+                          (v.token  || "").toUpperCase() === sym.toUpperCase() ||
+                          (v.symbol || "").toUpperCase() === sym.toUpperCase()
+                        );
+                        if (!vault) return [];
+                        return [{
+                          sym, symbol: sym,
+                          amount: parseFloat(pos.amount || 0),
+                          value:  parseFloat(pos.amount || 0),
+                          apy:    parseFloat(vault.apy || 0),
+                          mint:   vault.assetMint || "",
+                          planId: vault.id || "",
+                        }];
+                      })
+                  }
                   jupFetch={jupFetch}
                   getActiveProvider={getActiveProvider}
                   push={push}
