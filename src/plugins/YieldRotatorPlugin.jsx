@@ -231,6 +231,11 @@ export default function YieldRotatorPlugin({
     const rpcUrl = process.env?.NEXT_PUBLIC_SOLANA_RPC || import.meta.env?.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
     const conn   = new Connection(rpcUrl, "confirmed");
 
+    // Bug fix 1: track current step in a ref so the catch block always reads
+    // the latest value — React state is stale inside async closures
+    const stepRef = { current: "" };
+    const setStep = (s) => { stepRef.current = s; setMigrateStep(s); };
+
     const waitConfirm = async (sig, maxMs = 30000) => {
       const start = Date.now();
       while (Date.now() - start < maxMs) {
@@ -243,19 +248,18 @@ export default function YieldRotatorPlugin({
       throw new Error("Tx timeout — check Solscan");
     };
 
+    // Bug fix 2: don't mutate recentBlockhash on VersionedTransactions — the
+    // message is already compiled and blockhash replacement breaks the signature.
+    // Jupiter issues transactions with a fresh blockhash; just sign and submit.
     const signAndSend = async (txBase64) => {
       const tx = VersionedTransaction.deserialize(b64ToBytes(txBase64));
-      try {
-        const { blockhash } = await conn.getLatestBlockhash("confirmed");
-        tx.message.recentBlockhash = blockhash;
-      } catch { /* non-fatal */ }
       const signed = await provider.signTransaction(tx);
       return bytesToB64(signed.serialize());
     };
 
     try {
       // ── Tx 1: Withdraw from current Earn pool ──────────────────────────────
-      setMigrateStep("Withdrawing from current pool…");
+      setStep("Withdrawing from current pool…");
       push("ai", `🔄 **Migrating ${posSym} Earn → ${bestSym} Earn**\nStep 1/3 — withdrawing from current pool…`);
 
       const dec = KNOWN_DECIMALS[posSym] ?? 6;
@@ -288,21 +292,27 @@ export default function YieldRotatorPlugin({
       push("ai", `✅ Step 1/3 done — withdrawn from ${posSym} Earn. [Solscan](https://solscan.io/tx/${withdrawSig})`);
 
       // ── Tx 2: Swap if cross-asset ──────────────────────────────────────────
-      let depositMint = posMint || symToMint(posSym);
-      let depositSym  = posSym;
+      let depositMint    = posMint || symToMint(posSym);
+      let depositSym     = posSym;
+      // Bug fix 3: track actual swap output amount so the deposit uses the real
+      // received token quantity, not a re-scaled estimate from the source asset
+      let depositAmtRaw  = withdrawAmtRaw;
 
       if (isCrossAsset && bestMint && bestMint !== depositMint) {
-        setMigrateStep("Swapping to target asset…");
+        setStep("Swapping to target asset…");
         push("ai", `🔄 Step 2/3 — swapping ${posSym} → ${bestSym}…`);
 
-        // Use full withdrawn amount — re-fetch balance via portfolio or estimate
-        // We'll use the withdrawAmtRaw we already know
         const swapOrderRes = await jupFetch(
           `${JUP_SWAP_ORDER}?inputMint=${depositMint}&outputMint=${bestMint}&amount=${withdrawAmtRaw}&taker=${walletFull}`
         );
         if (swapOrderRes?.error || !swapOrderRes?.transaction) {
           throw new Error(swapOrderRes?.error || "No swap transaction returned");
         }
+
+        // Capture the expected output amount from the swap quote — this is what
+        // we'll actually receive and need to deposit (minus any slippage)
+        const swapOutAmt = swapOrderRes.outAmount || swapOrderRes.outputAmount ||
+                           swapOrderRes.otherAmountThreshold || null;
 
         const swapSigned = await signAndSend(swapOrderRes.transaction);
         const swapExec   = await jupFetch(JUP_SWAP_EXEC, {
@@ -316,22 +326,21 @@ export default function YieldRotatorPlugin({
 
         depositMint = bestMint;
         depositSym  = bestSym;
+        // Use actual swap output if available, otherwise fall back to otherAmountThreshold
+        // (minimum out after slippage) — both are in raw units of the output token
+        depositAmtRaw = swapOutAmt
+          ? Math.floor(Number(swapOutAmt))
+          : Math.floor(posAmt * Math.pow(10, KNOWN_DECIMALS[bestSym] ?? 6));
         push("ai", `✅ Step 2/3 done — swapped to ${bestSym}. [Solscan](https://solscan.io/tx/${swapSig})`);
       } else {
         push("ai", `⏭ Step 2/3 — same asset (${posSym}), no swap needed.`);
       }
 
       // ── Tx 3: Deposit into new Earn pool ──────────────────────────────────
-      setMigrateStep("Depositing into new pool…");
+      setStep("Depositing into new pool…");
       push("ai", `🔄 Step 3/3 — depositing into ${bestSym} Earn (${bestApy.toFixed(2)}% APY)…`);
 
       const bestPlanId = bestPool.planId || bestPool.id || bestPool.poolId;
-      const newDec     = KNOWN_DECIMALS[depositSym] ?? 6;
-      // For cross-asset, use the swap output amount from outAmount if available,
-      // otherwise re-use the withdraw raw amount scaled to the new asset's decimals
-      const depositAmtRaw = isCrossAsset
-        ? Math.floor(posAmt * Math.pow(10, newDec)) // approximate; actual balance will limit
-        : withdrawAmtRaw;
 
       const depositRes = await jupFetch(`${JUP_EARN_API}/deposit`, {
         method: "POST",
@@ -369,7 +378,8 @@ export default function YieldRotatorPlugin({
 
     } catch (err) {
       const msg = err?.message || "Unknown error";
-      push("ai", `❌ Migration failed at: **${migrateStep || "unknown step"}**\n${msg}`);
+      // Bug fix 4: use stepRef.current (always current) not migrateStep (stale closure)
+      push("ai", `❌ Migration failed at: **${stepRef.current || "unknown step"}**\n${msg}`);
     } finally {
       setMigrating(null);
       setMigrateStep("");
