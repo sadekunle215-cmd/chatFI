@@ -89,7 +89,7 @@ async function mintToSymbol(mint) {
 // ── 1. Token balances via Helius RPC (reliable SPL) + Jupiter for prices ─────
 async function fetchTokenBalances(wallet) {
   try {
-    const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+    const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
 
     // Step 1: Get SOL balance
     const solRes = await fetch(HELIUS_RPC, {
