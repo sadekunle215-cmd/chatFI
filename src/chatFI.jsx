@@ -5635,8 +5635,10 @@ function JupChatInner() {
     if (!walletFull) { push("ai", "Connect your wallet first to send tokens."); return; }
     if (!mint) { push("ai", `Could not resolve mint for **${token}**. Try searching the token first.`); return; }
 
-    // Use checkBalance() directly — same portfolio read, no side effects
-    if (!checkBalance(token, parseFloat(amount), "this send")) return;
+    // Balance pre-check skipped for invite send — Jupiter's server + the chain
+    // enforce the actual balance. Client-side portfolio reads are unreliable for
+    // WalletConnect sessions (e.g. Jupiter Mobile) where token balances may parse
+    // as 0 due to API response shape differences.
 
     const decimals  = token === "SOL" ? 9 : (tokenDecimalsRef.current[token.toUpperCase()] ?? 6);
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
