@@ -40,10 +40,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { VersionedTransaction, Connection } from "@solana/web3.js";
 
-// ── Jupiter Earn API base (same as chatFI) ───────────────────────────────────
-const JUP_EARN_API   = "https://lend-api.jup.ag/api/v1";
-const JUP_SWAP_ORDER = "https://lite-api.jup.ag/swap/v1/order";
-const JUP_SWAP_EXEC  = "https://lite-api.jup.ag/swap/v1/execute";
+// ── Jupiter Earn API base (confirmed from docs: api.jup.ag/lend/v1/earn/) ─────
+const JUP_EARN_API   = "https://api.jup.ag/lend/v1/earn";
+const JUP_SWAP_ORDER = "https://lite-api.jup.ag/ultra/v1/order";
+const JUP_SWAP_EXEC  = "https://lite-api.jup.ag/ultra/v1/execute";
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Well-known mint addresses — mirrors chatFI TOKEN_MINTS subset
@@ -106,10 +106,10 @@ export default function YieldRotatorPlugin({
   // ── Fetch all Jupiter Earn pools with live APYs ───────────────────────────
   const fetchAllPools = useCallback(async () => {
     try {
-      const data = await jupFetch(`${JUP_EARN_API}/markets`);
-      // API returns array or { markets: [...] }
+      // Correct endpoint: /lend/v1/earn/tokens returns all pools with APY info
+      const data = await jupFetch(`${JUP_EARN_API}/tokens`);
       const arr = Array.isArray(data) ? data
-                : data?.markets || data?.data || data?.pools || [];
+                : data?.markets || data?.tokens || data?.data || data?.pools || [];
       setAllPools(arr);
       return arr;
     } catch {
@@ -270,23 +270,19 @@ export default function YieldRotatorPlugin({
       const withdrawRes = await jupFetch(`${JUP_EARN_API}/withdraw`, {
         method: "POST",
         body: {
-          owner:     walletFull,
-          planId:    posPoolId,
-          amount:    withdrawAmtRaw,
-          tokenMint: posMint || symToMint(posSym),
+          asset:  posMint || symToMint(posSym),  // underlying token mint
+          amount: withdrawAmtRaw.toString(),
+          signer: walletFull,
         },
       });
       if (withdrawRes?.error || !withdrawRes?.transaction) {
         throw new Error(withdrawRes?.error || "No withdraw transaction returned");
       }
 
-      const withdrawSigned = await signAndSend(withdrawRes.transaction);
-      const withdrawExec   = await jupFetch(`${JUP_EARN_API}/withdraw/execute`, {
-        method: "POST",
-        body: { signedTransaction: withdrawSigned, requestId: withdrawRes.requestId },
-      });
-      if (withdrawExec?.error) throw new Error(withdrawExec.error);
-      const withdrawSig = withdrawExec?.signature || withdrawExec?.txid;
+      // Earn API returns an unsigned base64 transaction — sign and send via RPC directly
+      const withdrawTx     = VersionedTransaction.deserialize(b64ToBytes(withdrawRes.transaction));
+      const withdrawSigned = await provider.signTransaction(withdrawTx);
+      const withdrawSig    = await conn.sendRawTransaction(withdrawSigned.serialize(), { skipPreflight: true, maxRetries: 3 });
       if (!withdrawSig) throw new Error("No signature from withdraw tx");
       await waitConfirm(withdrawSig);
       push("ai", `✅ Step 1/3 done — withdrawn from ${posSym} Earn. [Solscan](https://solscan.io/tx/${withdrawSig})`);
@@ -303,21 +299,20 @@ export default function YieldRotatorPlugin({
         push("ai", `🔄 Step 2/3 — swapping ${posSym} → ${bestSym}…`);
 
         const swapOrderRes = await jupFetch(
-          `${JUP_SWAP_ORDER}?inputMint=${depositMint}&outputMint=${bestMint}&amount=${withdrawAmtRaw}&taker=${walletFull}`
+          `${JUP_SWAP_ORDER}?inputMint=${depositMint}&outputMint=${bestMint}&amount=${withdrawAmtRaw}&slippageBps=50&taker=${walletFull}`
         );
         if (swapOrderRes?.error || !swapOrderRes?.transaction) {
           throw new Error(swapOrderRes?.error || "No swap transaction returned");
         }
 
-        // Capture the expected output amount from the swap quote — this is what
-        // we'll actually receive and need to deposit (minus any slippage)
         const swapOutAmt = swapOrderRes.outAmount || swapOrderRes.outputAmount ||
                            swapOrderRes.otherAmountThreshold || null;
 
-        const swapSigned = await signAndSend(swapOrderRes.transaction);
+        const swapTx     = VersionedTransaction.deserialize(b64ToBytes(swapOrderRes.transaction));
+        const swapSigned = await provider.signTransaction(swapTx);
         const swapExec   = await jupFetch(JUP_SWAP_EXEC, {
           method: "POST",
-          body: { signedTransaction: swapSigned, requestId: swapOrderRes.requestId },
+          body: { signedTransaction: bytesToB64(swapSigned.serialize()), requestId: swapOrderRes.requestId },
         });
         if (swapExec?.error) throw new Error(swapExec.error);
         const swapSig = swapExec?.signature || swapExec?.txid;
@@ -345,23 +340,19 @@ export default function YieldRotatorPlugin({
       const depositRes = await jupFetch(`${JUP_EARN_API}/deposit`, {
         method: "POST",
         body: {
-          owner:     walletFull,
-          planId:    bestPlanId,
-          amount:    depositAmtRaw,
-          tokenMint: depositMint,
+          asset:  depositMint,
+          amount: depositAmtRaw.toString(),
+          signer: walletFull,
         },
       });
       if (depositRes?.error || !depositRes?.transaction) {
         throw new Error(depositRes?.error || "No deposit transaction returned");
       }
 
-      const depositSigned = await signAndSend(depositRes.transaction);
-      const depositExec   = await jupFetch(`${JUP_EARN_API}/deposit/execute`, {
-        method: "POST",
-        body: { signedTransaction: depositSigned, requestId: depositRes.requestId },
-      });
-      if (depositExec?.error) throw new Error(depositExec.error);
-      const depositSig = depositExec?.signature || depositExec?.txid;
+      // Same pattern as withdraw — sign and send via RPC directly
+      const depositTx     = VersionedTransaction.deserialize(b64ToBytes(depositRes.transaction));
+      const depositSigned = await provider.signTransaction(depositTx);
+      const depositSig    = await conn.sendRawTransaction(depositSigned.serialize(), { skipPreflight: true, maxRetries: 3 });
       if (!depositSig) throw new Error("No signature from deposit tx");
       await waitConfirm(depositSig);
 
