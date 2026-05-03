@@ -316,13 +316,10 @@ export default function YieldRotatorPlugin({
       push("ai", `✅ Step 1/3 done — withdrawn from ${posSym} Earn. [Solscan](https://solscan.io/tx/${withdrawSig})`);
 
       // ── Tx 2: Swap if cross-asset ──────────────────────────────────────────
-      let depositMint    = posMint || symToMint(posSym);
-      let depositSym     = posSym;
-      // Bug fix 3: track actual swap output amount so the deposit uses the real
-      // received token quantity, not a re-scaled estimate from the source asset
-      let depositAmtRaw  = withdrawAmtRaw;
+      let depositMint   = posMint || symToMint(posSym);
+      let depositSym    = posSym;
+      let depositAmtRaw = withdrawAmtRaw;
 
-      // isCrossAsset uses _mint which was set from asset.address in fetchAllPools
       if (isCrossAsset && bestMint && bestMint !== depositMint) {
         setStep("Swapping to target asset…");
         push("ai", `🔄 Step 2/3 — swapping ${posSym} → ${bestSym}…`);
@@ -333,9 +330,6 @@ export default function YieldRotatorPlugin({
         if (swapOrderRes?.error || !swapOrderRes?.transaction) {
           throw new Error(swapOrderRes?.error || "No swap transaction returned");
         }
-
-        const swapOutAmt = swapOrderRes.outAmount || swapOrderRes.outputAmount ||
-                           swapOrderRes.otherAmountThreshold || null;
 
         const swapTx     = VersionedTransaction.deserialize(b64ToBytes(swapOrderRes.transaction));
         const swapSigned = await provider.signTransaction(swapTx);
@@ -350,20 +344,52 @@ export default function YieldRotatorPlugin({
 
         depositMint = bestMint;
         depositSym  = bestSym;
-        // Use actual swap output if available, otherwise fall back to otherAmountThreshold
-        // (minimum out after slippage) — both are in raw units of the output token
-        depositAmtRaw = swapOutAmt
-          ? Math.floor(Number(swapOutAmt))
-          : Math.floor(posAmt * Math.pow(10, KNOWN_DECIMALS[bestSym] ?? 6));
-        push("ai", `✅ Step 2/3 done — swapped to ${bestSym}. [Solscan](https://solscan.io/tx/${swapSig})`);
+
+        // Fix: read actual post-swap wallet balance from chain — this is the
+        // ground truth. swapOrderRes.outAmount is sometimes absent, and
+        // otherAmountThreshold is only the slippage minimum, not what arrived.
+        try {
+          const { PublicKey } = await import("@solana/web3.js");
+          const tokenAccounts = await conn.getParsedTokenAccountsByOwner(
+            new PublicKey(walletFull),
+            { mint: new PublicKey(bestMint) }
+          );
+          const rawBalance = tokenAccounts.value?.[0]
+            ?.account?.data?.parsed?.info?.tokenAmount?.amount;
+          if (rawBalance && Number(rawBalance) > 0) {
+            depositAmtRaw = Math.floor(Number(rawBalance));
+          } else {
+            // Fallback 1: outAmount from swap response (already raw units)
+            const swapOutAmt = swapOrderRes.outAmount || swapOrderRes.outputAmount || null;
+            if (swapOutAmt && Number(swapOutAmt) > 0) {
+              depositAmtRaw = Math.floor(Number(swapOutAmt));
+            } else {
+              // Fallback 2: re-scale posAmt using output token decimals
+              const outDec = KNOWN_DECIMALS[bestSym] ?? 6;
+              depositAmtRaw = Math.floor(posAmt * Math.pow(10, outDec));
+            }
+          }
+        } catch (balErr) {
+          console.warn("Balance fetch failed, falling back to swapOrderRes:", balErr);
+          const swapOutAmt = swapOrderRes.outAmount || swapOrderRes.outputAmount || null;
+          const outDec = KNOWN_DECIMALS[bestSym] ?? 6;
+          depositAmtRaw = swapOutAmt
+            ? Math.floor(Number(swapOutAmt))
+            : Math.floor(posAmt * Math.pow(10, outDec));
+        }
+
+        // Show exact amount being deposited so it's visible in chat if something looks wrong
+        const depositHuman = (depositAmtRaw / Math.pow(10, KNOWN_DECIMALS[bestSym] ?? 6)).toFixed(4);
+        push("ai", `✅ Step 2/3 done — swapped to ${bestSym}. Depositing ${depositHuman} ${bestSym}. [Solscan](https://solscan.io/tx/${swapSig})`);
       } else {
         push("ai", `⏭ Step 2/3 — same asset (${posSym}), no swap needed.`);
       }
 
-      // ── Tx 3: Deposit into new Earn pool ──────────────────────────────────
+      // ── Tx 3: Deposit into new Earn pool (with retry) ─────────────────────
       setStep("Depositing into new pool…");
       push("ai", `🔄 Step 3/3 — depositing into ${bestSym} Earn (${bestApy.toFixed(2)}% APY)…`);
 
+      // Fix: include bestPlanId so Jupiter routes to the correct pool
       const bestPlanId = bestPool.planId || bestPool.id || bestPool.poolId;
 
       const depositRes = await jupFetch(`${JUP_EARN_API}/deposit`, {
@@ -372,27 +398,62 @@ export default function YieldRotatorPlugin({
           asset:  depositMint,
           amount: depositAmtRaw.toString(),
           signer: walletFull,
+          ...(bestPlanId ? { planId: bestPlanId } : {}),
         },
       });
       if (depositRes?.error || !depositRes?.transaction) {
-        throw new Error(depositRes?.error || "No deposit transaction returned");
+        throw new Error(depositRes?.error || `No deposit transaction returned (amount: ${depositAmtRaw}, mint: ${depositMint})`);
       }
 
-      // Refresh blockhash before signing deposit tx
-      const depositTx = VersionedTransaction.deserialize(b64ToBytes(depositRes.transaction));
-      try {
-        const { blockhash } = await conn.getLatestBlockhash("confirmed");
-        depositTx.message.recentBlockhash = blockhash;
-      } catch { /* non-fatal */ }
-      const depositSigned = await provider.signTransaction(depositTx);
-      const depositSendRes = await jupFetch(rpcUrl, {
-        method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction",
-                params: [bytesToB64(depositSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }] },
-      });
-      const depositSig = depositSendRes?.result;
-      if (!depositSig) throw new Error(depositSendRes?.error?.message || "No signature from deposit tx");
-      await waitConfirm(depositSig);
+      // Fix: retry deposit up to 2 times with a fresh blockhash each attempt.
+      // Deposit is the highest-risk step — funds are already swapped — so we
+      // must not give up on a single timeout.
+      let depositSig = null;
+      let lastDepositErr = null;
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const depositTx = VersionedTransaction.deserialize(b64ToBytes(depositRes.transaction));
+
+          try {
+            const { blockhash } = await conn.getLatestBlockhash("confirmed");
+            depositTx.message.recentBlockhash = blockhash;
+          } catch (bhErr) {
+            console.warn(`Deposit attempt ${attempt + 1}: blockhash refresh failed:`, bhErr);
+          }
+
+          const depositSigned = await provider.signTransaction(depositTx);
+          const depositSendRes = await jupFetch(rpcUrl, {
+            method: "POST",
+            body: {
+              jsonrpc: "2.0", id: 1, method: "sendTransaction",
+              params: [bytesToB64(depositSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }],
+            },
+          });
+
+          depositSig = depositSendRes?.result;
+          if (!depositSig) throw new Error(depositSendRes?.error?.message || "No signature from deposit tx");
+          await waitConfirm(depositSig);
+          break; // success — exit retry loop
+
+        } catch (err) {
+          lastDepositErr = err;
+          if (attempt === 0) {
+            console.warn("Deposit attempt 1 failed, retrying…", err?.message);
+            setStep("Deposit timed out — retrying…");
+            push("ai", `⚠️ Deposit attempt 1 timed out — retrying automatically…`);
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        }
+      }
+
+      if (!depositSig) {
+        throw new Error(
+          `Deposit failed after 2 attempts — your ${bestSym} is safely in your wallet. ` +
+          `Please deposit manually via the ${bestSym} Earn Vault card. ` +
+          `(${lastDepositErr?.message || "unknown error"})`
+        );
+      }
 
       push("ai",
         `✅ **Migration complete!**\n` +
