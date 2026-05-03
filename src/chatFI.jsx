@@ -2709,6 +2709,11 @@ function JupChatInner() {
   const [directTokenLoading, setDirectTokenLoading] = useState(false);
   const [directTokenOpen, setDirectTokenOpen]       = useState(false);
   const directTokenTimerRef = useRef(null);
+  const [inviteTokenQuery, setInviteTokenQuery]     = useState("SOL");
+  const [inviteTokenResults, setInviteTokenResults] = useState([]);
+  const [inviteTokenLoading, setInviteTokenLoading] = useState(false);
+  const [inviteTokenOpen, setInviteTokenOpen]       = useState(false);
+  const inviteTokenTimerRef = useRef(null);
 
   // ── Portfolio panel ──────────────────────────────────────────────────────────
   const [showPortfolio, setShowPortfolio]   = useState(false);
@@ -9446,6 +9451,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           const upperTok = token.toUpperCase();
           const mint = tokenCacheRef.current[upperTok] || TOKEN_MINTS[upperTok] || TOKEN_MINTS.SOL;
           setSendCfg({ token: upperTok, amount, mint });
+          setInviteTokenQuery(upperTok);
           setSendStatus(null); setSendLink(""); setSendRecipient(""); setSendTxSig("");
           setSendMode(privyMode ? "direct" : "invite");
           if (directMode && amount && actionData?.recipient) {
@@ -10298,6 +10304,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               const sendMint = tokenCacheRef.current[upperTok]||TOKEN_MINTS[upperTok]||TOKEN_MINTS.SOL;
               const sendAmt  = stepData.amount||"";
               setSendCfg({ token: upperTok, amount: sendAmt, mint: sendMint });
+              setInviteTokenQuery(upperTok);
               setSendStatus(null); setSendLink(""); setSendRecipient(""); setSendTxSig("");
               if (directMode && sendAmt) {
                 push("ai", `⚡ **Direct Mode** — Creating **${sendAmt} ${upperTok}** invite link…`);
@@ -12630,32 +12637,95 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 <div style={{ fontSize:12, color:T.text3, marginBottom:14 }}>
                   Send tokens to anyone — recipient doesn't need a wallet. They claim via the link. You can claw back unclaimed tokens anytime.
                 </div>
-                <div style={{ fontSize:11, color:"#f6ad55", background:"#2e1f0a", border:"1px solid #f6ad5544", borderRadius:8, padding:"7px 10px", marginBottom:10 }}>
-                  Note: Jupiter Send only supports <strong>SOL</strong> and <strong>USDC</strong>. Other tokens will fail at the claim step.
-                </div>
                 <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-                  <div style={{ flex:1 }}>
+                  <div style={{ flex:1, position:"relative" }}>
                     <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Token</div>
-                    <select value={sendCfg.token}
-                      onChange={e => {
-                        const sym = e.target.value;
-                        const mint = sym === "SOL" ? TOKEN_MINTS.SOL : TOKEN_MINTS.USDC;
-                        const decimals = sym === "SOL" ? 9 : 6;
-                        tokenCacheRef.current[sym] = mint;
-                        tokenDecimalsRef.current[sym] = decimals;
-                        setSendCfg(c => ({ ...c, token: sym, mint }));
+                    <input
+                      value={inviteTokenQuery}
+                      placeholder="Search any token…"
+                      onFocus={() => {
+                        setInviteTokenOpen(true);
+                        if (inviteTokenQuery) {
+                          clearTimeout(inviteTokenTimerRef.current);
+                          inviteTokenTimerRef.current = setTimeout(async () => {
+                            setInviteTokenLoading(true);
+                            try {
+                              const q = inviteTokenQuery;
+                              const [v2raw, v1raw] = await Promise.allSettled([
+                                fetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}`).then(r=>r.json()),
+                                fetch(`${JUP_BASE}/tokens/v1/search?query=${encodeURIComponent(q)}&limit=50`).then(r=>r.json()),
+                              ]);
+                              const toList = (r) => { const d = r.status==="fulfilled"?r.value:[]; return Array.isArray(d)?d:(d?.tokens||d?.data||[]); };
+                              const v2list = toList(v2raw).map(t=>({...t,address:t.id||t.address}));
+                              const v1list = toList(v1raw).map(t=>({...t,address:t.address||t.id}));
+                              const seen = new Set(v2list.map(t=>t.address).filter(Boolean));
+                              const merged = [...v2list, ...v1list.filter(t=>t.address&&!seen.has(t.address))];
+                              const upper = q.trim().toUpperCase();
+                              merged.sort((a,b)=>{ const as=(a.symbol||"").toUpperCase()===upper?0:1, bs=(b.symbol||"").toUpperCase()===upper?0:1; if(as!==bs) return as-bs; return 0; });
+                              setInviteTokenResults(merged.slice(0,8));
+                            } catch { setInviteTokenResults([]); }
+                            setInviteTokenLoading(false);
+                          }, 0);
+                        }
                       }}
-                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13, cursor:"pointer" }}>
-                      <option value="SOL">SOL</option>
-                      <option value="USDC">USDC</option>
-                    </select>
+                      onChange={e => {
+                        const q = e.target.value;
+                        setInviteTokenQuery(q);
+                        setInviteTokenOpen(true);
+                        clearTimeout(inviteTokenTimerRef.current);
+                        if (!q) { setInviteTokenResults([]); return; }
+                        inviteTokenTimerRef.current = setTimeout(async () => {
+                          setInviteTokenLoading(true);
+                          try {
+                            const [v2raw, v1raw] = await Promise.allSettled([
+                              fetch(`${JUP_TOKEN_SEARCH}?query=${encodeURIComponent(q)}`).then(r=>r.json()),
+                              fetch(`${JUP_BASE}/tokens/v1/search?query=${encodeURIComponent(q)}&limit=50`).then(r=>r.json()),
+                            ]);
+                            const toList = (r) => { const d = r.status==="fulfilled"?r.value:[]; return Array.isArray(d)?d:(d?.tokens||d?.data||[]); };
+                            const v2list = toList(v2raw).map(t=>({...t,address:t.id||t.address}));
+                            const v1list = toList(v1raw).map(t=>({...t,address:t.address||t.id}));
+                            const seen = new Set(v2list.map(t=>t.address).filter(Boolean));
+                            const merged = [...v2list, ...v1list.filter(t=>t.address&&!seen.has(t.address))];
+                            const upper = q.trim().toUpperCase();
+                            merged.sort((a,b)=>{ const as=(a.symbol||"").toUpperCase()===upper?0:1, bs=(b.symbol||"").toUpperCase()===upper?0:1; if(as!==bs) return as-bs; return 0; });
+                            setInviteTokenResults(merged.slice(0,8));
+                          } catch { setInviteTokenResults([]); }
+                          setInviteTokenLoading(false);
+                        }, 350);
+                      }}
+                      onBlur={() => setTimeout(() => setInviteTokenOpen(false), 180)}
+                      style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
+                    />
+                    {inviteTokenOpen && (inviteTokenResults.length > 0 || inviteTokenLoading) && (
+                      <div style={{ position:"absolute", top:"100%", left:0, right:0, zIndex:200, background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, marginTop:2, maxHeight:220, overflowY:"auto", boxShadow:"0 4px 16px rgba(0,0,0,0.4)" }}>
+                        {inviteTokenLoading && <div style={{ padding:"8px 12px", fontSize:12, color:T.text3 }}>Searching…</div>}
+                        {inviteTokenResults.map(t => (
+                          <button key={t.address} onClick={() => {
+                            setSendCfg(c => ({ ...c, token: t.symbol, mint: t.address }));
+                            tokenCacheRef.current[t.symbol] = t.address;
+                            tokenDecimalsRef.current[t.symbol] = t.decimals ?? 6;
+                            setInviteTokenQuery(t.symbol);
+                            setInviteTokenOpen(false);
+                          }}
+                            style={{ width:"100%", display:"flex", alignItems:"center", gap:8, padding:"7px 12px", background:"none", border:"none", borderBottom:`1px solid ${T.border}44`, cursor:"pointer", textAlign:"left" }}
+                            className="hov-btn">
+                            {t.logoURI && <img src={t.logoURI} alt="" style={{ width:22, height:22, borderRadius:"50%", objectFit:"cover", flexShrink:0 }} onError={e=>e.currentTarget.style.display="none"}/>}
+                            <div>
+                              <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{t.symbol}</div>
+                              <div style={{ fontSize:10, color:T.text3 }}>{(t.name||"").slice(0,28)}</div>
+                            </div>
+                            {t.tags?.includes("verified") && <span style={{ marginLeft:"auto", fontSize:9, color:T.green, border:`1px solid ${T.green}44`, borderRadius:4, padding:"1px 5px" }}>verified</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <div style={{ flex:1 }}>
                     <div style={{ fontSize:11, color:T.text3, marginBottom:4 }}>Amount</div>
                     <input type="number" min="0" placeholder="e.g. 1"
                       value={sendCfg.amount}
                       onChange={e => setSendCfg(c => ({ ...c, amount:e.target.value }))}
-                      onBlur={() => setTimeout(() => setDirectTokenOpen(false), 180)}
+                      onBlur={() => setTimeout(() => setInviteTokenOpen(false), 180)}
                       style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
                     />
                   </div>
