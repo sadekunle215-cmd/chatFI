@@ -1,1469 +1,1197 @@
-# ChatFi — Full Architectural & Product README
+# ChatFI — Conversational AI Trading Interface for Jupiter DEX
 
-> **File:** `chatFI.jsx` — 14,591 lines · Single-file React application
-> **Product:** ChatFi — AI-powered DeFi assistant built on Solana & Jupiter DEX
+> **Type in what you want. ChatFI figures out the rest.**
+
+ChatFI is a production-grade, chat-first DeFi interface built entirely on the [Jupiter Developer Platform](https://developers.jup.ag). Instead of navigating tabs, forms, and confirmations, users describe their intent in plain language and the AI routes it to the correct Jupiter API — swaps, limit orders, DCA, yield vaults, prediction markets, portfolio views, token discovery, and more.
+
+**Live app:** [chatfi.pro](https://chatfi.pro)  
+**Repository:** [github.com/sadekunle215-cmd/chatfi](https://github.com/sadekunle215-cmd/chatfi)
 
 ---
 
 ## Table of Contents
 
-1. [What Is ChatFi?](#1-what-is-chatfi)
-2. [High-Level Architecture](#2-high-level-architecture)
-3. [Technology Stack & Dependencies](#3-technology-stack--dependencies)
-4. [Design System & Tokens](#4-design-system--tokens)
-5. [Jupiter API Layer (Lines 144–199)](#5-jupiter-api-layer-lines-144199)
-6. [AI Brain — System Prompt & Intent Engine (Lines 200–526)](#6-ai-brain--system-prompt--intent-engine-lines-200526)
-7. [Suggestion Groups & Power Commands (Lines 528–555)](#7-suggestion-groups--power-commands-lines-528555)
-8. [SVG Icon System (Lines 22–143)](#8-svg-icon-system-lines-22143)
-9. [Markdown Formatter — `fmt()` (Lines 600–803)](#9-markdown-formatter--fmt-lines-600803)
-10. [TokenPicker Component (Lines 806–899)](#10-tokenpicker-component-lines-806899)
-11. [TokenMiniChart Component (Lines 902–1032)](#11-tokenminichartt-component-lines-902-1032)
-12. [TrendingTicker Component (Lines 1035–~1160)](#12-trendingticker-component)
-13. [Blog / Docs Articles (Lines ~1161–1454)](#13-blog--docs-articles)
-14. [Landing Page System (Lines 1456–~1750)](#14-landing-page-system)
-15. [Token Lock Card — `MLocker` (Lines ~1751–1960)](#15-token-lock-card--mlocker)
-16. [Yield Vault System (Lines 1962–~2500)](#16-yield-vault-system)
-17. [WalletConnect QR / WC v2 Flow (Lines ~2500–2870)](#17-walletconnect-qr--wc-v2-flow)
-18. [Proxy Layer — `jupFetch` & `predFetch` (Lines 2876–2906)](#18-proxy-layer--jupfetch--predfetch-lines-28762906)
-19. [Token Resolution Engine (Lines 2908–3108)](#19-token-resolution-engine-lines-29083108)
-20. [Portfolio Data Fetcher (Lines ~3900–4221)](#20-portfolio-data-fetcher-lines-39004221)
-21. [Transaction Execution Layer (Lines ~4222–5632)](#21-transaction-execution-layer-lines-42225632)
-22. [Send & Invite Link System (Lines ~5200–5507)](#22-send--invite-link-system-lines-52005507)
-23. [Perps / Perpetual Futures (Lines 5509–5550)](#23-perps--perpetual-futures-lines-55095550) *(Coming Soon)*
-24. [Prediction Markets Engine (Lines 5552–5700)](#24-prediction-markets-engine-lines-55525700)
-25. [Wallet Connection Architecture (Lines 6853–7135)](#25-wallet-connection-architecture-lines-68537135)
-26. [Main Chat Engine — `sendMessage()` (Lines ~8330–8600)](#26-main-chat-engine--sendmessage-lines-83308600)
-27. [Action Dispatcher — All 40+ Actions (Lines ~8460–10150)](#27-action-dispatcher--all-40-actions-lines-846010150)
-28. [CHAINED_ACTIONS System (Lines ~9700–10050)](#28-chained_actions-system-lines-970010050)
-29. [UI Panels — Full Component Map (Lines ~10150–13600)](#29-ui-panels--full-component-map)
-30. [Prediction CLI Dashboard (Lines ~12800–13050)](#30-prediction-cli-dashboard-lines-1280013050)
-31. [Trade Journal & On-Chain History (Lines ~10010–10050)](#31-trade-journal--on-chain-history)
-32. [Price Alerts & Volatility Monitors (Lines ~9997–10015)](#32-price-alerts--volatility-monitors)
-33. [Plugin Architecture (Lines 14–19)](#33-plugin-architecture-lines-1419)
-34. [App Root & Auth Providers (Lines 14540–14591)](#34-app-root--auth-providers-lines-1454014591)
-35. [Server-Side API Routes (Referenced Throughout)](#35-server-side-api-routes-referenced-throughout)
-36. [State Management Map](#36-state-management-map)
-37. [Data Flow Diagram](#37-data-flow-diagram)
-38. [Feature Reference — Complete List](#38-feature-reference--complete-list)
-39. [Environment Variables](#39-environment-variables)
-[How to Extend ChatFi](#how-to-extend-chatfi)
+- [What ChatFI Does](#what-chatfi-does)
+- [Architecture Overview](#architecture-overview)
+- [Tech Stack](#tech-stack)
+- [Jupiter APIs Used](#jupiter-apis-used)
+- [Project Structure](#project-structure)
+- [Core Modules](#core-modules)
+  - [chatFI.jsx — Main Application](#chatfijsx--main-application)
+  - [YieldRotatorPlugin.jsx — APY Optimizer](#yieldrotatorpluginjsx--apy-optimizer)
+  - [yield-vault.js — Server API & Cron](#yield-vaultjs--server-api--cron)
+- [AI Grounding — llms-full.txt](#ai-grounding--llms-fulltxt)
+- [Authentication & Security](#authentication--security)
+- [Environment Variables](#environment-variables)
+- [Plugin System](#plugin-system)
+- [Yield Vault — Full Flow](#yield-vault--full-flow)
+- [Yield Rotator — Full Flow](#yield-rotator--full-flow)
+- [Telegram Integration](#telegram-integration)
+- [Known API Limitations & Workarounds](#known-api-limitations--workarounds)
+- [Product Lines — Full Breakdown](#product-lines--full-breakdown)
+- [chatFI.jsx — File Map (Line by Line)](#chatfijsx--file-map-line-by-line)
+- [Getting Started](#getting-started)
 
 ---
 
-## 1. What Is ChatFi?
+## What ChatFI Does
 
-ChatFi is a **conversational DeFi terminal** — a single-page React app that lets users trade, invest, and manage their entire Solana DeFi portfolio using natural language chat. Instead of navigating multiple dApps, users type commands like:
-
-- `"Swap $100 of SOL to BONK"`
-- `"Buy $50 each of JUP, WIF, and POPCAT"`
-- `"Set a limit order: buy SOL if it drops below $140"`
-- `"Bet $20 on Arsenal to win the Champions League"`
-- `"Show my earn positions and compound my yield into JUP"`
-- `"Lock 10,000 JUP for 1 year with a 6-month cliff"`
-
-An AI model (Claude Sonnet) reads those commands, returns a structured JSON response with an `action` field, and the app's dispatcher executes that action — opening a swap panel, fetching real-time data, signing a transaction, or chaining multiple operations together in sequence.
-
-ChatFi is **not a wrapper around jup.ag**. It constructs Jupiter API calls directly in-browser, handles transaction signing, broadcasts to mainnet, and confirms on Solscan — all inside one `.jsx` file.
-
----
-
-## 2. High-Level Architecture
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                        ChatFi.jsx                            │
-│                                                              │
-│  ┌────────────┐   ┌──────────────┐   ┌───────────────────┐  │
-│  │  Landing   │   │  Auth Layer  │   │   Chat Interface  │  │
-│  │  Page      │   │  Privy +     │   │   (messages,      │  │
-│  │  (HTML/CSS)│   │  Reown AppKit│   │    panels, state) │  │
-│  └────────────┘   └──────────────┘   └───────────────────┘  │
-│                                               │              │
-│                                               ▼              │
-│                          ┌────────────────────────────────┐  │
-│                          │     sendMessage() → /api/claude │  │
-│                          │     Claude Sonnet 4 (AI Brain) │  │
-│                          │     Returns: { text, action,   │  │
-│                          │               actionData }     │  │
-│                          └────────────────────────────────┘  │
-│                                               │              │
-│                                               ▼              │
-│                          ┌────────────────────────────────┐  │
-│                          │       Action Dispatcher        │  │
-│                          │  SHOW_SWAP / FETCH_PORTFOLIO / │  │
-│                          │  BASKET_SWAP / SHOW_TRIGGER /  │  │
-│                          │  PLACE_PREDICTION / SHOW_LOCK  │  │
-│                          │  ... 40+ action handlers       │  │
-│                          └────────────────────────────────┘  │
-│                                               │              │
-│               ┌───────────────────────────────┤              │
-│               ▼                               ▼              │
-│   ┌──────────────────┐           ┌────────────────────────┐  │
-│   │   Jupiter API    │           │  Solana RPC + Wallet   │  │
-│   │   /api/jupiter   │           │  Sign & Broadcast Tx   │  │
-│   │   (Vercel proxy) │           │  @solana/web3.js       │  │
-│   └──────────────────┘           └────────────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Core architectural decisions
-
-**Single-file monolith.** Everything — UI, business logic, API calls, transaction execution — lives in one `.jsx` file. This makes the app trivially deployable with no build complexity beyond Vite.
-
-**AI as the router.** Instead of a traditional UI navigation system, the AI model decides what screen or operation to open. The frontend never hard-codes routing logic — it maps AI action strings to component visibility flags.
-
-**Proxy-mediated API calls.** All Jupiter API calls go through `/api/jupiter` (a Vercel serverless function) that injects the API key. Prediction market calls go direct from the browser (to avoid server-side geo-blocks). This hybrid approach keeps credentials secure while respecting Jupiter's geo-access requirements.
-
-**Two-layer wallet architecture.** Social login (email, Google, Twitter via Privy) creates an embedded Solana wallet automatically. External wallets (Phantom, Backpack, Solflare, OKX, etc.) connect via Reown AppKit (WalletConnect v2). Both pathways normalise to a `{ signTransaction, signAllTransactions, signMessage }` interface.
-
----
-
-## 3. Technology Stack & Dependencies
-
-### Frontend
-| Library | Version | Purpose |
-|---|---|---|
-| React | 18+ | UI rendering with hooks |
-| `@solana/web3.js` | latest | Solana RPC, Transaction, PublicKey |
-| `@solana/spl-token` | latest | SPL token ATA creation + transfer |
-| `@reown/appkit` | latest | WalletConnect v2, multi-wallet modal |
-| `@reown/appkit-adapter-solana` | latest | Solana adapter for AppKit |
-| `@privy-io/react-auth` | latest | Social/email login + embedded wallets |
-
-### Backend (Vercel Serverless)
-| Route | Purpose |
+| User says | ChatFI does |
 |---|---|
-| `/api/claude` | Proxies messages to Claude Sonnet 4 API |
-| `/api/jupiter` | Proxies all Jupiter API calls (injects API key) |
-| `/api/send` | Crafts + partially signs Jupiter Send invite transactions |
-| `/api/lock` | Queries Jupiter Lock API for vesting accounts |
-
-### External APIs
-| API | Endpoint Base | Usage |
-|---|---|---|
-| Jupiter Price v3 | `api.jup.ag/price/v3` | Live USD prices, 24h change |
-| Jupiter Tokens v2 | `api.jup.ag/tokens/v2` | Token search, categories, verification |
-| Jupiter Swap v2 | `api.jup.ag/swap/v2` | Swap orders + execution |
-| Jupiter Trigger v2 | `api.jup.ag/trigger/v2` | Limit, OCO, OTOCO orders |
-| Jupiter Recurring v1 | `api.jup.ag/recurring/v1` | DCA / scheduled orders |
-| Jupiter Earn v1 | `api.jup.ag/lend/v1/earn` | Yield deposits, withdrawals |
-| Jupiter Borrow v1 | `api.jup.ag/lend/v1/borrow` | Collateral borrowing *(Coming Soon)* |
-| Jupiter Prediction v1 | `lite-api.jup.ag/prediction/v1` | Sports/crypto prediction markets |
-| Jupiter Portfolio v1 | `api.jup.ag/portfolio/v1` | Full DeFi portfolio |
-| Jupiter Perps v1 | `api.jup.ag/perps/v1` | Perpetual futures positions *(Coming Soon)* |
-| Jupiter Studio v1 | `api.jup.ag/studio/v1` | DBC token creation + fee claims |
-| Jupiter Lock v1 | `api.jup.ag/lock/v1` | Token vesting / cliff locks |
-| Jupiter Send v1 | `api.jup.ag/send/v1` | Invite-link token sends |
-| GeckoTerminal | `api.geckoterminal.com` | Price charts (primary) |
-| CoinGecko | `api.coingecko.com` | Price charts (fallback) |
-| Solana RPC | `api.mainnet-beta.solana.com` | Transaction broadcast + balance |
-| Solscan | `solscan.io` | Transaction explorer links |
-| Jupiter ASR | `vote.jup.ag/api/asr` | Staking reward claimable amounts |
+| "Swap 10 USDC to SOL" | Routes to Swap V2 `/order` → previews output → `/execute` on confirm |
+| "Set a limit order: buy SOL at $120" | Creates a Trigger V2 price order |
+| "DCA into JUP over the next 30 days" | Schedules a Recurring V1 DCA plan |
+| "What's my portfolio worth?" | Calls Ultra V1 + Portfolio V1, summarises holdings |
+| "Deposit 100 USDC into the best earn pool" | Identifies top APY pool, calls Lend V1 deposit |
+| "What's trending right now?" | Queries Tokens V2 trending + category endpoints |
+| "Bet on SOL hitting $200 by next month" | Opens a Prediction Markets position |
+| "Send 5 SOL to my friend" | Generates a Jupiter Send invite link |
 
 ---
 
-## 4. Design System & Tokens
-
-Defined at **line 558** as the constant `T` — a single object that every inline-styled component references. This ensures visual consistency across the entire 14,000-line file without any CSS framework.
-
-```js
-const T = {
-  bg:       "#0d1117",   // Page background — near-black navy
-  sidebar:  "#111820",   // Sidebar / drawer
-  surface:  "#161e27",   // Card / panel surface
-  border:   "#1e2d3d",   // Borders between elements
-  text1:    "#e8f4f0",   // Primary text — off-white
-  text2:    "#8fa8b8",   // Secondary text — muted blue-grey
-  text3:    "#4d6a7a",   // Tertiary / labels — darker
-  accent:   "#c7f284",   // Jupiter green — primary CTA colour
-  accentBg: "#1a2e1a",   // Green-tinted background for highlights
-  green:    "#c7f284",   // Success states
-  greenBg:  "#1a2e1a",
-  greenBd:  "#2d4d1a",   // Green border
-  red:      "#f28484",   // Error / sell / bear
-  redBg:    "#2e1a1a",
-  redBd:    "#4d2d2d",
-  purple:   "#a78bfa",   // Trigger orders, premium features
-  purpleBg: "#1e1a2e",
-  teal:     "#38bdf8",   // Links, lock/vest statuses
-  tealBg:   "#0f2233",
-  body:     "'DM Sans','Segoe UI',sans-serif",
-  serif:    "'Lora','Georgia',serif",         // Panel titles
-  mono:     "'JetBrains Mono',monospace",     // Addresses, signatures
-};
-```
-
-**Font loading** is injected at runtime (line 1463) via a `<style>` tag inserted into `<head>` — preventing FOUC (Flash Of Unstyled Content) without relying on an external CSS file.
+## Architecture Overview
 
 ```
-DM Sans        → Body text (weights 300–800)
-JetBrains Mono → Wallet addresses, transaction signatures, CLI
-Lora           → Serif panel headings for hierarchy contrast
++-------------------------------------------------------+
+|                    Browser / Client                   |
+|                                                       |
+|  +---------------------------------------------------+|
+|  |           chatFI.jsx (React + Vite)               ||
+|  |                                                   ||
+|  |  +------------+   +---------------------------+  ||
+|  |  |  Chat UI   |   |  Plugin Panels            |  ||
+|  |  |  + Intent  |   |  YieldRotatorPlugin       |  ||
+|  |  |  Router    |   |  (+ future plugins)       |  ||
+|  |  +-----+------+   +---------------------------+  ||
+|  |        |                                         ||
+|  |  +-----v-------------------------------------+   ||
+|  |  |         Wallet Providers                  |   ||
+|  |  |  Reown AppKit (Phantom, Backpack, etc)    |   ||
+|  |  |  Privy (email / social login + wallet)    |   ||
+|  |  +-------------------------------------------+   ||
+|  +---------------------------------------------------+|
++------------------------+------------------------------+
+                         | HTTPS
++------------------------v------------------------------+
+|                  Vercel (Server-side)                 |
+|                                                       |
+|  /api/jupiter        -- Jupiter API key proxy         |
+|  /api/yield-vault    -- Vault CRUD + Cron Watcher     |
+|  /api/solana-rpc     -- RPC proxy (Helius)            |
+|                                                       |
++--------+------------------------+--------------------+
+         |                        |
++--------v---------+   +----------v-----------------+
+|  Jupiter API     |   |   Firebase Firestore        |
+|  (13+ APIs)      |   |   yield_vaults collection   |
+|                  |   |   chatfi_users collection   |
++------------------+   +-----------------------------+
 ```
 
 ---
 
-## 5. Jupiter API Layer (Lines 144–199)
+## Tech Stack
 
-All API endpoint strings are defined as module-level constants so they're referenced by name throughout the file rather than as repeated strings.
-
-```
-JUP_BASE         = "https://api.jup.ag"
-JUP_LITE         = "https://lite-api.jup.ag"
-
-JUP_PRICE_API    → /price/v3          — usdPrice, priceChange24h per mint
-JUP_TOKENS_API   → /tokens/v1/token   — detail by mint address
-JUP_TOKEN_SEARCH → /tokens/v2/search  — fuzzy + exact token search
-JUP_TOKEN_TAG    → /tokens/v2/tag     — filter by tag (lst, verified)
-JUP_TOKEN_CAT    → /tokens/v2/{cat}   — toporganicscore, toptraded, toptrending
-JUP_TOKEN_RECENT → /tokens/v2/recent  — newly listed tokens
-JUP_SWAP_ORDER   → /swap/v2/order     — get swap transaction (v2 meta-aggregator)
-JUP_SWAP_EXEC    → /swap/v2/execute   — execute swap
-JUP_TV2          → /trigger/v2        — limit, OCO, OTOCO orders (JWT auth)
-JUP_TV2_LITE     → lite-api.jup.ag/trigger/v2
-JUP_RECUR_BASE   → /recurring/v1      — DCA / scheduled orders
-JUP_PORTFOLIO    → /portfolio/v1      — full DeFi portfolio snapshot
-JUP_PRED_API     → lite-api.jup.ag/prediction/v1  — prediction markets
-JUP_EARN_API     → /lend/v1/earn      — yield vaults
-JUP_BORROW_API   → /lend/v1/borrow    — borrow vaults *(Coming Soon)*
-JUP_SEND_API     → /send/v1           — invite-link sends + clawback
-JUP_PERPS_API    → /perps/v1          — perpetual futures *(Coming Soon)*
-JUP_STUDIO_API   → /studio/v1         — DBC token creation
-JUP_LOCK_API     → /lock/v1           — token vesting
-JUP_ROUTE_API    → /swap/v1/quote     — raw quote with full DEX route breakdown
-```
-
-**Special constants (line 172–176):**
-- `JUPUSD_MINT` — JupUSD stablecoin used as prediction market deposit fallback
-- `USDC_MINT` — Primary stable for predictions, earn, borrow
-- `CHATFI_REFERRAL` — The ChatFi referral account; Jupiter swap fees accrue here
-
-**`TOKEN_MINTS` (line 178):** A pre-seeded lookup table of popular Solana tokens (SOL, JUP, BONK, WIF, USDC, USDT, RAY, PYTH, mSOL, JitoSOL, bSOL, ORCA, POPCAT, TRUMP, BTC, ETH). This prevents meme-token namespace collisions — e.g. if a meme coin uses ticker "BTC", the real Wormhole WBTC mint is used for lookups instead.
-
-**`TOKEN_DECIMALS` (line 201):** Decimal places per token, used for raw-to-display amount conversion throughout all transaction flows.
-
----
-
-## 6. AI Brain — System Prompt & Intent Engine (Lines 200–526)
-
-### What it is
-
-The constant `SYSTEM_PROMPT` (starting around line 200 after the token definitions) is a multi-thousand-word instruction set fed to Claude Sonnet on every chat turn. It defines:
-
-1. **Response format** — Claude must always return valid JSON: `{ "text": "...", "action": "ACTION_NAME", "actionData": { ... } }`
-2. **All supported actions** — Every action string the app's dispatcher recognises, with the exact `actionData` shape required for each
-3. **Intent flexibility** — Typo tolerance, slang, abbreviation handling ("swp" → SHOW_SWAP, "porftolio" → FETCH_PORTFOLIO)
-4. **Chaining rules** — How to structure multi-step `CHAINED_ACTIONS`
-5. **Full feature list** — What to respond when the user asks "what can you do?"
-6. **Critical constraints** — Never say "I can't", always fire the relevant action, never fabricate prices
-
-### How the AI stays current
-
-At message-send time (line 8405), if `jupDocs` is available (a cached copy of Jupiter's `llms-full.txt` documentation), it's prepended to the system prompt:
-
-```
-system: `## Jupiter Official API Documentation\n\n${jupDocs}\n\n---\n\n${SYSTEM_PROMPT}${walletContext}`
-```
-
-This means Claude has live Jupiter API documentation context — it knows current endpoint shapes, supported parameters, and product semantics.
-
-### Dynamic wallet context
-
-Also injected at message-send time:
-
-```js
-const walletContext = walletFull
-  ? `\nWallet connected: YES\nWallet address: ${walletFull}\n...`
-  : `\nWallet connected: NO\nIf user requests wallet actions, prompt connect.`
-```
-
-This tells Claude whether to suggest wallet connection or proceed directly with on-chain actions.
-
-### Supported action strings (full list)
-
-```
-FETCH_PRICE            FETCH_TOKEN_INFO       FETCH_PORTFOLIO
-SHOW_SWAP              BASKET_SWAP            SWAP_ALL_WALLET
-SHOW_TRIGGER           SHOW_TRIGGER_V2        SHOW_RECURRING
-FETCH_TRIGGER_ORDERS   FETCH_RECURRING_ORDERS SHOW_PREDICTION
-FETCH_PREDICTIONS      PLACE_PREDICTION       BASKET_PREDICTION
-CLAIM_PAYOUTS          SCAN_PRED_ODDS         AUTO_PRED_BET
-SHOW_PRED_CLI          FETCH_EARN             SHOW_EARN_DEPOSIT
-SHOW_BORROW *(Coming Soon)* SHOW_MULTIPLY *(Coming Soon)* SHOW_LEND_POSITIONS
-SHOW_PERPS *(Coming Soon)* FETCH_PERPS_POSITIONS *(Coming Soon)* SHOW_STUDIO
-FETCH_STUDIO_FEES      SHOW_LOCK              FETCH_LOCKS
-SHOW_SEND              FETCH_SEND_HISTORY     SHOW_ROUTE
-SHOW_TRADE_JOURNAL     SET_PRICE_ALERT        DETECT_VOLATILITY
-FETCH_VOL_MONITORS     FETCH_XSTOCKS          FETCH_TOKEN_CATEGORY
-FETCH_TOKEN_TAG        FETCH_RECENT_TOKENS    FETCH_TOKEN_VERIFY
-COPY_TRADE             CHAINED_ACTIONS
-```
-
----
-
-## 7. Suggestion Groups & Power Commands (Lines 528–555)
-
-`SUGGESTION_GROUPS` is an array of categorised prompt suggestions displayed in the chat interface as clickable chips. Five built-in groups:
-
-| Group | Colour | Example items |
-|---|---|---|
-| ⚡ Power | Purple `#a78bfa` | "Smart entry SOL", "Morning briefing" |
-| Market | Green `#c7f284` | "Top trending tokens today", "Top xStocks" |
-| Trade | Teal `#63b3ed` | "Basket swap: $50 each of SOL JUP BONK", "Long SOL 10x perps *(Coming Soon)*" |
-| Earn | Green `#68d391` | "Show earn vaults", "DCA $10 USDC into SOL daily" |
-| Tools | Orange `#f6ad55` | "Create token on Jupiter Studio", "Arsenal vs Man City prediction" |
-
-**Power Commands** are not AI actions — they are client-side analytics workflows that trigger parallel data fetches before showing the result:
-
-- `"Smart entry X"` → price + trending rank + swap quote, all in parallel
-- `"Exit my X"` → momentum check + balance + best route
-- `"Deep dive X"` → metadata, organic score, safety flags, liquidity depth
-- `"Morning briefing"` → balances + earn positions + open orders in parallel
-
-**Plugin extension point (line 17):** `PLUGIN_SUGGESTION_GROUPS` is spread into the main array, allowing external plugins to add their own suggestion categories with no modification to core code.
-
----
-
-## 8. SVG Icon System (Lines 22–143)
-
-ChatFi uses zero icon libraries. Every icon is an inline SVG functional React component, defined at the top of the file. This eliminates icon library bundle size and guarantees pixel-perfect control.
-
-Icons defined (with purpose):
-
-| Component | Used for |
+| Layer | Technology |
 |---|---|
-| `SvgChat` | Chat bubbles, message indicators |
-| `SvgWallet` | Wallet connect buttons |
-| `SvgZap` | Lightning / instant swap actions |
-| `SvgBarChart` | Portfolio, analytics |
-| `SvgLink` | URL / link icons |
-| `SvgTwitterX` | Twitter/X social links |
-| `SvgDiscord` | Discord links |
-| `SvgTelegram` | Telegram links |
-| `SvgGithub` | GitHub links |
-| `SvgBlog` | Blog / documentation |
-| `SvgPhone` | Mobile / Jupiter Mobile |
-| `SvgLock` | Token vesting / lock panels |
-| `SvgPalette` | Theme / colour features |
-| `SvgCoin` | Token / coin displays |
-| `SvgMap` | Location / navigation |
-| `SvgUpload` | File / image upload (Studio) |
-| `SvgCalendar` | DCA scheduling |
-| `SvgRocket` | Launch / Studio / token creation |
-| `SvgWarning` | Risk warnings, slippage alerts |
-| `SvgFrog` | PEPE / meme token category |
-| `SvgArrowReturn` | Undo / clawback actions |
-| `SvgSearch` | Token search input |
-
-All accept `size` (px) and `color` (CSS colour string) props, defaulting to `16` and `"currentColor"` respectively.
+| Frontend | React 18 + Vite |
+| Deployment | Vercel (SSR + Edge Functions) |
+| Wallet (external) | Reown AppKit — Phantom, Backpack, and all WalletConnect wallets |
+| Wallet (social) | Privy — email / Google / Twitter login with embedded Solana wallet |
+| Blockchain | Solana Mainnet via Helius RPC |
+| Database | Firebase Firestore (vault persistence, Telegram linking) |
+| Notifications | Telegram Bot API |
+| AI | Anthropic Claude — grounded on Jupiter's `llms-full.txt` |
+| Jupiter | Developer Platform (unified API key, 13+ endpoints) |
 
 ---
 
-## 9. Markdown Formatter — `fmt()` (Lines 600–803)
+## Jupiter APIs Used
 
-The `fmt()` function is ChatFi's custom message renderer. It converts raw text (with markdown-like syntax) into styled HTML strings that are injected via `dangerouslySetInnerHTML`. It is one of the most complex sub-systems in the file.
-
-### What it handles
-
-**Inline markdown (via `inlineMd()`):**
-- `**bold**` → `<strong>`
-- `*italic*` → `<em>`
-- `` `code` `` → `<code>`
-- `[text](url)` → green underlined anchor with `target="_blank"`
-
-**Numbered token lists (lines 616–660):**
-When Claude responds with numbered items in the format `1. TOKEN — Name $price (+change%) · extra`, `fmt()` renders them as rich token cards with:
-- Rank badge (gold/silver/bronze for #1/#2/#3)
-- Optional logo image (`[img:URL]` tag parsed from the content)
-- Token symbol, name, price, percentage change
-- Volume/score metadata
-- Clickable card (calls `onTokenClick` callback)
-
-**Swap receipt cards (lines ~700–795):**
-When Claude sends a special `__SWAP_RECEIPT__` marker with swap metadata encoded, `fmt()` renders a styled swap confirmation card showing:
-- Sent amount and token → Received amount and token
-- Transaction fee
-- Transaction signature (with one-click copy)
-- Solscan link (opens explorer)
-
-**Normal text:** Falls through to a plain `<span>` with line-break rendering, passing through the inline markdown processor.
-
-### Why it matters
-
-This means ChatFi's entire display layer is HTML-string-based (not React component trees), which enables very efficient streaming-style message rendering and allows the AI to directly influence visual output by changing the text it returns.
-
----
-
-## 10. TokenPicker Component (Lines 806–899)
-
-A debounced, async-search dropdown for selecting any Solana token. Used inside the swap, trigger, recurring, lock, send, earn, and borrow panels — anywhere the user needs to pick a token.
-
-### Architecture
-
-**State:** `query` (display string), `results` (array), `busy` (loading), `focused` (dropdown visible)
-
-**Search logic (line 825):**
-Fires after 300ms debounce. Runs two parallel requests:
-1. Jupiter Tokens v2 search (verified + community tokens)
-2. Jupiter Tokens v1 search (fallback for unverified / new / meme tokens)
-
-Results are merged and deduplicated by mint address. Sort priority:
-1. Exact symbol match (case-insensitive)
-2. v2 tokens before v1
-3. 24h volume descending
-
-**Display:** Shows up to 50 results. Each row shows the token logo (graceful fallback if broken), symbol, name truncated to 24 chars, and daily volume in `$Xk` format.
-
-**onSelect callback:** Returns `(symbol, mint, decimals)` — the three pieces of information all transaction panels need to construct on-chain operations.
-
----
-
-## 11. TokenMiniChart Component (Lines 902–1032)
-
-An inline price chart for any token, rendered as a pure SVG polyline. Uses no charting library.
-
-### Data sources
-
-**Primary:** GeckoTerminal OHLCV API — hourly or daily candles for the token's Solana pool
-**Fallback:** CoinGecko market chart — if GeckoTerminal returns empty or errors
-
-Both requests use `AbortController` — if the user changes the time range mid-fetch, the previous request is cancelled immediately.
-
-### Time ranges
-
-| Range | GeckoTerminal config | Displayed points |
+| API | Base Path | What ChatFI Uses It For |
 |---|---|---|
-| 1D | Hour candles, 24 points | ~24 |
-| 7D | 4h aggregate, 42 points | ~42 |
-| 30D | Day candles, 30 points | ~30 |
-
-### SVG rendering
-
-The chart draws:
-- A filled `<polygon>` gradient area (green if price up, red if down)
-- A `<polyline>` stroke line showing price movement
-- A `<circle>` dot at the final price point
-- Time labels (start and end timestamps) below
-
-The SVG viewport is always 300×72 — it scales responsively via `width: 100%` on the container.
-
-### Skeleton
-
-While loading, a shimmer animation (`linear-gradient` + `@keyframes shimmer`) placeholder is shown. If neither API returns data, the component renders `null` (no empty border box).
+| **Swap V2** | `/swap/v2/order` + `/swap/v2/execute` | All token swaps. Split order/execute lets ChatFI show a preview before committing. |
+| **Trigger V2** | `/trigger/v2/orders/price` | Limit orders ("buy SOL if it drops to $120") |
+| **Recurring V1** | `/recurring/v1` | DCA / scheduled buy orders |
+| **Lend / Earn V1** | `/lend/v1/earn` | Yield deposits, withdrawals, position reads |
+| **Ultra V1** | `/ultra/v1/holdings` + `/ultra/v1/order` + `/ultra/v1/execute` | Portfolio snapshot, gasless swaps |
+| **Portfolio V1** | `/portfolio/v1/positions` | Full position tracking (tokens, LP, earn, perps) |
+| **Prediction Markets V1** | `/prediction/v1` | Bet creation, open positions, market state |
+| **Tokens V2** | `/tokens/v2` search, tag, category, trending, recent | Token search and discovery |
+| **Price V3** | `/price/v3` | Live prices with 24h delta (no extra call needed for change %) |
+| **Send** | `/send/v1` | Token transfers via invite link (no recipient wallet needed) |
+| **Studio** | `/studio/v1` | Token creation, fee claiming |
+| **Lock** | `/lock/v1` | SPL token vesting |
 
 ---
 
-## 12. TrendingTicker Component
-
-A horizontally scrolling ticker bar at the top of the chat interface showing live trending tokens from Jupiter's category API. Tokens are fetched on mount (category: `toptrending`, interval: `24h`) and displayed as a continuously animating strip. Clicking a token name sends a fetch-token-info query to the AI.
-
----
-
-## 13. Blog / Docs Articles
-
-An in-app documentation system. Seven articles are hard-coded as JavaScript objects (~lines 1161–1454), each with:
-- `id`, `title`, `category`, `readTime`, `summary`
-- `sections[]` — heading + body paragraph pairs
-- `tips[]` — bullet-point pro tips
-
-Articles cover:
-1. Getting Started — First swap walkthrough
-2. How ChatFi Swaps Work — Jupiter routing, slippage, referral fees
-3. Basket Swaps — Multi-token trades in one command
-4. Automating Trades — Limit orders, DCA, OCO
-5. Earning Passive Yield — Jupiter Earn, Borrow, Multiply
-6. Prediction Markets — How to bet on sports/crypto outcomes
-7. Understanding Your Portfolio — Balances, positions, alerts, journal
-
-These articles are rendered inside the chat as an in-app blog reader — no external CMS or network request required.
-
----
-
-## 14. Landing Page System
-
-### Style injection (line 1458)
-
-A self-invoking function `injectLandingStyles()` inserts a `<style>` block into `<head>` with all landing page CSS (using CSS custom properties and class names). This fires synchronously at module load time, preventing any flash of unstyled content when the landing page renders.
-
-### CSS architecture
-
-Uses CSS custom properties (`--lp-bg`, `--lp-accent`, etc.) on `.lp-root`, plus purpose-built class names for every element. Key classes:
-
-| Class | Purpose |
-|---|---|
-| `.lp-root` | Full-screen overlay (position: fixed, z-index: 200) |
-| `.lp-dot-bg` | Animated dot grid background (CSS mask + radial-gradient) |
-| `.lp-mockup-wrap` | The rotating rainbow-gradient border around the chat mockup |
-| `.lp-btn-primary` | Jupiter-green CTA buttons |
-| `.lp-btn-ghost` | Secondary bordered buttons |
-| `.lp-hero` | Full-width hero section with radial glow |
-| `.lp-badge` | "Built on Jupiter" pill badge |
-
-### Animations defined
-
-```css
-@keyframes lp-pulse    — pulsing green dot (live indicator)
-@keyframes lp-floatUp  — content enters from below on load
-@keyframes lp-spin     — rotating gradient border on mockup card
-@keyframes lp-reveal   — section reveal on scroll
-```
-
-### Key sections
-
-- **Nav** — Sticky header with blur backdrop, logo, nav links, CTA button
-- **Hero** — Headline with `.acc` span (green), sub-copy, CTA row, animated chat mockup
-- **Features grid** — Six feature cards with icons, colour-coded by category
-- **Token ticker preview** — Live token prices inline in the landing page
-- **Stats bar** — "$X volume routed", "X tokens", "X+ wallets"
-- **Blog preview** — Three article cards from the in-app docs
-- **Footer** — Logo, social links (Twitter/X, Discord, Telegram, GitHub), tagline
-
----
-
-## 15. Token Lock Card — `MLocker`
-
-Used by the `FETCH_LOCKS` action to display each vesting account as a rich card.
-
-### What it shows per lock
-
-- Token symbol + mint address (truncated, linked to Solscan)
-- Status badge: `locked` / `claimable` / `fully vested`
-- Three amount tiles: Total Locked / Claimed / Claimable Now
-- Animated progress bar (claimed % of total)
-- Cliff date and recipient address
-- Mint address link
-- One-click **Claim** button (only visible when `status === "claimable"`)
-
-### Cliff + claimable calculation (lines 4156–4172)
-
-The component computes whether the cliff has passed (current timestamp vs cliff timestamp), then estimates claimable amount:
-```
-if (claimRaw is 0 but cliff passed and unlockedPct > 0):
-  effectiveClaimRaw = (totalRaw × unlockedPct / 100) − claimedRaw
-```
-This handles APIs that return percentage-based vesting data rather than raw claimable amounts.
-
----
-
-## 16. Yield Vault System
-
-One of ChatFi's most unique features — a compound-yield automation layer that sits on top of Jupiter Earn.
-
-### YieldVaultPromptCard (line 2009)
-
-A promotional card that appears in chat after the user's earn positions are detected. It describes the Yield Vault feature and offers a "Set Yield Vault" button.
-
-### YieldVaultPanel (line 2082)
-
-The three-step setup UI:
-
-**Step 1 — Select positions:** Shows the user's live Jupiter Earn deposits. Already-vaulted positions appear greyed out. New positions are selectable. If a vaulted position has received additional deposits since last config, a `+X.XXXX new` indicator shows a top-up option.
-
-**Step 2 — Set threshold:** A USD amount (e.g. "$10") — when accrued yield crosses this threshold, the vault fires.
-
-**Step 3 — Choose target token:** A `TokenPicker` dropdown to select what token the yield auto-swaps into. The principal is never touched — only the yield above the threshold is converted.
-
-### How it works at runtime
-
-The vault configuration is stored in `localStorage` (keyed by wallet address). A polling mechanism checks the user's earn positions on an interval. When yield balance exceeds `principal + threshold`, a swap is triggered automatically using the stored target token.
-
-### Helper utilities
-
-```js
-formatAPY(apy)          — Converts basis points (e.g. 41500) to "4.15%"
-formatEarned(earned, sym) — Formats yield delta as "+0.0042 USDC earned"
-```
-
-### TokenLogo component (line 2059)
-
-A robust token logo resolver with three fallback sources:
-1. Provided `logo` prop
-2. `raw.githubusercontent.com/solana-labs/token-list` legacy CDN
-3. `img.jup.ag/tokens/{mint}` Jupiter's image CDN
-
-If all fail, renders a monogram circle with the token's first two characters.
-
----
-
-## 17. WalletConnect QR / WC v2 Flow
-
-For Jupiter Mobile and any WalletConnect-compatible wallet, ChatFi generates a QR code using the `qrcode` library (loaded dynamically from jsDelivr CDN). The QR code contains the WalletConnect URI (`wc:...`) that the mobile wallet scans.
-
-### Flow
-
-1. Reown AppKit generates a WC URI
-2. ChatFi loads `qrcode.min.js` dynamically if not already present
-3. `QRCode.toCanvas()` renders the code into a `<canvas>` element
-4. The user scans with Jupiter Mobile (or any WC wallet)
-5. Wallet approves → `reownAccount` populates → `walletFull` is set
-
-This allows the app to connect to Jupiter Mobile's in-app browser even when `window.solana` is not yet injected (which happens when the page loads before the wallet's browser context is fully ready).
-
----
-
-## 18. Proxy Layer — `jupFetch` & `predFetch` (Lines 2876–2906)
-
-### `jupFetch(url, options)` (line 2890)
-
-All Jupiter API calls (except prediction markets) go through this function, which POSTs to `/api/jupiter`:
-
-```js
-const payload = { url, method, body }
-// For Lend and Studio endpoints, passes apiKey
-fetch("/api/jupiter", { method: "POST", body: JSON.stringify(payload) })
-```
-
-The Vercel serverless function at `/api/jupiter` adds the Jupiter API key header before forwarding to `api.jup.ag`. Responses are returned as parsed JSON. If the proxy returns an error (HTML 404/500), `jupFetch` throws a descriptive error rather than crashing on JSON parse.
-
-### `predFetch(url, options)` (line 2879)
-
-Used exclusively for prediction market endpoints. Goes **directly** from the browser to `lite-api.jup.ag/prediction/v1` — bypassing the server proxy — so Jupiter sees the user's actual IP address (avoiding server-side geo-blocks). This is intentional architecture, documented in the code comments.
-
----
-
-## 19. Token Resolution Engine (Lines 2908–3108)
-
-### `resolveToken(symbolOrName)` (line 2910)
-
-Resolves any token ticker, name, or Solana address to `{ mint, decimals }`.
-
-**Resolution order:**
-1. In-memory cache (`tokenCacheRef`) hit → return immediately
-2. Base58 address detection (32–44 chars) → use as mint directly
-3. Jupiter Tokens v2 search → prefer exact symbol match
-4. Jupiter Tokens v1 search → fallback for unverified / meme tokens
-
-Caches results in `tokenCacheRef` (symbol → mint) and `tokenDecimalsRef` (symbol → decimals) for the session lifetime.
-
-### `fetchTokenInfo(symbol)` (line 2982)
-
-Fetches rich metadata for a token. Returns a normalised object including:
-
-```js
-{
-  address, logo_url,
-  usdPrice, market_cap, fdv, liquidity, circSupply, totalSupply, holderCount,
-  daily_volume, priceChange24h,
-  numBuys24h, numSells24h, numTraders24h, buyVolume24h, sellVolume24h,
-  stats1h, stats6h,
-  firstPoolId, firstPoolAt,   // token age
-  organicScore, organicScoreLabel,
-  freezeAuthority, mint_authority, topHoldersPercentage, devMints,
-  twitter, website, telegram, discord,
-  launchpad, graduatedAt, tags
-}
-```
-
-**Resolution priority (lines 3039–3107):**
-1. Known hardcoded mint (from `TOKEN_MINTS`) or direct base58 address → hit v1 token detail endpoint
-2. v2 token search by symbol (preferred exact match + cachedMint cross-validation)
-3. v1 token search fallback
-4. Last-resort: cached mint + v1 detail
-
-### `fetchXStocks(limit, sort)` (line 3139)
-
-Fetches tokenized real-world stocks from Jupiter. Searches for 37 known xStock symbols in parallel (SPYx, QQQx, AAPLx, NVDAx, etc.) using `Promise.allSettled`. Results are sorted by volume or by symbol before slicing to the requested limit.
-
----
-
-## 20. Portfolio Data Fetcher (Lines ~3900–4221)
-
-### `fetchPortfolioData(walletAddress)` (line ~3900)
-
-The most complex data fetch in the application. Fetches 11 data sources in parallel and returns a merged portfolio object.
+## Project Structure
 
 ```
-1. SPL token balances     — getTokenAccountsByOwner via Solana RPC
-2. SOL balance            — getBalance via Solana RPC
-3. Wallet portfolio       — Jupiter Portfolio API /positions/{wallet}
-   ↳ Extracts: portfolioElements, earn positions (from portfolio), lock positions (from portfolio)
-4. Open trigger orders    — Jupiter Trigger v2 /orders?inputAccount=...
-5. Recurring orders       — Jupiter Recurring /getRecurringOrders?user=...
-6. Prediction orders      — Jupiter Prediction /orders?ownerPubkey=...
-7. Earn positions         — Jupiter Earn /positions?users=...
-   ↳ Falls back to: portfolio-extracted earn data
-8. Staked JUP             — Jupiter Portfolio /staked-jup/{wallet}
-8b. ASR rewards           — vote.jup.ag/api/asr/claimable (governance staking rewards)
-9. Perps positions        — Jupiter Portfolio /positions/{wallet}?platforms=jupiter-perps *(Coming Soon)*
-10. LP positions          — Extracted from portfolio elements (Orca, Raydium, Meteora labels)
-11. Lock positions        — Jupiter Lock API /locks?wallet=...
-    ↳ Falls back to: /api/lock server proxy
-    ↳ Falls back to: portfolio-extracted lock data
-```
-
-All amounts are normalised to human-readable values (raw integer / 10^decimals).
-
----
-
-## 21. Transaction Execution Layer (Lines ~4222–5632)
-
-### Studio Token Creation — `doCreateToken()` (line 4244)
-
-Five-step flow for launching a new token via Jupiter Studio Dynamic Bonding Curves:
-
-1. **POST `/studio/v1/dbc-pool/create-tx`** → returns unsigned transaction + presigned S3 URLs
-2. **PUT image** to the presigned image URL (S3 direct upload)
-3. **PUT metadata JSON** to the presigned metadata URL
-4. **Sign transaction** with the connected wallet provider
-5. **POST multipart/form-data** to `/studio/v1/dbc-pool/submit` with the signed transaction + description
-
-Three launch presets are built in:
-- `meme` — $16K → $69K market cap curve, 100bps fee, LP locked
-- `indie` — $32K → $240K curve, anti-sniping, 1-year vesting for 100M tokens
-- `chatfi` — 80% community locked 2 years, single release, zero cliff
-
-### Swap Execution — `doSwap()` (implied by swap panel)
-
-Standard Jupiter swap flow:
-1. Fetch swap quote from `/swap/v2/order`
-2. Present to user (price impact, fees, out amount)
-3. User clicks "Swap" → get `transaction` field from order response
-4. Deserialise `VersionedTransaction`
-5. Sign with active wallet provider
-6. Send via `connection.sendRawTransaction()`
-7. Confirm via `connection.confirmTransaction()`
-8. Post swap receipt card to chat
-
-### Claim Payouts — `doClaimPayouts()` (line ~5100)
-
-Fetches all open prediction market orders for the user's wallet, filters for claimable positions (event resolved, user on winning side), and executes claim transactions for each.
-
-### Close Perps Position — `doClosePerp()` *(Coming Soon)*
-
-1. POST to `/perps/v1/close` with wallet + position key
-2. Deserialise returned base64 transaction
-3. Sign with wallet provider
-4. Broadcast via Solana RPC JSON-RPC call
-5. Remove position from local state on success
-
-### Prediction Bet — `doPredictionBet()` (line 5552)
-
-1. Build order payload: `{ ownerPubkey, marketId, isYes, isBuy, depositAmount, depositMint }`
-2. Try USDC mint first, fall back to JupUSD mint
-3. POST to `/prediction/v1/orders` via `predFetch` (direct browser request)
-4. Deserialise + sign transaction
-5. Broadcast via Solana RPC
-6. Post bet confirmation card to chat
-
-Handles geo-restriction errors specifically — detects `unsupported_region` in the error message and shows a helpful explanation rather than a generic failure.
-
----
-
-## 22. Send & Invite Link System (Lines ~5200–5507)
-
-### Invite Send — `doInviteSend()` (line ~5200)
-
-Six-step flow for sending tokens to anyone via a link (recipient needs no wallet upfront):
-
-1. Generate a random `Keypair` as the invite keypair
-2. Derive invite code from the keypair
-3. Look up the token mint and resolve recipient ATA
-4. POST to `/api/send` server route → server calls Jupiter `/send/v1/craft-send`
-5. **Dual-sign** the returned transaction: first the invite keypair, then the sender wallet
-6. Broadcast + confirm on-chain, return `https://jup.ag/send?code=XXXX` invite link
-
-Recipients claim by visiting the Jupiter Mobile link. Tokens auto-return to sender on expiry.
-
-### Direct Send — `doDirectSend()` (line 5401)
-
-Constructs a raw Solana transaction:
-- **SOL:** `SystemProgram.transfer()` instruction
-- **SPL tokens:** Creates recipient ATA if missing (`createAssociatedTokenAccountInstruction`), then `createTransferInstruction`
-
-Signs and broadcasts without going through Jupiter's API.
-
-### Clawback — `doClawback()` (line 5470)
-
-Recalls unclaimed invite tokens:
-1. POST to `/api/send?action=clawback` with the invite code
-2. Server derives the invite keypair, calls Jupiter `/send/v1/craft-clawback`, partially signs
-3. Returns partially-signed tx for the sender wallet to co-sign
-4. Broadcasts the dual-signed transaction
-
----
-
-## 23. Perps / Perpetual Futures (Lines 5509–5550) *(Coming Soon)*
-
-ChatFi exposes Jupiter's perpetual futures via two flows:
-
-**Open position** — `SHOW_PERPS` action opens the perps panel with pre-filled market (SOL, BTC, ETH), direction (long/short), leverage, and collateral amount. The panel links to `jup.ag/perps` for the actual order UI.
-
-**Close position** — `doClosePerp()` closes a position directly in-app: POSTs to `/perps/v1/close`, signs, and broadcasts. The closed position is removed from local state immediately.
-
-**View positions** — `FETCH_PERPS_POSITIONS` action fetches all open perps from the portfolio API and displays them with unrealised PnL, liquidation price, leverage, and close buttons.
-
----
-
-## 24. Prediction Markets Engine (Lines 5552–5700)
-
-### `fetchPredictionMarkets(sport, query, limit)` (line ~5652)
-
-Fetches live markets from `lite-api.jup.ag/prediction/v1`. Supports:
-- Sport/category filter (`sports`, `crypto`, `politics`, `esports`)
-- Free-text query for team/event name matching
-- Limit on number of results
-
-Each market object is normalised to include `marketId`, `title`, outcome probabilities (yes/no), pool size (volume), close timestamp, and outcome array.
-
-### `scanPredOdds(params)` (line ~5700)
-
-Used by the Prediction CLI dashboard. Fetches a large set of markets, computes an "edge" score for each outcome:
-
-```
-edge = |impliedProbability − marketProbability| × 100%
-bestSide = "yes" if yesEdge > noEdge else "no"
-payoutRatio = 1 / bestSideProbability
-```
-
-Markets are ranked by edge descending. Only markets above `minEdge` threshold are shown.
-
----
-
-## 25. Wallet Connection Architecture (Lines 6853–7135)
-
-ChatFi's wallet layer is the most complex part of the codebase — it needs to support every Solana wallet on both desktop and mobile.
-
-### Detection hierarchy
-
-**1. Wallet Standard** (line 6856) — The modern browser standard. Wallets that register via `window.__wallet_standard__` are detected first. ChatFi wraps them into a normalised `{ connect, signTransaction }` shape via `wrapStandardWallet()`.
-
-**2. Legacy injected providers** (line 6866) — Desktop browser extensions that inject into `window`:
-```
-Phantom      → window.phantom.solana
-Solflare     → window.solflare (with isSolflare check)
-Backpack     → window.backpack.solana
-Jupiter      → window.solana (with isJupiter flag)
-Trust Wallet → window.trustwallet.solana
-Coin98       → window.coin98.sol
-OKX          → window.okxwallet.solana
-```
-
-**3. Generic `window.solana` catch-all** (line 6996) — Jupiter Mobile's in-app browser injects `window.solana` but doesn't set `window.jupiter` and doesn't register via Wallet Standard. ChatFi detects this with flag inspection (`isJupiter`, `isPhantom`, etc.) and adds it to the list.
-
-**4. Mobile deep links** (line 7025) — On mobile, for any wallet not detected, a deep link entry is added. These open the respective wallet app, which then redirects back to the current URL.
-
-**5. Desktop install links** (line 7044) — On desktop, for undetected wallets, a "Download" entry links to the wallet's official install page.
-
-### Late injection handling (line 7075)
-
-Many wallets (Backpack, OKX, Jupiter Mobile) inject their providers asynchronously after page load. ChatFi handles this with:
-- `window.addEventListener("wallet-standard:register-wallet", rebuild)` — catches standard registrations
-- Three `setTimeout` rebuilds at 300ms, 800ms, and 2000ms — catches late injection
-
-### `getActiveProvider()` (line 7136)
-
-Returns the currently-active signing provider, trying in order:
-1. Reown AppKit provider (if Reown-connected and not in Privy mode)
-2. `connectedProviderRef.current` (manually connected legacy provider)
-3. First Wallet Standard wallet found
-4. Privy embedded wallet (`useSolanaWallets()` hook)
-
-Each path normalises to `{ signTransaction, signAllTransactions, signMessage }`.
-
-### Wallet logos (line 6901)
-
-- **Phantom:** Inline SVG data URI (Phantom blocks hotlinks from external domains)
-- **OKX:** Inline SVG data URI (same reason)
-- **All others:** Favicon URLs from official domains (Solflare, Backpack, Jupiter, Trust Wallet, Coin98)
-
----
-
-## 26. Main Chat Engine — `sendMessage()` (Lines ~8330–8600)
-
-The central function that handles every user message submission.
-
-### Pre-AI shortcuts
-
-Before hitting the AI, `sendMessage()` checks for exact-match shortcuts that bypass the network call entirely:
-
-```
-"clear" / "clear chat" / "reset"  → clears message history + all panel state
-"disconnect wallet" / "sign out"  → calls disconnectWallet()
-"yield vault" / "my vault"        → triggers vault panel directly
-"set yield vault"                 → triggers vault setup panel
-```
-
-### AI call flow
-
-1. Build `walletContext` string (inject wallet address or "not connected" note)
-2. POST to `/api/claude`:
-   ```json
-   {
-     "model": "claude-sonnet-4-20250514",
-     "max_tokens": 2048,
-     "system": "<jupDocs if available> + SYSTEM_PROMPT + walletContext",
-     "messages": histRef.current (last 40 turns)
-   }
-   ```
-3. Receive raw text → strip markdown fences → strip JS inline comments → extract JSON
-4. If JSON parse fails → attempt to auto-repair (close unclosed `{}[]`) → retry parse
-5. If still failing → regex-salvage just the `"text"` field
-6. Call action dispatcher with `{ text, action, actionData }`
-
-### Conversation history
-
-`histRef.current` stores the last 40 message pairs. Persisted to `sessionStorage` as `"chatfi-hist"` so it survives page reloads within the same session. Cleared on "clear chat".
-
----
-
-## 27. Action Dispatcher — All 40+ Actions (Lines ~8460–10150)
-
-Each `if/else if` branch in the dispatcher handles one action type. Here is what each does:
-
-| Action | What happens |
-|---|---|
-| `FETCH_PRICE` | Resolves unknown tokens, calls `fetchPrices()`, formats price lines, pushes to chat |
-| `FETCH_TOKEN_INFO` | Calls `fetchTokenInfo()`, opens `TokenCard` panel |
-| `FETCH_PORTFOLIO` | Calls `fetchPortfolioData()`, opens Portfolio panel, merges logo maps, fetches live prices for all positions |
-| `SHOW_SWAP` | Resolves both token mints, resolves amount (number / "half" / "25%" / USD), sets `swapCfg`, shows swap panel |
-| `BASKET_SWAP` | Queues multiple swaps, executes sequentially, posts individual receipts |
-| `SWAP_ALL_WALLET` | Reads wallet balances, creates sell trades for all non-USDC tokens, executes basket |
-| `SHOW_TRIGGER` | Sets `trigCfg` with token/direction/price/amount, shows legacy trigger panel |
-| `SHOW_TRIGGER_V2` | Sets `trigV2Cfg` with OCO/OTOCO support, shows v2 trigger panel |
-| `SHOW_RECURRING` | Sets `recurringCfg` with DCA params, shows DCA setup panel |
-| `FETCH_TRIGGER_ORDERS` | Fetches v2 trigger orders from Jupiter API, shows orders list |
-| `FETCH_RECURRING_ORDERS` | Fetches DCA orders, shows list with cancel buttons |
-| `SHOW_PREDICTION` | Sets prediction panel data, shows prediction selector |
-| `FETCH_PREDICTIONS` | Fetches live prediction markets by sport/query, shows market list |
-| `PLACE_PREDICTION` | Looks up market by query, pre-fills bet panel |
-| `BASKET_PREDICTION` | Queues multiple prediction bets in sequence |
-| `CLAIM_PAYOUTS` | Calls `doClaimPayouts()` |
-| `SCAN_PRED_ODDS` | Fetches markets, computes edges, shows CLI dashboard |
-| `AUTO_PRED_BET` | Scans odds and auto-places bets on high-edge outcomes |
-| `SHOW_PRED_CLI` | Opens prediction CLI terminal panel |
-| `FETCH_EARN` | Fetches earn vaults, shows vault list with APYs |
-| `SHOW_EARN_DEPOSIT` | Pre-fills earn deposit panel with vault + amount |
-| `SHOW_BORROW` | Sets borrow vault config, shows borrow panel *(Coming Soon)* |
-| `SHOW_MULTIPLY` | Filters multiply vaults, shows leverage yield panel *(Coming Soon)* |
-| `SHOW_LEND_POSITIONS` | Fetches and shows all lend/earn/borrow positions |
-| `SHOW_PERPS` | Pre-fills perps panel (market/direction/leverage), shows panel *(Coming Soon)* |
-| `FETCH_PERPS_POSITIONS` | Fetches open perps from portfolio API *(Coming Soon)* |
-| `SHOW_STUDIO` | Pre-fills token name/symbol/description, shows token creation form |
-| `FETCH_STUDIO_FEES` | POSTs to studio API to get unclaimed DBC creator fees |
-| `SHOW_LOCK` | Pre-fills lock amount/token/vesting params, shows lock panel |
-| `FETCH_LOCKS` | Fetches vesting accounts via `fetchPortfolioData` + lock APIs |
-| `SHOW_SEND` | Sets send token/amount, shows send panel (invite vs direct) |
-| `FETCH_SEND_HISTORY` | Fetches pending invites or full send history |
-| `SHOW_ROUTE` | Calls `fetchRouteBreakdown()`, shows DEX path visualisation |
-| `SHOW_TRADE_JOURNAL` | Fetches on-chain trade history, merges with local journal, displays |
-| `SET_PRICE_ALERT` | Creates new price alert, persists to localStorage, starts monitoring |
-| `DETECT_VOLATILITY` | Sets up volatility monitor for a token |
-| `FETCH_VOL_MONITORS` | Shows active volatility monitors |
-| `FETCH_XSTOCKS` | Calls `fetchXStocks()`, formats as numbered token card list |
-| `FETCH_TOKEN_CATEGORY` | Fetches trending/organic/traded categories, formats list |
-| `FETCH_TOKEN_TAG` | Fetches verified or LST token lists |
-| `FETCH_RECENT_TOKENS` | Fetches newest token listings |
-| `FETCH_TOKEN_VERIFY` | Checks if user's token qualifies for Jupiter verification |
-| `COPY_TRADE` | Fetches wallet's recent transactions, shows mirroring panel |
-| `CHAINED_ACTIONS` | Processes `steps[]` array sequentially (see Section 28) |
-
----
-
-## 28. CHAINED_ACTIONS System (Lines ~9700–10050)
-
-One of ChatFi's most powerful features. When the AI returns `action: "CHAINED_ACTIONS"`, the `actionData.steps` array contains a sequence of sub-actions, each with its own `action` and `actionData`. The dispatcher executes these sequentially:
-
-```js
-for (const step of actionData.steps) {
-  const stepAction = step.action;
-  const stepData   = step.actionData || {};
-  // ... giant if/else chain handles every possible step type
-  await new Promise(r => setTimeout(r, 300)); // 300ms pause between steps
-}
-```
-
-**All 40+ action types are supported as chain steps.** This enables compound commands like:
-
-```
-"Swap SOL to BONK then alert me when it hits $0.00003"
-→ CHAINED_ACTIONS steps: [SHOW_SWAP, SET_PRICE_ALERT]
-
-"Create a token then lock 80% of supply for 2 years"
-→ CHAINED_ACTIONS steps: [SHOW_STUDIO, SHOW_LOCK]
-
-"Buy $100 each of SOL JUP BONK then DCA $10 daily into each"
-→ CHAINED_ACTIONS steps: [BASKET_SWAP, SHOW_RECURRING × 3]
-
-"Lock 10 USDC for 10 minutes then swap to SOL"
-→ CHAINED_ACTIONS steps: [SHOW_LOCK, SHOW_SWAP]
-  (lock vesting days = 10 minutes ÷ 1440 = 0.00694 days)
-```
-
-Time conversion for lock steps is handled by the AI system prompt (minutes → days formula) and validated client-side.
-
----
-
-## 29. UI Panels — Full Component Map
-
-All panels are conditionally rendered inline within the main message feed (`{showSwap && <SwapPanel />}`). Each panel is an accordion/card below the AI's message that triggered it. State variables control visibility:
-
-| Panel | State flag | Trigger action |
-|---|---|---|
-| Swap | `showSwap` | `SHOW_SWAP` |
-| Basket swap queue | internal | `BASKET_SWAP` |
-| Swap route | `showRoute` | `SHOW_ROUTE` |
-| Limit order (legacy) | `showTrig` | `SHOW_TRIGGER` |
-| Limit/OCO/OTOCO (v2) | `showTrigV2` | `SHOW_TRIGGER_V2` |
-| Trigger orders list | `showTrigOrders` | `FETCH_TRIGGER_ORDERS` |
-| DCA setup | `showRecurring` | `SHOW_RECURRING` |
-| DCA orders list | `showRecurringOrders` | `FETCH_RECURRING_ORDERS` |
-| Portfolio | `showPortfolio` | `FETCH_PORTFOLIO` |
-| Token card | `showTokenCard` | `FETCH_TOKEN_INFO` |
-| Earn vaults | `showEarn` | `FETCH_EARN` |
-| Earn deposit | `showEarnDeposit` | `SHOW_EARN_DEPOSIT` |
-| Earn withdraw | `earnWithdraw` | (portfolio panel) |
-| Lend positions | `showLendPos` | `SHOW_LEND_POSITIONS` |
-| Borrow | `showBorrow` | `SHOW_BORROW` *(Coming Soon)* |
-| Multiply | `showMultiply` | `SHOW_MULTIPLY` *(Coming Soon)* |
-| Prediction selector | `showPred` | `SHOW_PREDICTION` |
-| Prediction list | `showPredList` | `FETCH_PREDICTIONS` |
-| Prediction bet | `showBet` | set by bet selection |
-| Prediction CLI | `showPredCLI` | `SHOW_PRED_CLI` / `SCAN_PRED_ODDS` |
-| Perps | `showPerps` | `SHOW_PERPS` *(Coming Soon)* |
-| Perps positions | `showPerpsPos` | `FETCH_PERPS_POSITIONS` *(Coming Soon)* |
-| Send (invite) | `showSend` | `SHOW_SEND` |
-| Lock setup | `showLock` | `SHOW_LOCK` |
-| Lock list | `showLocks` | `FETCH_LOCKS` |
-| Studio (create token) | `showStudio` | `SHOW_STUDIO` |
-| Studio fees | `showStudioFees` | `FETCH_STUDIO_FEES` |
-| Copy trade | `showCopyTrade` | `COPY_TRADE` |
-| Yield vault setup | `showYieldVault` | `__YIELD_VAULT_PANEL__` |
-| Yield vault tracker | `showYieldVaultTracker` | `__YIELD_VAULT_TRACKER__` |
-| Blog | `showBlog` | (blog button) |
-
-### Trigger v2 panel detail
-
-The Trigger v2 panel supports three order types selectable by tab:
-- **Limit (Single)** — buy/sell when price crosses a threshold
-- **OCO** — take-profit AND stop-loss at the same time (one cancels other)
-- **OTOCO** — entry order that auto-creates TP/SL brackets on fill
-
-Each uses JWT authentication with Jupiter's v2 API (`signMessage` to generate auth token) and supports USD-denominated price targets.
-
-### DCA panel detail (lines 11469–11544)
-
-Shows:
-- From/To token pickers (via `TokenPicker`)
-- Amount per cycle input
-- Frequency selector (1 min → 1 month)
-- Number of orders input
-- Live summary line: "Total X TOKEN spent over Y days (N× Z TOKEN)"
-
-On submit, calls Jupiter `/recurring/v1/createOrder` which sets up the on-chain DCA schedule.
-
-### DCA orders list (lines 11547–~11700)
-
-Shows each recurring order with:
-- Token pair (symbol ← resolved from mint → symbol map)
-- Amount + frequency
-- Animated progress bar (% of total deposited that has been executed)
-- Active / Closed status badge
-- Cancel & Withdraw button (calls Jupiter cancel endpoint)
-
----
-
-## 30. Prediction CLI Dashboard (Lines ~12800–13050)
-
-A terminal-themed panel styled to look like a Unix terminal — black background, green monospace text, macOS-style traffic light dots.
-
-### Sections
-
-**Filter/control bar:**
-- `min-edge` slider (0–40%) — filters markets below this edge
-- Sort selector (edge / volume / probability)
-- Category buttons (all / sports / crypto / politics / esports)
-- Refresh button
-
-**Odds table:** A scrollable table with columns:
-`# | OUTCOME | EVENT | YES% | NO% | EDGE | PAYOUT | VOL | CLOSES | BET`
-
-Each row shows computed edge (colour-coded: green ≥20%, orange ≥10%), best side highlighted in green, and a one-click BET button that opens the bet panel pre-filled.
-
-**CLI log terminal:** A scrolling stdout-style log showing each market as it's scanned: `> scanning [event] [outcome] → YES: X% | edge: Y%`
-
-### `scanPredOdds()` algorithm
-
-```
-1. Fetch up to 50 markets from prediction API
-2. For each market outcome:
-   - yesProb = outcome.yesAmount / totalAmount
-   - noProb = 1 - yesProb
-   - yesEdge = |yesProb - 0.5| * 100   (vs fair odds)
-   - noEdge  = |noProb  - 0.5| * 100
-   - bestSide = higher edge side
-   - bestEdge = max(yesEdge, noEdge)
-3. Filter: bestEdge >= minEdge
-4. Sort: by edge / volume / probability
-5. Stream results to predCLILog for terminal display
+chatfi/
+├── src/
+│   ├── chatFI.jsx                  # Main app — UI, intent routing, all API calls
+│   └── plugins/
+│       └── YieldRotatorPlugin.jsx  # APY monitor + migration plugin
+├── api/
+│   ├── jupiter.js                  # Jupiter API key proxy (server-side)
+│   ├── yield-vault.js              # Vault CRUD, cron watcher, Telegram bot
+│   └── solana-rpc.js               # Helius RPC proxy
+├── public/
+├── vercel.json                     # Cron schedules
+└── README.md
 ```
 
 ---
 
-## 31. Trade Journal & On-Chain History
+## Core Modules
 
-### Local journal
+### chatFI.jsx — Main Application
 
-Every swap executed through ChatFi is appended to `tradeJournal` state and persisted to `localStorage` (keyed by `chatfi-journal-${walletAddress}`). Each entry:
-```js
-{ type:"swap", from, to, amount, out, ts, sig, source:"chatfi" }
-```
+The single-file React application (~15,000 lines). Contains:
 
-Basket trades are stored as `{ type:"basket", summary, ts, source:"chatfi" }`.
+**Wallet Providers**
+- **Reown AppKit** — standard wallet connect flow for Phantom, Backpack, Solflare, and any WalletConnect-compatible wallet
+- **Privy** — social/email login with an auto-generated embedded Solana wallet; no seed phrase management for new users
 
-### On-chain fetch — `fetchOnChainTrades(walletAddress)` (referenced in SHOW_TRADE_JOURNAL)
+**AI Intent Router**
+- On each session start, fetches `https://developers.jup.ag/docs/llms-full.txt` and injects it as the Claude system prompt
+- Claude reads the user's message, identifies the intent (swap, limit order, earn, etc.), extracts parameters, and ChatFI executes the corresponding API call
+- The AI always has current Jupiter API structure in context — not stale training data
 
-Fetches recent transaction signatures from the Solana RPC (`getSignaturesForAddress`), then fetches transaction details for each, parses Jupiter swap instructions from the transaction logs, and returns a normalised trade list. On-chain entries are marked with `source:"onchain"` and displayed with a 🔗 indicator.
+**Plugin System**
+- Plugins register a `suggestionGroup` (quick-action buttons) and a React panel component
+- Currently active: `YieldRotatorPlugin`
+- New plugins drop into `src/plugins/` and are registered in two lines at the top of `chatFI.jsx`
 
-### Display
-
-The trade journal merges local + on-chain records, deduplicates by signature, sorts by timestamp, and shows up to 50 entries. Filters: today, this week, all time.
-
----
-
-## 32. Price Alerts & Volatility Monitors
-
-### Price alerts
-
-Stored in `priceAlerts` state + `localStorage`. Each alert:
-```js
-{ token, condition: "above"|"below", target: number, triggered: false, id: timestamp }
-```
-
-A polling interval (background) checks live prices via Jupiter Price v3 every N seconds. When a condition is met, the alert is marked triggered and a notification message is pushed to chat: `"🔔 Alert fired: SOL dropped below $140"`.
-
-### Volatility monitors
-
-Similar structure but trigger on percentage price movement within a time window rather than absolute price levels. Used for the `DETECT_VOLATILITY` action and the `Auto-order on SOL volatility spike` suggestion.
-
-Both alert types are loaded from localStorage when the wallet address changes (line 2969), so alerts persist across sessions and are scoped per wallet.
+**API Calls**
+All Jupiter calls go through `jupFetch()` — a thin wrapper that routes through `/api/jupiter` to keep the API key server-side.
 
 ---
 
-## 33. Plugin Architecture (Lines 14–19)
+### YieldRotatorPlugin.jsx — APY Optimizer
 
-```js
-// ── Plugins (add new feature files here) ─────────────────────────────────────
-// import ExamplePlugin, { suggestionGroup as exampleSuggestions } from "./plugins/ExamplePlugin";
-const PLUGIN_SUGGESTION_GROUPS = [
-  // exampleSuggestions,
-];
+A self-contained React plugin that monitors the user's Jupiter Earn positions and surfaces migration opportunities automatically.
+
+**How it works:**
+
+1. Polls `GET /lend/v1/earn/tokens` every **5 minutes** to get live APYs for all available pools
+2. Compares the user's current position APY against every pool (same-asset and cross-asset)
+3. When a better pool is found (above a configurable threshold), renders a **"Better APY Available"** banner directly on the Earn position card
+4. On "Migrate" tap, executes a sequential transaction chain:
+
+```
+Tx 1 — doEarnWithdraw()
+         POST /lend/v1/earn/withdraw
+         → VersionedTransaction → wallet.signTransaction()
+         → sendRawTransaction()
+
+Tx 2 — (Cross-asset only) Swap V2
+         POST /ultra/v1/order  →  sign  →  /ultra/v1/execute
+
+Tx 3 — doEarnDeposit()
+         POST /lend/v1/earn/deposit
+         → VersionedTransaction → wallet.signTransaction()
+         → sendRawTransaction()
+
+→ onMigrationDone() → fetchPortfolio() refresh
 ```
 
-The plugin system is designed for minimal integration. A plugin consists of:
-1. A default export React component (rendered in the chat message stream)
-2. A named export `suggestionGroup` (an object matching the `{ label, color, items[] }` shape)
+**Props interface:**
 
-To activate a plugin:
-1. Uncomment the import line
-2. Add the suggestion group to `PLUGIN_SUGGESTION_GROUPS`
-3. Add the action handler in the dispatcher's `if/else if` chain
+| Prop | Type | Required | Description |
+|---|---|---|---|
+| `walletFull` | `string \| null` | ✅ | Connected wallet public key |
+| `earnPositions` | `array` | ✅ | From `portfolioData.earnPositions` |
+| `jupFetch` | `function` | ✅ | Shared API helper (handles auth proxy) |
+| `getActiveProvider` | `function` | ✅ | Returns active wallet provider for signing |
+| `push` | `function` | ✅ | `push("ai", text)` — adds message to chat |
+| `T` | `object` | ✅ | Design token object |
+| `isMobile` | `boolean` | ✅ | Responsive layout flag |
+| `onMigrationDone` | `function` | ❌ | Called after successful migration |
 
-The plugin component can receive `jupFetch`, `walletFull`, `push` (add message to chat), and `T` (design tokens) as props.
-
----
-
-## 34. App Root & Auth Providers (Lines 14540–14591)
-
-The root component `App` wraps everything in `PrivyProvider`:
+**Integrating the plugin into chatFI.jsx:**
 
 ```jsx
-export default function App() {
-  return (
-    <PrivyProvider
-      appId={import.meta.env.VITE_PRIVY_APP_ID}
-      config={{
-        loginMethods: ["email", "google", "twitter", "discord", "wallet"],
-        appearance: { showWalletLoginFirst: false },
-        embeddedWallets: {
-          ethereum: { createOnLogin: "off" },
-          solana:   { createOnLogin: "all-users" },  // auto-create Solana wallet for everyone
-          noPromptOnSignature: true,
-          requireUserPasswordOnCreate: false,
-        },
-        solanaClusters: [
-          { name: "mainnet-beta", rpcUrl: VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com" }
-        ]
-      }}
-    >
-      <JupChatWithLanding />
-    </PrivyProvider>
-  );
+// 1. Import
+import YieldRotatorPlugin, { suggestionGroup as yieldRotatorSuggestions }
+  from "./plugins/YieldRotatorPlugin";
+
+const PLUGIN_SUGGESTION_GROUPS = [yieldRotatorSuggestions];
+
+// 2. Mount — after the Earn Positions section in the portfolio panel
+<YieldRotatorPlugin
+  walletFull={walletFull}
+  earnPositions={portfolioData?.earnPositions || []}
+  jupFetch={jupFetch}
+  getActiveProvider={getActiveProvider}
+  push={push}
+  T={T}
+  isMobile={isMobile}
+  onMigrationDone={() => fetchPortfolio()}
+/>
+```
+
+---
+
+### yield-vault.js — Server API & Cron
+
+A Vercel serverless function that handles all server-side vault logic. **No private keys are ever in the client.**
+
+**Routes:**
+
+| Method | Path / Query | Description |
+|---|---|---|
+| `GET` | `?wallet=xxx` | Fetch all active vaults for a wallet |
+| `GET` | `?wallet=xxx&checkTelegram=1` | Check if wallet has Telegram linked |
+| `POST` | (body) | Create or update a vault config |
+| `PATCH` | (body) | Update threshold, target token, or depositedAmount |
+| `DELETE` | `?id=xxx&wallet=xxx` | Cancel (soft-delete) a vault |
+| `GET` | `?cron=1` | Yield harvest watcher (runs every 5 min via cron) |
+| `GET` | `?cron=rotator` | APY rotation alert watcher (runs every 12 hrs) |
+| `POST` | `?action=link-telegram` | Generate a magic link token for Telegram linking |
+| `POST` | `?action=telegram-webhook` | Telegram bot webhook receiver |
+| `POST` | `?action=notify-vault-created` | Push Telegram notification on vault creation |
+| `POST` | `?action=notify-vault-cancelled` | Push Telegram notification on vault cancel |
+| `POST` | `?action=notify-rotation-complete` | Push Telegram notification after rotation |
+
+**Firestore collections:**
+
+| Collection | Purpose |
+|---|---|
+| `yield_vaults` | Vault configs — wallet, earnMint, thresholdUSD, targetToken, status |
+| `chatfi_users` | User profiles — wallet → telegramChatId mapping |
+| `telegram_link_tokens` | One-time magic tokens for Telegram linking (TTL: 10 min) |
+
+---
+
+## AI Grounding — llms-full.txt
+
+Every ChatFI session starts with:
+
+```javascript
+const docsRes = await fetch("https://developers.jup.ag/docs/llms-full.txt");
+const jupDocs = await docsRes.text();
+
+// Injected as Claude's system prompt
+systemPrompt = jupDocs + "\n\n" + CHATFI_INSTRUCTIONS;
+```
+
+This means:
+- Claude always has the current Jupiter API structure in context
+- Endpoint paths, parameter names, and response schemas are live — not from stale training data
+- When Jupiter ships a new endpoint or changes a parameter, ChatFI picks it up on the next session without a code deploy
+
+---
+
+## Privacy — No User Data Collected
+
+**ChatFI does not collect, store, or transmit any personal data.**
+
+- No names, emails, IP addresses, or device identifiers are ever recorded
+- No trading history, balances, or chat messages are logged server-side
+- Your wallet address is never stored by ChatFI — it exists only in your browser session
+- Portfolio data is fetched live from the Solana blockchain and Jupiter APIs on every request — nothing is cached or persisted
+
+**Everything is on-chain by default.** Swaps, limit orders, DCA plans, Earn deposits, prediction market bets — every financial action is a Solana transaction signed in your own wallet and settled on-chain. ChatFI is purely the interface.
+
+**Firebase is used only when strictly necessary** — specifically for two opt-in features that have no on-chain alternative:
+
+| Feature | What Firebase stores | Why on-chain is not possible |
+|---|---|---|
+| **Yield Vault** | Vault config (earnMint, thresholdUSD, targetToken) | A cron job needs to check your yield threshold server-side between sessions |
+| **Telegram Linking** | Wallet address -> Telegram chat ID | Telegram notifications require a server-side record to route alerts to the right user |
+
+Both are entirely opt-in. If you never set up a Yield Vault or link Telegram, Firebase is never touched. You can cancel a vault at any time and all associated records are permanently removed.
+
+---
+
+## Authentication & Security
+
+- **Jupiter API key** is stored as a Vercel environment variable and injected server-side via the `/api/jupiter` proxy. It is never present in the client bundle.
+- **Wallet signing** always happens in the user's wallet extension or Privy embedded wallet. ChatFI never holds private keys.
+- **Delegate keypair** (`DELEGATE_PRIVATE_KEY`) exists only on the server and is used exclusively for automated yield harvests where the user has pre-authorised the action.
+- **Telegram linking** uses one-time magic tokens (10-minute TTL) stored in Firestore — no wallet signatures or tokens are sent over Telegram.
+
+---
+
+## Environment Variables
+
+```env
+# Jupiter
+JUPITER_API_KEY=your_developer_platform_key
+
+# Solana RPC
+HELIUS_RPC_URL=https://mainnet.helius-rpc.com/?api-key=xxx
+SOLANA_RPC=https://api.mainnet-beta.solana.com   # fallback
+
+# Firebase Admin (for Firestore)
+FIREBASE_ADMIN_KEY={"type":"service_account",...}  # full JSON, stringified
+
+# Delegate wallet (server-side only — for automated yield harvests)
+DELEGATE_PRIVATE_KEY=[12,34,56,...]  # Uint8Array as JSON array
+
+# Telegram bot
+TELEGRAM_BOT_TOKEN=your_bot_token
+
+# App
+NEXT_PUBLIC_APP_URL=https://chatfi.pro
+
+# Privy
+VITE_PRIVY_APP_ID=your_privy_app_id
+
+# Reown AppKit
+VITE_REOWN_PROJECT_ID=your_reown_project_id
+```
+
+---
+
+## Plugin System
+
+ChatFI has a lightweight plugin architecture. Any feature that doesn't belong in the core chat flow lives in its own file under `src/plugins/`.
+
+**To add a new plugin:**
+
+```jsx
+// src/plugins/MyPlugin.jsx
+
+// Required: suggestion chips shown in the chat input area
+export const suggestionGroup = {
+  label: "My Feature",
+  color: "#hexcolor",
+  items: ["Do thing A", "Do thing B"],
+};
+
+// Required: the rendered panel component
+export default function MyPlugin({ walletFull, jupFetch, push, T, isMobile }) {
+  return <div>...</div>;
 }
 ```
 
-**Reown AppKit** is initialised at module level (line 587) — once, when the module loads:
-```js
-createAppKit({
-  adapters: [_solanaAdapter],
-  networks: [solanaMainnet],
-  projectId: REOWN_PROJECT_ID,
-  metadata: { name: "ChatFi", ... },
-  features: { analytics: false },
-});
-```
+```jsx
+// chatFI.jsx — two lines to activate
+import MyPlugin, { suggestionGroup as mySuggestions } from "./plugins/MyPlugin";
+const PLUGIN_SUGGESTION_GROUPS = [yieldRotatorSuggestions, mySuggestions];
 
-`JupChatWithLanding` renders either the landing page or the chat interface based on whether the user has clicked "Launch App".
-
----
-
-## 35. Server-Side API Routes (Referenced Throughout)
-
-### `/api/claude` (POST)
-Proxies to Anthropic's Claude API. Injects API key from server env. Accepts `{ model, max_tokens, system, messages }`. Returns Claude's raw response.
-
-### `/api/jupiter` (POST)
-Proxies to `api.jup.ag` or `lite-api.jup.ag`. Injects `x-api-key`. Accepts `{ url, method, body, apiKey }`. For Lend and Studio endpoints, `apiKey` is passed in the `x-api-key` header. Returns parsed JSON.
-
-### `/api/send` (POST)
-Handles invite-link send operations. Two modes:
-- Default: calls Jupiter `/send/v1/craft-send`, derives invite keypair server-side, returns unsigned tx
-- `action: "clawback"`: calls `/send/v1/craft-clawback`, partially signs with invite keypair, returns partially-signed tx
-
-### `/api/lock` (POST)
-Fallback proxy for Jupiter Lock API. Action `"accounts"` fetches all vesting accounts for a wallet.
-
----
-
-## 36. State Management Map
-
-All state lives in the main `JupChat` component via `useState`. Key state variables:
-
-```
-msgs[]            — Chat message array { role, content, meta }
-typing            — Boolean: AI is generating
-input             — Chat input string
-walletFull        — Connected wallet address (string or null)
-privyMode         — Boolean: using Privy vs Reown
-prices{}          — Live USD prices by token symbol
-portfolio{}       — Raw wallet balances (not portfolio panel data)
-portfolioData     — Full portfolio data object (from fetchPortfolioData)
-portfolioLoading  — Boolean
-priceAlerts[]     — Active price alert configs
-volMonitors[]     — Active volatility monitor configs
-tradeJournal[]    — Local trade history
-swapCfg{}         — Current swap panel config {from, to, amount, mints}
-swapQuote         — Current swap quote result
-trigCfg{}         — Legacy trigger order config
-trigV2Cfg{}       — Trigger v2 order config (OCO/OTOCO/single)
-trigV2Orders[]    — Fetched trigger orders list
-recurringCfg{}    — DCA setup config
-recurringOrders[] — Fetched DCA orders list
-earnCfg{}         — Earn deposit config
-earnVaults[]      — Available earn vaults
-earnWithdraw{}    — Withdraw config
-borrowCfg{}       — Borrow vault config
-multiplyFilter    — Asset filter for multiply panel
-perpsPosition{}   — Perps trade config
-perpPositions[]   — Open perps list
-perpLoading       — Boolean
-sendCfg{}         — Send token/amount config
-sendRecipient     — Direct send recipient address
-sendStatus        — "idle" | "signing" | "done" | "error"
-sendLink          — Generated invite link URL
-lockCfg{}         — Token lock vesting config
-lockPositions[]   — Fetched vesting accounts
-studioCfg{}       — Token creation form data
-studioImage       — Uploaded token image { file, type, preview }
-studioStatus      — "idle" | "signing" | "done" | "error"
-studioResult      — Created token mint address
-studioFees        — Fetched creator fees data
-predMarkets[]     — Fetched prediction markets
-betMarket         — Selected market for betting
-betSide           — "yes" | "no"
-betAmount         — String USD amount
-betStatus         — Bet transaction status
-predCLIMarkets[]  — Markets for CLI scanner
-predCLILog[]      — CLI terminal output lines
-copyTradeData     — Copy trade analysis result
-routeData         — Swap route breakdown result
-tokenCardData     — Rich token info for card display
-portfolioElements[]— Portfolio API elements
-earnPositions[]   — Earn position list
-lockPositions[]   — Lock vesting list
-yieldVaultCfg{}   — Yield vault automation config
-showXxx           — Boolean visibility flags for each panel (30+ flags)
-```
-
-`useRef` is used for values that shouldn't trigger re-renders:
-```
-histRef          — Full conversation history (avoids re-render on each turn)
-tokenCacheRef    — Symbol → mint address map
-tokenDecimalsRef — Symbol → decimals map
-connectedProviderRef — Active signing provider object
+// Mount the panel in the portfolio column:
+<MyPlugin walletFull={walletFull} jupFetch={jupFetch} push={push} T={T} isMobile={isMobile} />
 ```
 
 ---
 
-## 37. Data Flow Diagram
+## Yield Vault — Full Flow
+
+The Yield Vault lets users set a USD threshold. When their Jupiter Earn yield accumulates past that amount, ChatFI notifies them via Telegram and lets them harvest in one tap.
 
 ```
-User types message
-        │
-        ▼
-Pre-AI shortcuts check
-(clear/disconnect/yield vault)
-        │
-        ▼ (not a shortcut)
-Build system prompt:
-  SYSTEM_PROMPT + jupDocs + walletContext
-        │
-        ▼
-POST /api/claude
-  model: claude-sonnet-4-20250514
-  messages: last 40 turns
-        │
-        ▼
-Parse JSON response: { text, action, actionData }
-        │
-        ▼
-push("ai", text)  → renders in chat
-        │
-        ▼
-Action dispatcher: switch on action string
-        │
-    ┌───┴───────────────────────────────────────┐
-    ▼                                           ▼
-Token resolution                        CHAINED_ACTIONS loop
-(resolveToken / fetchTokenInfo)                │
-    │                                          ▼
-    ▼                                   step 1 → execute
-Jupiter API call                        step 2 → execute
-(jupFetch → /api/jupiter → jup.ag)      ...
-    │
-    ▼
-Panel state update (showSwap = true, swapCfg = {...})
-    │
-    ▼
-React re-render → panel appears in chat
-    │
-    ▼
-User interacts (fills amount, clicks Swap)
-    │
-    ▼
-Transaction execution:
-  1. Get quote / build tx
-  2. getActiveProvider() → signTransaction(tx)
-  3. connection.sendRawTransaction()
-  4. connection.confirmTransaction()
-  5. push("ai", receipt)
+User configures vault in ChatFI chat
+          ↓
+POST /api/yield-vault
+  Stores { wallet, earnMint, thresholdUSD, targetToken } in Firestore
+          ↓
+Cron: GET /api/yield-vault?cron=1  (every 5 min)
+  fetchEarnPositionValue() — reads live position from /lend/v1/earn/positions
+  fetchUSDPrice()          — reads price from /price/v3
+  Compares (currentAmount - depositedAmount) × price vs thresholdUSD
+          ↓
+  If position gone  → auto-cancel vault (PATCH status=cancelled)
+  If reduced        → sync depositedAmount down (PATCH depositedAmount)
+  If threshold hit  → notifyYieldReady() → Telegram bot pings user
+          ↓
+User taps "Harvest Now" link in Telegram → lands on ChatFI
+  doEarnWithdraw()  → /lend/v1/earn/withdraw → VersionedTransaction → sign
+          ↓
+  (if targetToken ≠ earnToken)
+  Swap V2: /swap/v2/order → /swap/v2/execute
+          ↓
+  Proceeds land in user's wallet as targetToken
+          ↓
+POST /api/yield-vault (update depositedAmount + reset pendingHarvest)
 ```
 
 ---
 
-## 38. Feature Reference — Complete List
+## Yield Rotator — Full Flow
 
-### Trading
-- Instant token swaps (any Solana token, best route across 20+ DEXs via Jupiter v2)
-- Basket swaps (buy/sell multiple tokens in one natural-language command)
-- Swap All Wallet (sell all non-stablecoin holdings to USDC/SOL at once)
-- Limit orders v2 (single / OCO bracket / OTOCO entry with auto-bracket)
-- DCA / recurring orders (minute to monthly schedule, any token pair)
-- Perpetual futures (SOL, BTC, ETH — up to 100x leverage, long/short)
-- Swap route viewer (DEX path, AMMs used, price impact per hop)
-- Copy trading / wallet mirroring
+The Yield Rotator runs inside the browser (no server needed) and automatically finds better APY pools for existing Earn positions.
 
-### Earn & Lend
-- Jupiter Earn (deposit USDC/SOL/JLP → live APY, jlToken receipt)
-- Borrow (deposit collateral, borrow against it, LTV display) *(Coming Soon)*
-- Multiply / leveraged yield (flashloan loop for amplified staking returns) *(Coming Soon)*
-- View & manage all earn, borrow, multiply, lend positions *(Borrow & Multiply Coming Soon)*
-- JupSOL (liquid staking)
-- Yield Vault (auto-compound yield above threshold into any target token)
+```
+YieldRotatorPlugin mounts — polls every 5 min
+          ↓
+GET /lend/v1/earn/tokens  → all pools + live APYs
+          ↓
+detectOpportunities()
+  For each user earnPosition:
+    Find best pool across ALL assets (same-asset and cross-asset)
+    apyGap = bestPool.apy - currentPosition.apy
+    If apyGap > threshold → push to opportunities[]
+          ↓
+Renders "Better APY Available" banner on the position card
+  Shows: currentToken → bestToken, APY diff, position value
+          ↓
+User taps "Migrate"
+          ↓
+doMigrate():
 
-### Portfolio & Research
-- Full portfolio (spot balances, DeFi positions, earn, perps *(Coming Soon)*, LP, locks, predictions)
-- Token deep dive (price, 24h change, market cap, holders, organic score, audit flags)
-- Token categories (top organic / top traded / top trending, 5m–24h)
-- New token listings
-- Verified tokens list
-- LST tokens list
-- xStocks / RWA tokenized stocks (SPY, QQQ, AAPL, NVDA, and 30+ others)
-- Trade journal (local + on-chain history, rough PnL)
-- Price alerts (in-chat notification when threshold crossed)
-- Volatility monitors
-- Token verification eligibility check
+  Tx 1 — Withdraw
+    POST /lend/v1/earn/withdraw
+    → deserialize VersionedTransaction
+    → wallet.signTransaction()
+    → connection.sendRawTransaction()
+    → confirmTransaction()
 
-### Token Tools
-- Create token via Jupiter Studio (Dynamic Bonding Curves, 3 presets)
-- Claim creator trading fees from DBC pools
-- Lock tokens with cliff + linear vesting
-- View and claim vested tokens
+  Tx 2 — Swap (cross-asset only)
+    POST /ultra/v1/order  { inputMint, outputMint, amount }
+    → deserialize + signTransaction()
+    → POST /ultra/v1/execute
 
-### Send & Social
-- Send tokens via invite link (recipient needs no wallet)
-- Claw back unclaimed sends
-- View send history
-
-### Prediction Markets
-- Browse live sports markets (EPL, Champions League, NBA, crypto, politics)
-- Place YES/NO bets (USDC or JupUSD)
-- Basket predictions (multiple markets at once)
-- Claim winnings
-- Prediction CLI scanner (edge analysis + auto-bet)
-- Yield-Gated Prediction Vault (earn + predict simultaneously)
+  Tx 3 — Deposit
+    POST /lend/v1/earn/deposit
+    → deserialize VersionedTransaction
+    → wallet.signTransaction()
+    → connection.sendRawTransaction()
+    → confirmTransaction()
+          ↓
+onMigrationDone() → fetchPortfolio() + fetchEarnUserPositions()
+Success card shown in chat with tx signature link
+```
 
 ---
 
-## 39. Environment Variables
+## Telegram Integration
 
-```env
-VITE_SOLANA_RPC        — Custom Solana RPC endpoint (mainnet-beta)
-VITE_PRIVY_APP_ID      — Privy application ID (from privy.io)
-REOWN_PROJECT_ID       — WalletConnect v2 project ID (from cloud.reown.com)
+**Setup:**
 
-# Server-side (not exposed to client)
-ANTHROPIC_API_KEY      — Claude API key
-JUPITER_API_KEY        — Jupiter API key (for /api/jupiter proxy)
+1. Create a bot via [@BotFather](https://t.me/BotFather) → get token → add to Vercel as `TELEGRAM_BOT_TOKEN`
+2. Set the webhook:
+   ```
+   https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://chatfi.pro/api/yield-vault?action=telegram-webhook
+   ```
+
+**Linking a wallet to Telegram:**
+
+1. User clicks "Connect Telegram" in ChatFI
+2. `POST /api/yield-vault?action=link-telegram` generates a one-time token (10-min TTL) stored in Firestore
+3. User opens the bot link with the token as a start parameter
+4. Bot webhook handler validates the token, writes `telegramChatId` → `wallet` in `chatfi_users`
+5. Token is marked used. All future yield notifications go to that chat ID.
+
+**Cron schedules (vercel.json):**
+
+```json
+{
+  "crons": [
+    { "path": "/api/yield-vault?cron=1",       "schedule": "*/5 * * * *" },
+    { "path": "/api/yield-vault?cron=rotator", "schedule": "0 */12 * * *" }
+  ]
+}
 ```
-
-The Reown project ID (`21a9551a7eeedcd3c442d912b6ea336f`) is currently hardcoded at line 585 — it should be moved to an environment variable before production deployment.
 
 ---
 
-## How to Extend ChatFi
+## Known API Limitations & Workarounds
 
-### Add a new AI action
+### 1. Yield Vault: No Delegated Execution
 
-1. Add the action name and `actionData` shape to `SYSTEM_PROMPT` in the full feature list and the intent mapping section
-2. Add an `else if (action === "YOUR_ACTION")` handler in the dispatcher (~line 8460)
-3. If it needs a UI panel, add a `showYourPanel` state flag, a `setShowYourPanel` state setter, and render the panel conditionally in the message feed
-4. Add it to the `CHAINED_ACTIONS` step handler block (~line 9700)
+**The gap:** The Lend API requires the user to be present and sign every transaction. There is no way to pre-authorise a withdrawal within defined parameters (e.g. "only withdraw yield, never touch principal").
 
-### Add a new token to the hardcoded list
+**Current workaround:** Telegram bot notifies the user when the threshold is hit. The user returns to the app and signs manually. Automated yield harvesting is simulated on the server side only when a delegate keypair is configured.
 
-Add to `TOKEN_MINTS` (line 178) and `TOKEN_DECIMALS` (line 201):
-```js
-TOKEN_MINTS.MYTOKEN = "MintAddressBase58Here";
-TOKEN_DECIMALS.MYTOKEN = 6;
-```
-
-### Add a new Jupiter API endpoint
-
-1. Define the URL constant at the top of the file (line 144 area)
-2. Call it via `jupFetch(YOUR_ENDPOINT, options)` — the proxy handles authentication
-
-### Add a plugin
-
-Create `./plugins/MyPlugin.jsx` exporting:
-```js
-export default function MyPlugin({ jupFetch, walletFull, push, T }) { ... }
-export const suggestionGroup = {
-  label: "My Plugin",
-  color: "#38bdf8",
-  items: ["Do something", "Do something else"],
-};
-```
-Then uncomment the import and add `suggestionGroup` to `PLUGIN_SUGGESTION_GROUPS` in the main file.
-
-### Deploy
-
-The app is designed for **Vercel deployment**:
-- `chatFI.jsx` is the Vite React frontend entry point
-- `/api/*.js` files are Vercel serverless functions
-- Set all env vars in the Vercel project settings
-- No database required — all persistence is localStorage/sessionStorage
+**Ideal solution:** A delegated execution model — a signed intent or pre-authorised instruction that a keeper can submit within defined parameters (max slippage, time window, vault target). Same mental model as Trigger V2 limit orders, applied to Lend.
 
 ---
 
-*README generated from full source analysis of `chatFI.jsx` (14,591 lines)*
-*ChatFi — AI-powered DeFi terminal · Built on Jupiter · Powered by Solana*
+### 2. Earn Position Migration: No Atomic Path
+
+**The gap:** There is no single-call migration between Earn pools. Withdraw from Pool A and deposit into Pool B are two separate transactions. If the user closes the app between steps, funds sit idle in their wallet.
+
+**Current workaround:** `YieldRotatorPlugin` chains the steps sequentially with step-by-step progress feedback in the UI. Two signatures are still required.
+
+**Ideal solution:** A `/lend/v1/earn/migrate` endpoint (or composable instruction) that batches withdraw + optional swap + deposit into one atomic transaction. All steps succeed or all revert.
+
+---
+
+## Product Lines — Full Breakdown
+
+This is a complete breakdown of every product line built inside `chatFI.jsx` — what each one does, what APIs it calls, and exactly what the user can say to trigger it.
+
+---
+
+### 1. Token Swaps (Swap V2)
+
+The core of ChatFI. Any two Solana tokens can be swapped through Jupiter's meta-aggregator, which automatically finds the best route across 20+ DEXs.
+
+**What users can say:**
+- "Swap 5 SOL to USDC"
+- "Swap all my JUP to BONK"
+- "Exchange $200 worth of SOL for ETH"
+- "Show route for SOL to USDC" — displays exact DEX hops, price impact, and fees before committing
+
+**How it works:**
+
+```
+POST /swap/v2/order   → builds transaction + previews output amount + fees
+User reviews the panel (sent, received, slippage, route)
+POST /swap/v2/execute → submits signed VersionedTransaction to Solana
+```
+
+The order/execute split is intentional — users always see a preview card before anything hits the chain. After execution, a receipt card is shown with amounts, fees, a copyable transaction signature, and a Solscan link.
+
+**Token resolution:** ChatFI searches Jupiter Tokens V2 + V1 in parallel to resolve any ticker or contract address — including meme coins that aren't in the default list.
+
+---
+
+### 2. Basket Swaps
+
+Multiple swaps bundled into a single chat command. ChatFI prepares all transactions in parallel, presents them together, then executes each on-chain sequentially.
+
+**What users can say:**
+- "Buy $100 each of SOL, JUP, BONK, and WIF"
+- "Swap all my JUP and FARTCOIN into USDC"
+- "Buy half of my USDC worth of SOL and a quarter worth of BONK"
+- "Dump my bags" — reads full wallet balances and swaps everything to USDC
+
+**Supports:** exact USD amounts, exact token amounts, wallet-percentage amounts ("50% of my SOL"), "all", "max", "half" — and mixes of all of these in one message.
+
+Each swap in the basket gets individual slippage protection. If one trade fails the rest continue — failures are reported individually in chat.
+
+---
+
+### 3. Limit Orders & Trigger V2
+
+Off-chain trigger orders that execute automatically when a token hits a target price. Built on Jupiter Trigger V2 — supports USD price targets, vault-based orders, OCO, and OTOCO brackets.
+
+**What users can say:**
+- "Buy SOL if it drops below $140"
+- "Sell 5 JUP when it hits $2"
+- "OCO on SOL: take profit at $200, stop loss at $120"
+- "OTOCO: buy SOL at $150, then auto-set TP $200 SL $130"
+- "Show my open limit orders" / "Cancel all my trigger orders"
+
+**API flow:**
+```
+POST /trigger/v2/orders/price  → creates the order (stored off-chain in Jupiter's system)
+GET  /trigger/v2/orders        → fetches user's active orders for the management panel
+DELETE /trigger/v2/orders/{id} → cancels a specific order
+```
+
+Minimum order size is $10. Orders are stored in Jupiter's vault and monitored by Jupiter's keeper network — no server-side polling needed from ChatFI.
+
+---
+
+### 4. DCA / Recurring Orders
+
+Dollar-cost averaging and scheduled buys powered by Jupiter Recurring V1. Orders run automatically at the user's chosen interval until cancelled.
+
+**What users can say:**
+- "DCA $10 USDC into SOL every day for 30 days"
+- "Buy $50 of JUP every week"
+- "Schedule a monthly buy of $200 BONK"
+- "Show my recurring orders" / "Cancel my DCA"
+
+**API flow:**
+```
+POST /recurring/v1/createOrder  → schedules the series
+GET  /recurring/v1/getRecurringOrders → lists active series
+POST /recurring/v1/cancelOrder  → stops the series
+```
+
+Intervals supported: minutely, hourly, daily, weekly, monthly. Each execution is an on-chain transaction signed by Jupiter's keeper — the user only signs once to create the series.
+
+---
+
+### 5. Perpetual Futures (Perps)
+
+Leveraged long and short positions on Solana, BTC, ETH, and other supported assets via Jupiter Perps.
+
+**What users can say:**
+- "Long SOL 10x with $200"
+- "Short BTC with $500 at 5x leverage"
+- "Show my perps positions"
+- "Close my SOL long"
+- "Increase my SOL position by $100"
+
+**API flow:**
+```
+GET  /perps/v1/markets          → available markets + funding rates
+GET  /perps/v1/positions        → user's open positions with PnL + liquidation price
+POST /perps/v1/open             → open a new position
+POST /perps/v1/close            → close or reduce a position
+```
+
+The Perps panel shows real-time unrealised PnL, current leverage, liquidation price, and position size. Users can adjust or close positions directly from the panel without re-typing a command.
+
+---
+
+### 6. Jupiter Earn (Yield Deposits)
+
+Deposit tokens into Jupiter's yield-bearing Earn pools. Assets are deployed into curated lending protocols automatically. Users receive jlTokens representing their share of the pool.
+
+**What users can say:**
+- "Earn yield on 100 USDC"
+- "Deposit 5 SOL into the best earn pool"
+- "Show earn vaults" — lists all available pools with live APY
+- "Show my earn positions" / "Withdraw my USDC"
+- "What's the highest APY vault right now?"
+
+**API flow:**
+```
+GET  /lend/v1/earn/tokens              → all available pools + live APY
+GET  /lend/v1/earn/positions?users=... → user's active deposits
+POST /lend/v1/earn/deposit             → deposit transaction (VersionedTransaction)
+POST /lend/v1/earn/withdraw            → withdraw transaction (VersionedTransaction)
+```
+
+APYs are variable and update continuously based on protocol demand. No lock-up periods — withdrawals settle on-chain immediately.
+
+---
+
+### 7. Borrow (Lend V1)
+
+Deposit collateral and borrow assets against it without selling. Supports up to 95% LTV depending on the asset.
+
+**What users can say:**
+- "Borrow 200 USDC using 2 SOL as collateral"
+- "Show my borrow positions"
+- "What's my LTV health?"
+- "Repay my USDC loan"
+
+The Borrow panel shows LTV ratio, liquidation price, current interest rate, and health factor in real time. ChatFI warns users when LTV is approaching unsafe levels.
+
+---
+
+### 8. Multiply (Leveraged Yield Loops)
+
+Loop a yield position using flashloans to amplify returns — e.g. deposit JupSOL, borrow SOL, convert to more JupSOL, repeat. Produces 2x–5x leveraged staking yield.
+
+**What users can say:**
+- "Multiply my JupSOL position 3x"
+- "Show multiply vaults"
+- "Set up a 2x leverage loop on SOL"
+
+ChatFI explains the mechanics before the user confirms, shows the effective APY at the chosen multiplier, and handles the loop construction via the Lend SDK.
+
+---
+
+### 9. Prediction Markets
+
+Decentralised betting on sports results, crypto price targets, and other real-world events. Payouts come from the losing side's pool — no bookmaker spread.
+
+**What users can say:**
+- "Show EPL predictions"
+- "Who's playing in the Champions League final?"
+- "Bet $10 on Arsenal to win"
+- "Show crypto predictions" — price-based on-chain markets
+- "Claim my winnings" / "Show my open bets"
+- "Scan prediction odds for value bets" — AI scans all live markets and flags edges
+
+**API flow:**
+```
+GET  /prediction/v1/markets   → all live markets with odds + pool sizes
+GET  /prediction/v1/positions → user's active bets
+POST /prediction/v1/bet       → place a bet (USDC transaction)
+POST /prediction/v1/claim     → claim winnings after resolution
+```
+
+**Prediction Vault (advanced):** Users can deposit USDC into a yield-gated vault that earns Lend yield while idle and auto-bets prediction markets when the AI detects edge. Winnings compound back into the vault. Capital is always working.
+
+---
+
+### 10. Token Tools — Jupiter Studio (DBC)
+
+Create and manage tokens using Jupiter's Dynamic Bonding Curve engine. Full token launch flow from ChatFI.
+
+**What users can say:**
+- "Create a token on Jupiter Studio"
+- "Launch a new token called MYTOKEN"
+- "Claim my creator trading fees"
+- "Check fees from my DBC pool"
+
+**API flow:**
+```
+POST /studio/v1/create  → launches a DBC token with bonding curve
+GET  /studio/v1/fees    → creator fee balances across all pools
+POST /studio/v1/claim   → claims accrued trading fees
+```
+
+---
+
+### 11. Token Lock (Vesting)
+
+Lock SPL tokens with configurable cliff and linear vesting schedules. Used for team allocations, investor locks, and personal commitment mechanisms.
+
+**What users can say:**
+- "Lock 1000 JUP for 1 year"
+- "Lock 500 USDC for 10 minutes" (converted to days: 0.00694)
+- "Show my locked positions"
+- "Claim my vested tokens"
+
+**API flow:**
+```
+POST /lock/v1/lock    → creates a vesting schedule (cliff + linear release)
+GET  /lock/v1/locks   → user's active locks with vesting progress
+POST /lock/v1/claim   → claims unlocked tokens
+```
+
+Time is always converted to days internally: minutes ÷ 1440, hours ÷ 24.
+
+---
+
+### 12. Send (Invite Links)
+
+Send tokens to anyone via an invite link — the recipient does not need a Solana wallet to claim. ChatFI uses Jupiter Send's keypair-based invite system.
+
+**What users can say:**
+- "Send 1 SOL via invite link"
+- "Send 100 USDC to my friend"
+- "Claw back my unclaimed invite"
+- "Show pending invites" / "Show send history"
+
+**API flow:**
+```
+POST /send/v1/craft-send      → builds the send transaction + generates invite keypair
+POST /send/v1/craft-clawback  → reclaims tokens from an unclaimed invite
+GET  /send/v1/pending-invites → lists all unclaimed outbound sends
+GET  /send/v1/invite-history  → full send history
+```
+
+The generated invite link can be shared via any messaging platform. The recipient taps it, connects or creates a wallet, and the tokens are transferred.
+
+---
+
+### 13. Copy Trading / Wallet Mirroring
+
+Paste any Solana wallet address to analyse their recent trades and replicate them instantly.
+
+**What users can say:**
+- "Copy trades from \`<wallet address>\`"
+- "Mirror wallet \`<address>\`"
+- "What is this wallet buying?"
+- "Show top wallets leaderboard" — live ranking of most profitable traders by 7-day PnL
+
+**What the analyser returns:**
+- Trading style profile (scalper / swing / position trader)
+- Top tokens traded by volume
+- Sentiment (accumulating vs distributing)
+- Average trade size and frequency
+- A list of recent swaps with one-tap "Mirror this trade" buttons
+
+---
+
+### 14. Portfolio & Research
+
+Unified view of everything in the connected wallet — spot balances, DeFi positions, open orders, earn deposits, perps, and LP positions.
+
+**What users can say:**
+- "Show my portfolio" / "What's in my wallet?"
+- "What's my total portfolio value?"
+- "Show my open orders" / "Show my DCA orders"
+- "My trade journal" — chronological swap history with estimated PnL
+- "Alert me when SOL hits $200" — in-session price monitor, fires a chat notification
+
+**Data sources used in parallel:**
+```
+GET /ultra/v1/holdings          → spot token balances
+GET /portfolio/v1/positions     → full DeFi position snapshot
+GET /lend/v1/earn/positions     → earn deposits
+GET /perps/v1/positions         → leveraged positions
+GET /trigger/v2/orders          → open limit orders
+GET /recurring/v1/orders        → active DCA series
+GET /prediction/v1/positions    → open bets
+```
+
+---
+
+### 15. Token Research & Discovery
+
+Deep-dive on any Solana token — price, metadata, safety, organic volume, holders, and liquidity — plus market-wide discovery tools.
+
+**What users can say:**
+- "Deep dive BONK" — full metadata, organic score, safety flags, liquidity depth
+- "What's the SOL price?" — live price with 24h delta from Price V3
+- "Top trending tokens" — toptrending / toptraded / toporganicscore across 5m, 1h, 6h, 24h
+- "New token listings" — tokens that just launched their first liquidity pool
+- "Show verified tokens" / "Show LST tokens"
+- "Top xStocks" — tokenized real-world stocks (RWA) tradeable on Solana 24/7
+- "Check if my token is eligible for Jupiter verification"
+
+**APIs used:**
+```
+GET /price/v3?ids=...                        → live price + 24h change (single call)
+GET /tokens/v2/search?query=...              → token search
+GET /tokens/v2/{toptrending|toptraded}/...   → market category rankings
+GET /tokens/v2/recent                        → new listings
+GET /tokens/v2/tag?query=verified|lst        → filtered token lists
+GET /tokens/v2/verify/express/check-eligibility → verification eligibility
+```
+
+Price V3 includes the 24h change baked into the same response — no second call needed to say "SOL is up 3.2% today."
+
+---
+
+### 16. Power Commands (AI Analysis Shortcuts)
+
+Pre-built analytical workflows triggered by specific phrases. These chain multiple API calls in parallel and synthesise the results into a single AI-written report.
+
+| Command | What it does |
+|---|---|
+| `Smart entry <TOKEN>` | Live price + trending rank + swap quote analysis. Answers: is now a good time to buy? |
+| `Exit my <TOKEN>` | Momentum check + current balance + best swap route. Answers: should I sell now, and how? |
+| `Deep dive <TOKEN>` | Full metadata, organic score, safety flags, liquidity depth, holder stats |
+| `Morning briefing` / `Portfolio pulse` | Parallel snapshot of balances, earn positions, and open orders |
+| `Scan prediction odds` | AI scans all live prediction markets and flags statistical edges |
+| `Detect volatility on <TOKEN>` | Monitors price movement and triggers an alert or action on a volatility spike |
+
+---
+
+### 17. Chained Actions
+
+Any combination of the above product lines can be chained into a single message. ChatFI executes them sequentially, with each step opening automatically after the previous one completes.
+
+**Examples:**
+- "Buy $50 each of SOL, JUP, BONK — then set a limit sell on SOL at $200" → Basket Swap → Trigger V2
+- "Swap SOL to USDC then send it via invite link" → Swap → Send
+- "Earn yield on my USDC then lock the jlTokens for 6 months" → Earn → Lock
+- "Lock 1000 JUP for 10 minutes then swap the unlocked tokens to SOL" → Lock → Swap (auto-opens after vest)
+- "Buy SOL, wait 4 seconds, then sell it back to USDC" → Basket Swap → delayed Basket Swap
+- "Place bets on these 3 matches then show my portfolio" → Basket Prediction → Portfolio
+
+All 30+ actions are valid chain steps. Steps are fully parameterised from the single original message — the user never needs to re-type details between steps.
+
+---
+
+
+## chatFI.jsx — File Map (Line by Line)
+
+`chatFI.jsx` is ~15,000 lines. This map tells you exactly what lives where so you can jump straight to any feature.
+
+```
+LINE RANGE       WHAT'S THERE
+---------------------------------------------------------------------------
+1    – 22        Imports: React hooks, Solana web3.js, SPL token, nacl,
+                 Reown AppKit, Privy, YieldRotatorPlugin registration
+
+24   – 145       SVG icon components (inline — no icon library dependency)
+                 SvgChat, SvgWallet, SvgZap, SvgBarChart, SvgLink,
+                 SvgTwitterX, SvgDiscord, SvgTelegram, SvgGithub,
+                 SvgRocket, SvgWarning, SvgSearch, etc.
+
+147  – 178       Jupiter API endpoint constants — every base URL used
+                 JUP_BASE, JUP_SWAP_ORDER, JUP_TRIGGER_V2, JUP_EARN_API,
+                 JUP_PERPS_API, JUP_STUDIO_API, JUP_LOCK_API, etc.
+
+180  – 233       Token constants
+                 TOKEN_MINTS  — 20 popular tokens with mint addresses
+                 TOKEN_DECIMALS — decimal map per token
+                 TOKEN_LOGO_URLS — CDN logo URLs (avoids CORS issues)
+                 PRED_CATEGORIES — prediction market categories
+                 MULTIPLY_VAULTS — 7 leveraged yield loop configs
+
+252  – 532       AI system prompt (CLAUDE_PROMPT constant)
+                 Full intent routing instructions for Claude:
+                 all supported actions, chaining rules, slang handling,
+                 full feature list, power command triggers
+
+534  – 561       SUGGESTION_GROUPS — chat quick-action chip definitions
+                 Power / Market / Trade / Earn / Tools + plugin groups
+
+563  – 590       Design token object (T) — all colours, fonts, spacing
+                 Mobile detection (isMobile)
+
+592  – 607       Reown AppKit initialisation (wallet connect setup)
+
+609  – 812       fmt() — markdown-to-HTML renderer for chat messages
+                 Handles: numbered lists → card grids, bullet points,
+                 section headers, price lines, swap receipt cards,
+                 inline markdown (bold, italic, code, links)
+
+814  – 908       TokenPicker component
+                 Live token search: queries Tokens V2 + V1 in parallel,
+                 deduplicates, sorts by exact match then 24h volume,
+                 renders 300ms-debounced dropdown
+
+910  – 1041      TokenMiniChart component
+                 Price chart using GeckoTerminal (primary) → CoinGecko
+                 (fallback). SVG sparkline with 1D / 7D / 30D toggle,
+                 gradient fill, live % change badge
+
+1043 – 1209      TrendingTicker component
+                 Auto-scrolling live ticker bar at top of app.
+                 Fetches toptrending tokens every 60s from Tokens V2,
+                 renders horizontally scrolling price chips
+
+1211 – 1463      BLOG_POSTS array — 7 in-app blog articles
+                 How ChatFI Works, Token Swaps, Basket Swaps,
+                 Limit Orders & DCA, Earn & Yield, Predictions,
+                 Portfolio Guide
+
+1465 – 1853      LandingPage component (~390 lines)
+                 Full marketing landing page shown on first visit:
+                 hero section, feature grid, command examples,
+                 how-it-works steps, integrations list, CTA + footer
+                 Includes injectLandingStyles() — CSS injected at
+                 module load to prevent flash of unstyled content
+
+1855 – 1974      MyLocks helper components
+                 MLBadge (status pill), MLLockCard (vesting card UI)
+                 Shows: escrow address, total/claimed/claimable amounts,
+                 vesting progress bar, claim button
+
+1976 – 2055      YieldVaultPromptCard component
+                 The "Jupiter Earn Position Detected" upsell banner
+                 that appears after a deposit, prompting vault setup
+
+2056 – 2099      Yield Vault Panel helpers
+                 formatAPY(), formatEarned(), TokenLogo component
+                 (with multi-level logo fallback chain)
+
+2100 – 2243      YieldVaultPanel component
+                 Full vault setup form: earnMint picker, threshold
+                 input, target token picker, Telegram link button,
+                 save/cancel actions
+
+2244 – 2409      VaultCard + YieldVaultTracker components
+                 Live vault monitoring dashboard: current position
+                 value, yield accrued, threshold progress bar,
+                 cancel / update vault buttons
+
+2411 – 2425      JupChatWithLanding — root wrapper
+                 Checks sessionStorage to show landing or app
+
+2426 – 2510      JupChatInner — main component state declarations
+                 All useState / useRef definitions:
+                 messages, wallet state, WalletConnect (wcStatus/wcUri),
+                 Privy hooks, Reown hooks
+
+2512 – 2730      Feature panel state declarations (all useState)
+                 Swap, Trigger V1/V2, Recurring, Predictions,
+                 Earn / Lend, Send, Portfolio, Token Info, Perps,
+                 Studio, Lock, Route Inspector, Price Alerts,
+                 Volatility Monitor, Prediction CLI, Trade Journal,
+                 Copy Trade, Plugin state
+
+2731 – 2815      App-level effects
+                 jupDocs fetch (llms-full.txt), multiply vault ID
+                 fetch, global CSS injection, scroll-to-bottom logic,
+                 textarea auto-resize, window.__chatfiSend bridge,
+                 WalletConnect QR render, swap quote debounce
+
+2816 – 2860      Global CSS injection (useEffect)
+                 hover states, spinner animation, vault card styles
+
+2862 – 2910      Scroll + QR effects
+
+2911 – 2941      jupFetch() — Jupiter API proxy helper
+                 Routes all Jupiter calls through /api/jupiter to
+                 keep the API key server-side. Handles JSON + error.
+
+2943 – 2979      resolveToken() — symbol → { mint, decimals }
+                 Tries token cache → V2 search → V1 fallback.
+                 Also handles raw base58 mint address paste.
+
+2980 – 2997      fetchPrices() — Price V3 batch price fetch
+                 Fetches live USD prices + 24h delta for any
+                 list of token mints in one call.
+
+2998 – 3029      Wallet change effect
+                 Reloads price alerts, vol monitors, trade journal,
+                 and Telegram link status when wallet connects/changes.
+
+3030 – 3161      fetchTokenInfo() — full token metadata
+                 Priority: hardcoded mint → V2 by mint → V2 search
+                 → V1 fallback. Normalises all field variants into
+                 a single consistent shape (price, mcap, fdv, holders,
+                 organic score, audit flags, social links, etc.)
+
+3163 – 3226      Token discovery helpers
+                 fetchTokensByTag() — verified / LST tokens
+                 fetchTokensByCategory() — toptrending / toptraded
+                 fetchXStocks() — RWA / tokenized stocks filter
+
+3228 – 3246      fetchRecentTokens() — newly listed tokens
+
+3237 – 3367      Trade Journal helpers
+                 logTrade() — writes swap to localStorage
+                 fetchOnChainTrades() — fetches last 20 on-chain
+                 txs, diffs pre/post token balances to detect swaps
+
+3369 – 3404      Price Alert polling (setInterval every 30s)
+                 Checks all active alerts against live prices,
+                 fires chat notification on trigger
+
+3405 – 3543      Volatility Monitor polling (setInterval every 30s)
+                 10-sample rolling std-dev per token. Fires alert
+                 and optionally auto-places OCO order on spike.
+                 Also handles metric-based triggers (price/mc/volume/
+                 liquidity/holders/priceChange).
+
+3545 – 3650      fetchWalletTrades() + wallet behaviour analyser
+                 Fetches trade history for any wallet via DexScreener.
+                 Builds a profile: trading style, top tokens, sentiment,
+                 avg trade size.
+
+3652 – 3789      fetchLeaderboard() — top traders leaderboard
+                 Fetches on-chain top wallets from /api/wallet-trades.
+                 Falls back to seed wallets if backend returns nothing.
+
+3790 – 4101      fetchPortfolioData() — full portfolio snapshot
+                 Calls in parallel:
+                   /ultra/v1/holdings (spot balances)
+                   /portfolio/v1/positions (DeFi positions)
+                   /lend/v1/earn/positions (earn deposits)
+                   /perps/v1/positions (leveraged positions)
+                   /trigger/v2/orders (limit orders)
+                   /recurring/v1/orders (DCA series)
+                   /prediction/v1/positions (open bets)
+                   /send/v1/pending-invites (unclaimed sends)
+                 Normalises all into a single portfolioData object.
+
+4102 – 5683      fetchEarnUserPositions() + Earn panel rendering
+                 Fetches user's earn deposits, renders position cards
+                 with live APY, balance, yield earned, withdraw buttons,
+                 and YieldVaultPromptCard upsell.
+
+5684 – 5931      doSend() — Jupiter Send execution
+                 Builds invite keypair (nacl), crafts send transaction
+                 via /send/v1/craft-send, signs with wallet, submits.
+                 Also handles clawback and pending invite fetch.
+
+5932 – 6112      doPredictionBet() — on-chain prediction market bet
+                 Resolves market ID, posts to /prediction/v1/bet,
+                 deserialises VersionedTransaction, signs, submits.
+
+6113 – 6414      doEarnDeposit() + doEarnWithdraw()
+                 Deposit: POST /lend/v1/earn/deposit → VersionedTx
+                 → sign → sendRawTransaction → confirmTransaction.
+                 Withdraw: same pattern with /lend/v1/earn/withdraw.
+
+6415 – 7160      doBorrow() — borrow panel execution
+                 Posts collateral + borrow amount, signs SDK transaction.
+
+7161 – 7453      Wallet connection logic
+                 getActiveProvider() — returns the right signing
+                 provider (Privy, Reown/Phantom, or embedded wallet).
+                 Wallet connect/disconnect handlers for all three paths.
+
+7454 – 7551      doSwap() — Swap V2 execution
+                 POST /swap/v2/order → preview data → user confirms
+                 → POST /swap/v2/execute → sign + submit + receipt card.
+
+7552 – 7687      doTrigger() — Trigger V1 execution (legacy)
+
+7688 – 7827      doTriggerV2() — Trigger V2 execution
+                 Supports limit, OCO, OTOCO order types.
+                 POST /trigger/v2/orders/price → sign VersionedTx.
+
+7828 – 8199      doRecurring() — DCA / Recurring V1 execution
+                 POST /recurring/v1/createOrder → sign → submit.
+                 Also handles cancel + list fetch.
+
+8200 – 8255      doBasketSwap() — batch swap resolver
+                 Resolves all token mints in parallel, fetches all
+                 /swap/v2/order calls in parallel, signs as batch,
+                 executes sequentially.
+
+8256 – 8534      Power Commands orchestrator
+                 smartEntry(), exitStrategy(), deepDive(),
+                 portfolioPulse() — each calls multiple APIs in
+                 parallel, passes raw data to Claude for synthesis.
+
+8535 – 8748      send() — main AI message handler (entry point)
+                 Reads user input, intercepts power commands and
+                 keyword shortcuts client-side, then calls Claude
+                 with the full system prompt + conversation history.
+
+8749 – 9909      Action dispatcher — Claude's JSON response → UI
+                 SHOW_SWAP, SHOW_TRIGGER_V2, SHOW_RECURRING,
+                 FETCH_EARN, SHOW_SEND, FETCH_PORTFOLIO,
+                 FETCH_TOKEN_INFO, FETCH_XSTOCKS, SHOW_PERPS,
+                 SHOW_BORROW, SHOW_MULTIPLY, SHOW_STUDIO,
+                 SHOW_LOCK, SHOW_PREDICTION, FETCH_PREDICTIONS,
+                 PLACE_PREDICTION, BASKET_PREDICTION,
+                 SET_PRICE_ALERT, DETECT_VOLATILITY,
+                 SCAN_PRED_ODDS, SHOW_TRADE_JOURNAL,
+                 BASKET_SWAP, SWAP_ALL_WALLET
+
+9910 – 10118     CHAINED_ACTIONS executor
+                 Processes multi-step action arrays sequentially.
+                 Handles inter-step data passing (swap proceeds →
+                 next step amount).
+
+10118 – 10510    Remaining action handlers
+                 SHOW_PERPS, FETCH_PERPS_POSITIONS, SHOW_BORROW,
+                 SHOW_MULTIPLY, CLAIM_PAYOUTS, SHOW_STUDIO,
+                 FETCH_STUDIO_FEES, FETCH_LOCKS, FETCH_SEND_HISTORY,
+                 SHOW_PREDICTION, FETCH_PREDICTIONS, SHOW_ROUTE,
+                 FETCH_PORTFOLIO, FETCH_TOKEN_INFO, FETCH_XSTOCKS,
+                 FETCH_TRIGGER_ORDERS, FETCH_RECURRING_ORDERS,
+                 COPY_TRADE
+
+10511 – 14993    JSX render tree — the entire UI
+                 10511  Root layout, sidebar, mobile nav
+                 10600  TrendingTicker bar mount
+                 10700  Wallet connect modal (Privy + Reown tabs)
+                 11000  Chat message list + typing indicator
+                 11400  Swap panel (token pickers, quote, confirm)
+                 11600  Trigger V2 panel (limit / OCO / OTOCO)
+                 11800  Recurring / DCA panel
+                 11900  Earn deposit + position cards
+                 12100  YieldVaultPanel + VaultCard tracker
+                 12200  Prediction market panel + bet form
+                 12380  YieldRotatorPlugin mount
+                 12450  Send panel (invite link builder)
+                 12600  Portfolio panel (all positions)
+                 12800  Perps panel
+                 12900  Borrow panel
+                 13000  Multiply panel
+                 13100  Studio panel (token creation + fees)
+                 13200  Lock panel (vesting setup + MyLocks)
+                 13400  Route inspector panel
+                 13500  Copy Trade panel + leaderboard
+                 13700  Trade Journal panel
+                 13900  Volatility + Price Alert panels
+                 14100  Prediction CLI / odds scanner
+                 14300  Blog panel (article list + reader)
+                 14500  Input box + suggestion chips
+                 14700  How It Works modal
+                 14800  PWA install banner
+                 14900  Socials nav + misc modals
+---------------------------------------------------------------------------
+Total: ~15,000 lines | 1 file | 30+ product features
+```
+
+## Getting Started
+
+
+```bash
+# Clone
+git clone https://github.com/sadekunle215-cmd/chatfi.git
+cd chatfi
+
+# Install
+npm install
+
+# Configure environment
+cp .env.example .env.local
+# Fill in all values from the Environment Variables section above
+
+# Dev server
+npm run dev
+
+# Deploy
+vercel --prod
+```
+
+**Firebase setup:**
+1. Create a Firestore database in the Firebase console
+2. Add two collections: `yield_vaults` and `chatfi_users`
+3. Generate a service account key (JSON) and set it as `FIREBASE_ADMIN_KEY`
+
+**Telegram setup:**
+1. Create bot via @BotFather
+2. Add `TELEGRAM_BOT_TOKEN` to Vercel
+3. Set the webhook URL (see Telegram Integration section)
+
+---
+
+*Built for the Jupiter Developer Platform bounty — Build with the New Unified API.*
