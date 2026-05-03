@@ -86,32 +86,83 @@ async function mintToSymbol(mint) {
   return (await mintMeta(mint)).symbol;
 }
 
-// ── 1. Token balances via Jupiter Portfolio API ───────────────────────────────
+// ── 1. Token balances via Helius RPC (reliable SPL) + Jupiter for prices ─────
 async function fetchTokenBalances(wallet) {
   try {
-    const data = await jFetch(
-      `https://lite-api.jup.ag/portfolio/v1/positions?walletAddress=${wallet}`,
-      {}, 20000
-    );
-    const items = data?.data?.items || data?.items || data?.tokens || [];
-    let totalUSD = 0;
-    const tokens = items
-      .filter(t => parseFloat(t.usdValue || t.valueUsd || 0) > 0.001)
-      .map(t => {
-        const usdValue = parseFloat(t.usdValue || t.valueUsd || 0);
-        totalUSD += usdValue;
-        return {
-          symbol:   t.symbol || t.token?.symbol || "?",
-          mint:     t.mint   || t.token?.address || "",
-          amount:   parseFloat(t.balance || t.amount || 0),
-          usdValue,
-          logoURI:  t.logoURI || t.token?.logoURI || "",
-          price:    parseFloat(t.price || t.usdPrice || 0),
-        };
-      })
-      .sort((a, b) => b.usdValue - a.usdValue);
+    const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+
+    // Step 1: Get SOL balance
+    const solRes = await fetch(HELIUS_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [wallet] }),
+    });
+    const solJson = await solRes.json();
+    const solAmt  = (solJson?.result?.value || 0) / 1e9;
+
+    // Step 2: Get all SPL token accounts
+    const splRes = await fetch(HELIUS_RPC, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 2,
+        method: "getTokenAccountsByOwner",
+        params: [wallet,
+          { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+          { encoding: "jsonParsed" },
+        ],
+      }),
+    });
+    const splJson = await splRes.json();
+    const accounts = splJson?.result?.value || [];
+
+    // Step 3: Collect mints with nonzero balance
+    const splMints = [];
+    for (const acc of accounts) {
+      const info   = acc.account?.data?.parsed?.info;
+      const mint   = info?.mint || "";
+      const uiAmt  = parseFloat(info?.tokenAmount?.uiAmount || 0);
+      const dec    = parseInt(info?.tokenAmount?.decimals ?? 6);
+      if (uiAmt > 0 && mint) splMints.push({ mint, amount: uiAmt, decimals: dec });
+    }
+
+    // Step 4: Resolve metadata + prices for all mints in parallel
+    const SOL_PRICE_URL = `https://lite-api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112,${splMints.map(m => m.mint).join(",")}`;
+    const [metaResults, priceRes] = await Promise.all([
+      Promise.allSettled(splMints.map(({ mint }) => jFetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`, {}, 5000))),
+      jFetch(SOL_PRICE_URL, {}, 8000),
+    ]);
+
+    const prices = priceRes?.data || {};
+    const solPrice = parseFloat(prices["So11111111111111111111111111111111111111112"]?.price || 0);
+    const solUSD   = solAmt * solPrice;
+
+    const tokens = [{
+      symbol:   "SOL",
+      mint:     "So11111111111111111111111111111111111111112",
+      amount:   solAmt,
+      usdValue: solUSD,
+      logoURI:  "https://img.jup.ag/tokens/So11111111111111111111111111111111111111112",
+      price:    solPrice,
+    }];
+
+    for (let i = 0; i < splMints.length; i++) {
+      const { mint, amount } = splMints[i];
+      const meta    = metaResults[i]?.status === "fulfilled" ? metaResults[i].value : null;
+      const symbol  = meta?.symbol || mint.slice(0, 6) + "…";
+      const logoURI = meta?.logoURI || `https://img.jup.ag/tokens/${mint}`;
+      const price   = parseFloat(prices[mint]?.price || 0);
+      const usdValue = amount * price;
+      tokens.push({ symbol, mint, amount, usdValue, logoURI, price });
+    }
+
+    tokens.sort((a, b) => b.usdValue - a.usdValue);
+    const totalUSD = tokens.reduce((s, t) => s + t.usdValue, 0);
     return { tokens, totalUSD };
-  } catch { return { tokens: [], totalUSD: 0 }; }
+  } catch (e) {
+    console.error("[portfolio] token balances error:", e.message);
+    return { tokens: [], totalUSD: 0 };
+  }
 }
 
 // ── 2. Jupiter Earn positions ─────────────────────────────────────────────────
