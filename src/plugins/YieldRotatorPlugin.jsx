@@ -558,18 +558,20 @@ export default function YieldRotatorPlugin({
       )}
       {/* Section header + opportunity cards — only when opportunities exist */}
       {opportunities.length > 0 && (<>
-        {/* rotate icon */}
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#c7f284" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
-          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-        </svg>
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#c7f284", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-          Better APY Available
-        </span>
-        <span style={{ fontSize: 10, color: T.text3, background: T.border, borderRadius: 8, padding: "1px 6px" }}>
-          {opportunities.length}
-        </span>
-      </div>
+        {/* Section header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+          {/* rotate icon */}
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#c7f284" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#c7f284", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+            Better APY Available
+          </span>
+          <span style={{ fontSize: 10, color: T.text3, background: T.border, borderRadius: 8, padding: "1px 6px" }}>
+            {opportunities.length}
+          </span>
+        </div>
 
       {opportunities.map((op, i) => {
         const key     = op.posPoolId || op.posSym + i;
