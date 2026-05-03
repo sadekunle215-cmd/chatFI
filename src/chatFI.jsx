@@ -8930,38 +8930,44 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           setPortfolioLoading(true);
           setShowPortfolio(true);
           setPortfolioData(null);
-          const pData = await fetchPortfolioData(addr);
-          // Merge reliable known logos (TOKEN_LOGO_URLS) with any logos fetched by the API
-          const mergedLogoMap = { ...TOKEN_LOGO_URLS, ...(pData?.logoMap || {}) };
-          // Fetch prices for ALL resolved tokens (including unknowns resolved during fetchPortfolioData)
-          const allPortfolioSyms = Object.keys(pData?.walletBalances || {});
-          let freshPrices = { ...prices };
-          if (allPortfolioSyms.length > 0) {
-            try {
-              const mintIds = allPortfolioSyms
-                .map(s => pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s])
-                .filter(Boolean);
-              if (mintIds.length > 0) {
-                const priceJson = await fetch(`${JUP_PRICE_API}?ids=${mintIds.join(",")}`)
-                  .then(r => r.json()).catch(() => ({}));
-                for (const [mint, info] of Object.entries(priceJson || {})) {
-                  if (!info?.usdPrice) continue;
-                  const price = parseFloat(info.usdPrice);
-                  // Store by mint address so unknown tokens (keyed by truncated mint sym) always resolve
-                  freshPrices[mint] = price;
-                  // Also store by symbol for known tokens
-                  const sym = allPortfolioSyms.find(s =>
-                    (pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s]) === mint
-                  );
-                  if (sym) freshPrices[sym] = price;
+          try {
+            const pData = await fetchPortfolioData(addr);
+            // Merge reliable known logos (TOKEN_LOGO_URLS) with any logos fetched by the API
+            const mergedLogoMap = { ...TOKEN_LOGO_URLS, ...(pData?.logoMap || {}) };
+            // Fetch prices for ALL resolved tokens (including unknowns resolved during fetchPortfolioData)
+            const allPortfolioSyms = Object.keys(pData?.walletBalances || {});
+            let freshPrices = { ...prices };
+            if (allPortfolioSyms.length > 0) {
+              try {
+                const mintIds = allPortfolioSyms
+                  .map(s => pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s])
+                  .filter(Boolean);
+                if (mintIds.length > 0) {
+                  const priceJson = await fetch(`${JUP_PRICE_API}?ids=${mintIds.join(",")}`)
+                    .then(r => r.json()).catch(() => ({}));
+                  for (const [mint, info] of Object.entries(priceJson || {})) {
+                    if (!info?.usdPrice) continue;
+                    const price = parseFloat(info.usdPrice);
+                    // Store by mint address so unknown tokens (keyed by truncated mint sym) always resolve
+                    freshPrices[mint] = price;
+                    // Also store by symbol for known tokens
+                    const sym = allPortfolioSyms.find(s =>
+                      (pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s]) === mint
+                    );
+                    if (sym) freshPrices[sym] = price;
+                  }
                 }
-              }
-            } catch {}
+              } catch {}
+            }
+            const wb = pData?.walletBalances || {};
+            const safeBalances = Object.keys(wb).length > 0 ? wb : { SOL: 0 };
+            setPortfolioData({ ...pData, wallet: addr, walletBalances: safeBalances, solBalance: (safeBalances.SOL || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices });
+          } catch (e) {
+            console.error("[ChatFi Portfolio] fetchPortfolioData crashed:", e);
+            setPortfolioData({ walletBalances: { SOL: 0 }, mintMap: {}, logoMap: TOKEN_LOGO_URLS, prices: {} });
+          } finally {
+            setPortfolioLoading(false);
           }
-          const wb = pData?.walletBalances || {};
-          const safeBalances = Object.keys(wb).length > 0 ? wb : { SOL: 0 };
-          setPortfolioData({ ...pData, wallet: addr, walletBalances: safeBalances, solBalance: (safeBalances.SOL || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices });
-          setPortfolioLoading(false);
           fetchEarnPositionsForVault();
         }
 
@@ -10634,35 +10640,41 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               setPortfolioLoading(true);
               setShowPortfolio(true);
               setPortfolioData(null);
-              const pData = await fetchPortfolioData(walletFull);
-              const mergedLogoMap = { ...TOKEN_LOGO_URLS, ...(pData?.logoMap || {}) };
-              // Fetch prices for ALL resolved tokens (including unknowns resolved during fetchPortfolioData)
-              const allPortfolioSyms2 = Object.keys(pData?.walletBalances || {});
-              let freshPrices2 = { ...prices };
-              if (allPortfolioSyms2.length > 0) {
-                try {
-                  const mintIds2 = allPortfolioSyms2
-                    .map(s => pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s])
-                    .filter(Boolean);
-                  if (mintIds2.length > 0) {
-                    const priceJson2 = await fetch(`${JUP_PRICE_API}?ids=${mintIds2.join(",")}`)
-                      .then(r => r.json()).catch(() => ({}));
-                    for (const [mint, info] of Object.entries(priceJson2 || {})) {
-                      if (!info?.usdPrice) continue;
-                      const price = parseFloat(info.usdPrice);
-                      freshPrices2[mint] = price; // always store by mint address
-                      const sym = allPortfolioSyms2.find(s =>
-                        (pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s]) === mint
-                      );
-                      if (sym) freshPrices2[sym] = price;
+              try {
+                const pData = await fetchPortfolioData(walletFull);
+                const mergedLogoMap = { ...TOKEN_LOGO_URLS, ...(pData?.logoMap || {}) };
+                // Fetch prices for ALL resolved tokens (including unknowns resolved during fetchPortfolioData)
+                const allPortfolioSyms2 = Object.keys(pData?.walletBalances || {});
+                let freshPrices2 = { ...prices };
+                if (allPortfolioSyms2.length > 0) {
+                  try {
+                    const mintIds2 = allPortfolioSyms2
+                      .map(s => pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s])
+                      .filter(Boolean);
+                    if (mintIds2.length > 0) {
+                      const priceJson2 = await fetch(`${JUP_PRICE_API}?ids=${mintIds2.join(",")}`)
+                        .then(r => r.json()).catch(() => ({}));
+                      for (const [mint, info] of Object.entries(priceJson2 || {})) {
+                        if (!info?.usdPrice) continue;
+                        const price = parseFloat(info.usdPrice);
+                        freshPrices2[mint] = price; // always store by mint address
+                        const sym = allPortfolioSyms2.find(s =>
+                          (pData?.mintMap?.[s] || TOKEN_MINTS[s] || tokenCacheRef.current[s]) === mint
+                        );
+                        if (sym) freshPrices2[sym] = price;
+                      }
                     }
-                  }
-                } catch {}
+                  } catch {}
+                }
+                const wb2 = pData?.walletBalances || {};
+                const safeBalances2 = Object.keys(wb2).length > 0 ? wb2 : { SOL: 0 };
+                setPortfolioData({ ...pData, wallet: walletFull, walletBalances: safeBalances2, solBalance: (safeBalances2.SOL || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices2 });
+              } catch (e) {
+                console.error("[ChatFi Portfolio] fetchPortfolioData (chained) crashed:", e);
+                setPortfolioData({ walletBalances: { SOL: 0 }, mintMap: {}, logoMap: TOKEN_LOGO_URLS, prices: {} });
+              } finally {
+                setPortfolioLoading(false);
               }
-              const wb2 = pData?.walletBalances || {};
-              const safeBalances2 = Object.keys(wb2).length > 0 ? wb2 : { SOL: 0 };
-              setPortfolioData({ ...pData, wallet: walletFull, walletBalances: safeBalances2, solBalance: (safeBalances2.SOL || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices2 });
-              setPortfolioLoading(false);
 
             // ── FETCH_TOKEN_INFO ────────────────────────────────────────────────
             } else if (stepAction === "FETCH_TOKEN_INFO") {
