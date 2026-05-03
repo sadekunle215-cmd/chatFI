@@ -36,7 +36,6 @@ https://developers.jup.ag/docs/llms-full.txt
 | Tokens V2 | search, tag, category, trending, recent | Token discovery |
 | Price V3 | — | Live prices with 24h delta |
 | Recurring V1 | — | DCA / scheduled orders |
-| Perps | — | Leveraged positions |
 | Send | — | Token transfers via invite link |
 | Studio | — | Token creation + fee claiming |
 | Lock | — | SPL token vesting |
