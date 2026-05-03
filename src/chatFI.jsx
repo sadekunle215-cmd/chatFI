@@ -6717,6 +6717,19 @@ function JupChatInner() {
       "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So":  "MSOL",
       "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
       "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1":  "BSOL",
+      "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v":  "jupSOL",
+      "Jito4APyf642JPzcbhPdHtTkuLFkHy5SfxGgwGiRBGP":  "JitoSOL",
+      "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs": "ETH",
+      "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh": "WBTC",
+      "AFbX8oGjGpmVFywabs9MZfXMTEcmjAnzu9UZwwE5UQFJ": "GST",
+      "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE":  "ORCA",
+      "RLBxxFkseAZ4RgJH3Sqn8jXxhmGoz9jWxDNJMh8pL7a":  "RLB",
+      "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3": "PYTH",
+      "MEFNBXixkEbait3xn9bkEEEs5DKC7akAnBV1yFmybW2":  "MEFE",
+      "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R": "RAY",
+      "SRMuApVNdxXokk5GT7XD5cUUgXMBCoAz2LHeuAoKWRt":  "SRM",
+      "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTGPsHuuPA5ey":  "MNDE",
+      "kinXdEcpDQeHPEuQnqmUgtYykqKCSVY5JyfksVCPkUS":  "KIN",
     };
     const SOL_MINT = "So11111111111111111111111111111111111111112";
     const safeTimeout = (ms) => { try { return AbortSignal.timeout(ms); } catch { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; } };
@@ -8932,7 +8945,9 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               }
             } catch {}
           }
-          setPortfolioData({ ...pData, wallet: addr, walletBalances: pData?.walletBalances || {}, solBalance: ((pData?.walletBalances?.SOL) || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices });
+          const wb = pData?.walletBalances || {};
+          const safeBalances = Object.keys(wb).length > 0 ? wb : { SOL: 0 };
+          setPortfolioData({ ...pData, wallet: addr, walletBalances: safeBalances, solBalance: (safeBalances.SOL || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices });
           setPortfolioLoading(false);
           fetchEarnPositionsForVault();
         }
@@ -10631,7 +10646,9 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   }
                 } catch {}
               }
-              setPortfolioData({ ...pData, wallet: walletFull, walletBalances: pData?.walletBalances || {}, solBalance: ((pData?.walletBalances?.SOL) || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices2 });
+              const wb2 = pData?.walletBalances || {};
+              const safeBalances2 = Object.keys(wb2).length > 0 ? wb2 : { SOL: 0 };
+              setPortfolioData({ ...pData, wallet: walletFull, walletBalances: safeBalances2, solBalance: (safeBalances2.SOL || 0).toFixed(4), logoMap: mergedLogoMap, mintMap: pData?.mintMap || {}, prices: freshPrices2 });
               setPortfolioLoading(false);
 
             // ── FETCH_TOKEN_INFO ────────────────────────────────────────────────
