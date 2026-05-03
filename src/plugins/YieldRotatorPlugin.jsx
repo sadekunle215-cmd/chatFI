@@ -140,6 +140,10 @@ export default function YieldRotatorPlugin({
         pos.amount ?? pos.underlyingBalance ?? pos.underlyingAssets ??
         pos.depositedAmount ?? pos.value ?? 0
       );
+      // Also accept symbol from _fromPortfolio shape
+      const resolvedSym = posSym === "Token" || !posSym
+        ? (pos.label?.replace(/earn|lend|vault|yield/gi, "").trim() || "?")
+        : posSym;
       const posPoolId = pos.planId || pos.poolId || pos.marketId || pos.pool || "";
 
       if (posAmt <= 0) continue;
@@ -181,7 +185,7 @@ export default function YieldRotatorPlugin({
         const bestMint = bestPool.asset?.mint || bestPool.mint || bestPool.tokenMint || "";
         ops.push({
           position:     pos,
-          posSym,
+          posSym:       resolvedSym,
           posMint,
           posApy,
           posAmt,
