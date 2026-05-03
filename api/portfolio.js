@@ -71,7 +71,7 @@ async function mintMeta(mint) {
   if (!mint) return { symbol: "?", logoURI: "" };
   if (TOKEN_CACHE[mint]) return TOKEN_CACHE[mint];
   try {
-    const data = await jFetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`, {}, 5000);
+    const data = await jFetch(`https://tokens.jup.ag/token/${mint}`, {}, 5000);
     const meta = {
       symbol:   data?.symbol  || mint.slice(0, 6) + "…",
       logoURI:  data?.logoURI || data?.icon || "",
@@ -129,7 +129,7 @@ async function fetchTokenBalances(wallet) {
     // Step 4: Resolve metadata + prices for all mints in parallel
     const SOL_PRICE_URL = `https://lite-api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112,${splMints.map(m => m.mint).join(",")}`;
     const [metaResults, priceRes] = await Promise.all([
-      Promise.allSettled(splMints.map(({ mint }) => jFetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`, {}, 5000))),
+      Promise.allSettled(splMints.map(({ mint }) => jFetch(`https://tokens.jup.ag/token/${mint}`, {}, 5000))),
       jFetch(SOL_PRICE_URL, {}, 8000),
     ]);
 
@@ -393,7 +393,15 @@ export default async function handler(req, res) {
       fetchPerpPositions(wallet),
       fetchLockedPositions(wallet),
       fetchYieldVaults(wallet),
-    ]).then(results => results.map(r => r.status === "fulfilled" ? r.value : (Array.isArray(r.value) ? [] : { tokens: [], totalUSD: 0 })));
+    ]).then(([tokensR, earnR, dcaR, trigR, perpR, lockedR, vaultsR]) => [
+      tokensR.status  === "fulfilled" ? tokensR.value  : { tokens: [], totalUSD: 0 },
+      earnR.status    === "fulfilled" ? earnR.value    : [],
+      dcaR.status     === "fulfilled" ? dcaR.value     : [],
+      trigR.status    === "fulfilled" ? trigR.value    : [],
+      perpR.status    === "fulfilled" ? perpR.value    : [],
+      lockedR.status  === "fulfilled" ? lockedR.value  : [],
+      vaultsR.status  === "fulfilled" ? vaultsR.value  : [],
+    ]);
 
     // Compute total USD including earn positions
     const earnUSD = earnPositions.reduce((s, p) => s + (p.depositedUSD || 0), 0);
