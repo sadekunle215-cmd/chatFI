@@ -6707,7 +6707,11 @@ function JupChatInner() {
         // SPL tokens: Jupiter uses "tokenBalances" (current) — fall back to "tokens" for older responses
         for (const [mint, data] of Object.entries(holdingsData.tokenBalances || holdingsData.tokens || {})) {
           if (mint === SOL_MINT) continue;
-          const uiAmt = data?.uiAmount ?? (data?.amount && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
+          // Use uiAmount if present and non-zero; fall back to amount/decimals
+          // NOTE: must use != null (not ??) so uiAmount:0 still falls through to amount field
+          const uiAmt = (data?.uiAmount != null && data.uiAmount > 0)
+            ? data.uiAmount
+            : (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
           if (!uiAmt || uiAmt <= 0) continue;
           const cached = Object.entries(tokenCacheRef.current).find(([, v]) => v === mint)?.[0] || KNOWN_MINTS[mint];
           if (cached) {
@@ -6758,7 +6762,10 @@ function JupChatInner() {
         const balances = {};
         const unknownMints = [];
         for (const [key, data] of Object.entries(balancesData)) {
-          const uiAmt = typeof data === "number" ? data : data?.uiAmount ?? (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : null);
+          // Same fix: uiAmount:0 must fall through to amount field
+          const uiAmt = typeof data === "number" ? data
+            : (data?.uiAmount != null && data.uiAmount > 0) ? data.uiAmount
+            : (data?.amount != null && data?.decimals != null ? Number(data.amount) / Math.pow(10, data.decimals) : null);
           if (uiAmt == null || uiAmt < 0) continue;
           if (key === "SOL" || key === SOL_MINT) { balances["SOL"] = uiAmt; continue; }
           if (uiAmt <= 0) continue;
