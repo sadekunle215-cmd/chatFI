@@ -12323,29 +12323,29 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Yield Rotator Panel — standalone better APY finder ─────── */}
           {showEarn && walletFull && (() => {
-            // Build positions by joining earnUserPositions with earnVaults for APY + mint
-            const rotatorPositions = (() => {
-              if (yieldVaultPositions.length) return yieldVaultPositions;
-              if (portfolioData?._earnFromPortfolio?.length) return portfolioData._earnFromPortfolio;
-              // Build from earnVaults + earnUserPositions
-              const positions = [];
-              for (const [sym, pos] of Object.entries(earnUserPositions || {})) {
-                if (!pos || parseFloat(pos.amount || 0) <= 0) continue;
-                const vault = earnVaults.find(v =>
-                  (v.token || "").toUpperCase() === sym ||
-                  (v.symbol || "").toUpperCase() === sym
-                );
-                positions.push({
-                  sym, symbol: sym,
-                  amount: parseFloat(pos.amount || 0),
-                  value:  parseFloat(pos.amount || 0),
-                  apy:    parseFloat(vault?.apy || vault?.totalApy || vault?.supplyApy || 0),
-                  mint:   vault?.mint || vault?.tokenMint || vault?.assetAddress || "",
-                  planId: vault?.planId || vault?.poolId || vault?.id || "",
-                });
-              }
-              return positions;
-            })();
+            // Build positions: earnUserPositions joined with earnVaults for APY/mint
+            // earnUserPositions is populated by fetchEarnUserPositions() called in FETCH_EARN
+            const positions = [];
+            for (const [sym, pos] of Object.entries(earnUserPositions || {})) {
+              if (!pos || parseFloat(pos.amount || 0) <= 0) continue;
+              const vault = earnVaults.find(v =>
+                (v.token || "").toUpperCase() === sym ||
+                (v.symbol || "").toUpperCase() === sym
+              );
+              positions.push({
+                sym, symbol: sym,
+                amount: parseFloat(pos.amount || 0),
+                value:  parseFloat(pos.amount || 0),
+                // earnVaults uses: apy (number), assetMint, id
+                apy:    parseFloat(vault?.apy || 0),
+                mint:   vault?.assetMint || "",
+                planId: vault?.id || "",
+              });
+            }
+            // Also check yieldVaultPositions and _earnFromPortfolio as fallbacks
+            const rotatorPositions = positions.length ? positions
+              : yieldVaultPositions.length ? yieldVaultPositions
+              : (portfolioData?._earnFromPortfolio || []).filter(p => parseFloat(p.amount||0) > 0 && parseFloat(p.amount||0) < 100000);
             if (!rotatorPositions.length) return null;
             return (
               <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px" }}>
@@ -12357,7 +12357,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   push={push}
                   T={T}
                   isMobile={isMobile}
-                  onMigrationDone={() => { fetchPortfolio(); fetchEarnPositionsForVault(); }}
+                  onMigrationDone={() => { fetchPortfolio(); fetchEarnUserPositions(); }}
                 />
               </div>
             );
@@ -12921,13 +12921,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                           {earnPos.slice(0,5).map((e, i) => {
                             const sym = e.sym || e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
-                            const ua  = parseFloat(e.underlyingBalance || e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
                             const dec = e.asset?.decimals ?? e.decimals ?? 6;
-                            // If ua is raw shares (very large), convert; otherwise use as-is or fall back to USD value
-                            const amt = ua > 1e8 ? `$${(ua/Math.pow(10,dec)).toFixed(4)}`
-                                      : ua > 100  ? `$${parseFloat(e.value||ua).toFixed(2)}`
-                                      : ua > 0    ? `$${ua.toFixed(4)}`
-                                      : `$${parseFloat(e.value||0).toFixed(2)}`;
+                            // Use e.amount (USD-normalised) first, then e.value, then underlyingAssets
+                            // Raw share counts are always > 10000 — treat those as invalid
+                            const rawAmt = parseFloat(e.amount ?? e.value ?? e.underlyingAssets ?? 0);
+                            const ua = rawAmt > 100000 ? 0 : rawAmt; // cap at $100k — anything above is raw shares
+                            const amt = ua > 0 ? `$${ua.toFixed(ua < 1 ? 4 : 2)}`
+                                      : `$0.00`;
                             const label = e.label ? ` · ${e.label}` : "";
                             return (
                               <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
