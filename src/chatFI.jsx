@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Connection, Transaction, VersionedTransaction, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import nacl from "tweetnacl"; // used for invite keypair signing in Jupiter Send
@@ -2477,6 +2477,19 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefres
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
+// ── Error Boundary — prevents portfolio/plugin crashes from blanking the whole page ──
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, info) { console.error("[ChatFi] ErrorBoundary caught:", error, info); }
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback || null;
+    }
+    return this.props.children;
+  }
+}
+
 const INITIAL_MSG = { id:1, role:"ai", showConnectBtn:true, text:"Hey! I'm **ChatFi** — your personal AI tools on Solana.\n\nI can swap tokens, check prices, set limit orders, track your portfolio, predict sports outcomes, and earn yield.\n\nConnect your wallet to get started, or just ask me anything!" };
 
 // Wrapper: shows landing on first visit, then the app
@@ -12967,6 +12980,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               ) : !portfolioData ? (
                 <div style={{ padding:20, fontSize:12, color:T.text3 }}>No data available.</div>
               ) : (
+                <ErrorBoundary fallback={<div style={{ padding:20, fontSize:12, color:T.text3 }}>Could not render portfolio. Try closing and reopening.</div>}>
                 <div style={{ padding:16, display:"flex", flexDirection:"column", gap:16 }}>
 
                   {/* ── Net Worth Banner ── */}
@@ -13209,17 +13223,19 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
                   {/* ── Yield Rotator — better APY migration banners ── */}
                   {walletFull && (
-                    <YieldRotatorPlugin
-                      walletFull={walletFull}
-                      earnPositions={yieldVaultPositions.length ? yieldVaultPositions : (portfolioData?._earnFromPortfolio || portfolioData?.earnPositions || [])}
-                      jupFetch={jupFetch}
-                      getActiveProvider={getActiveProvider}
-                      push={push}
-                      T={T}
-                      isMobile={isMobile}
-                      onMigrationDone={() => { try { fetchPortfolioData(walletFull); } catch(e) { console.warn("onMigrationDone:", e); } }}
-                      onDirectMigrateRef={directMigrateRef}
-                    />
+                    <ErrorBoundary fallback={null}>
+                      <YieldRotatorPlugin
+                        walletFull={walletFull}
+                        earnPositions={yieldVaultPositions.length ? yieldVaultPositions : (portfolioData?._earnFromPortfolio || portfolioData?.earnPositions || [])}
+                        jupFetch={jupFetch}
+                        getActiveProvider={getActiveProvider}
+                        push={push}
+                        T={T}
+                        isMobile={isMobile}
+                        onMigrationDone={() => { try { fetchPortfolioData(walletFull); } catch(e) { console.warn("onMigrationDone:", e); } }}
+                        onDirectMigrateRef={directMigrateRef}
+                      />
+                    </ErrorBoundary>
                   )}
 
                   {/* ── Earn Positions ── */}
@@ -13524,6 +13540,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   )}
 
                 </div>
+                </ErrorBoundary>
               )}
 
               <div style={{ padding:"0 16px 16px" }}>
