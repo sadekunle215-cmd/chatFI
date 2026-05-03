@@ -9163,8 +9163,6 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           }
         }
 
-        }
-
       } else if (action === "EARN_DEPOSIT") {
         if (!walletFull) {
           push("ai", text + "\n\nConnect your wallet first to deposit into Earn.");
