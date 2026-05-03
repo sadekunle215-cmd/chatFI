@@ -4067,90 +4067,147 @@ function JupChatInner() {
       console.warn("[ChatFi Portfolio] Jupiter Portfolio API failed:", e?.message);
     }
 
-    // ── 2. Fallback: build balances from Ultra holdings if Portfolio API missed them ──
-    if (!results.walletBalances || Object.keys(results.walletBalances).length === 0) {
-      try {
-        // Try Helius backend first (most reliable for ALL SPL tokens)
-        const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
-        if (r.ok) {
-          const d = await r.json();
-          const splTokens = d?.tokens || [];
-          const balances = {};
-          const mintMap  = {};
-          const logoMap  = { ...TOKEN_LOGO_URLS };
-          for (const t of splTokens) {
-            if (!t.mint || t.amount <= 0) continue;
-            const sym = t.symbol || t.mint.slice(0,6);
-            balances[sym] = t.amount;
-            mintMap[sym]  = t.mint;
-            if (t.logoURI) logoMap[sym] = t.logoURI;
-          }
-          if (Object.keys(balances).length > 0) {
-            results.walletBalances = balances;
-            results.mintMap = { ...mintMap, ...(results.mintMap || {}) };
-            results.logoMap = { ...logoMap, ...(results.logoMap || {}) };
-            setPortfolio(balances);
+    // ── 2. Ultra holdings — ALWAYS run and MERGE (not a fallback) ───────────────
+    // The Jupiter Portfolio API often returns only SOL or misses SPL tokens
+    // entirely (e.g. memecoins, unknown tokens). We always fetch Ultra holdings
+    // and RPC SPL in parallel and merge them ON TOP of whatever Portfolio returned.
+    // Portfolio data wins for tokens it already has; Ultra/RPC fill in the rest.
+    try {
+      const apis = [
+        `https://api.jup.ag/ultra/v1/holdings/${walletAddress}`,
+        `https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`,
+      ];
+      let holdingsData = null;
+      for (const url of apis) {
+        try {
+          const r = await fetch(url, { signal: safeTimeout(10000) });
+          if (r.ok) { const d = await r.json(); if (d && !d.error) { holdingsData = d; break; } }
+        } catch {}
+      }
+      if (holdingsData) {
+        // Ensure we have a balances/mintMap/logoMap to merge into
+        if (!results.walletBalances) results.walletBalances = {};
+        if (!results.mintMap) results.mintMap = {};
+        if (!results.logoMap) results.logoMap = { ...TOKEN_LOGO_URLS };
+
+        // SOL — prefer RPC value (more accurate than Portfolio API)
+        const solAmt = holdingsData.uiAmount ??
+          (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : null);
+        if (solAmt != null && solAmt >= 0) {
+          results.walletBalances["SOL"] = solAmt;
+          results.mintMap["SOL"] = SOL_MINT;
+          results.logoMap["SOL"] = TOKEN_LOGO_URLS["SOL"] || results.logoMap["SOL"] || "";
+        }
+
+        // SPL tokens — add any that Portfolio API didn't already include
+        const tb = holdingsData.tokenBalances || holdingsData.tokens || {};
+        for (const [mint, data] of Object.entries(tb)) {
+          if (mint === SOL_MINT) continue;
+          const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null
+            ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
+          if (uiAmt <= 0) continue;
+          const sym = data?.symbol || mint.slice(0,4) + "…" + mint.slice(-4);
+          // Don't overwrite a symbol that Portfolio API already resolved
+          if (!results.walletBalances[sym]) {
+            results.walletBalances[sym] = uiAmt;
+            results.mintMap[sym] = mint;
+            results.logoMap[sym] = data?.logoURI || `https://img.jup.ag/tokens/${mint}`;
           }
         }
-      } catch (e) {
-        console.warn("[ChatFi Portfolio] Helius backend failed:", e?.message);
+        setPortfolio({ ...results.walletBalances });
       }
+    } catch (e) {
+      console.warn("[ChatFi Portfolio] Ultra holdings merge failed:", e?.message);
     }
 
-    // ── 3. Ultra holdings fallback (if still no balances) ────────────────────
-    if (!results.walletBalances || Object.keys(results.walletBalances).length === 0) {
-      try {
-        const apis = [
-          `https://api.jup.ag/ultra/v1/holdings/${walletAddress}`,
-          `https://lite-api.jup.ag/ultra/v1/holdings/${walletAddress}`,
-        ];
-        let holdingsData = null;
-        for (const url of apis) {
-          try {
-            const r = await fetch(url, { signal: safeTimeout(8000) });
-            if (r.ok) { const d = await r.json(); if (d && !d.error) { holdingsData = d; break; } }
-          } catch {}
+    // ── 3. Helius backend — always run and merge SPL tokens ──────────────────
+    // /api/portfolio uses a server-side Helius key which can resolve token metadata
+    // for memecoins and unlisted tokens that Ultra may return with no symbol.
+    try {
+      const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
+      if (r.ok) {
+        const d = await r.json();
+        const splTokens = d?.tokens || [];
+        if (!results.walletBalances) results.walletBalances = {};
+        if (!results.mintMap) results.mintMap = {};
+        if (!results.logoMap) results.logoMap = { ...TOKEN_LOGO_URLS };
+        for (const t of splTokens) {
+          if (!t.mint || t.amount <= 0) continue;
+          const sym = t.symbol || t.mint.slice(0,6);
+          // Helius wins on symbol resolution — it has richer metadata
+          results.walletBalances[sym] = t.amount;
+          results.mintMap[sym] = t.mint;
+          if (t.logoURI) results.logoMap[sym] = t.logoURI;
         }
-        if (holdingsData) {
-          const solAmt = holdingsData.uiAmount ?? (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : 0);
-          const balances  = { SOL: solAmt };
-          const mintMap   = { SOL: SOL_MINT };
-          const logoMap   = { ...TOKEN_LOGO_URLS };
-          const tb = holdingsData.tokenBalances || holdingsData.tokens || {};
-          for (const [mint, data] of Object.entries(tb)) {
-            if (mint === SOL_MINT) continue;
-            const uiAmt = data?.uiAmount ?? (data?.amount != null && data?.decimals != null
-              ? Number(data.amount) / Math.pow(10, data.decimals) : 0);
-            if (uiAmt <= 0) continue;
-            const sym = data?.symbol || mint.slice(0,4) + "…" + mint.slice(-4);
-            balances[sym] = uiAmt;
-            mintMap[sym]  = mint;
-            logoMap[sym]  = data?.logoURI || `https://img.jup.ag/tokens/${mint}`;
-          }
-          results.walletBalances = balances;
-          results.mintMap = mintMap;
-          results.logoMap = logoMap;
-          setPortfolio(balances);
+        if (Object.keys(results.walletBalances).length > 0) {
+          setPortfolio({ ...results.walletBalances });
         }
-      } catch (e) {
-        console.warn("[ChatFi Portfolio] Ultra holdings fallback failed:", e?.message);
       }
+    } catch (e) {
+      console.warn("[ChatFi Portfolio] Helius backend merge failed:", e?.message);
     }
 
-    // ── 4. Last-resort: SOL balance via RPC if everything else failed ─────────
-    if (!results.walletBalances || Object.keys(results.walletBalances).length === 0) {
+    // ── 4. RPC getTokenAccountsByOwner — last-resort SPL sweep ───────────────
+    // Only runs if we still have no SPL tokens at all (covers rate-limited wallets).
+    const splCount = Object.keys(results.walletBalances || {}).filter(k => k !== "SOL").length;
+    if (splCount === 0) {
       try {
         const solJson = await fetch(SOLANA_RPC, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"getBalance", params:[walletAddress] }),
           signal: safeTimeout(8000),
         }).then(r => r.json());
         const solAmt = (solJson?.result?.value || 0) / 1e9;
-        results.walletBalances = { SOL: solAmt };
-        results.mintMap = { SOL: SOL_MINT };
-        results.logoMap = { ...TOKEN_LOGO_URLS };
-      } catch {}
+
+        const splJson = await fetch(SOLANA_RPC, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc:"2.0", id:2, method:"getTokenAccountsByOwner",
+            params:[walletAddress, { programId: SPL_PROGRAM }, { encoding:"jsonParsed", commitment:"confirmed" }] }),
+          signal: safeTimeout(12000),
+        }).then(r => r.json());
+
+        if (!results.walletBalances) results.walletBalances = {};
+        if (!results.mintMap) results.mintMap = {};
+        if (!results.logoMap) results.logoMap = { ...TOKEN_LOGO_URLS };
+
+        results.walletBalances["SOL"] = solAmt;
+        results.mintMap["SOL"] = SOL_MINT;
+
+        const unknownMints = [];
+        for (const acc of (splJson.result?.value || [])) {
+          const info  = acc.account.data.parsed.info;
+          const uiAmt = info.tokenAmount?.uiAmount;
+          if (!uiAmt || uiAmt <= 0) continue;
+          const knownSym = Object.entries(tokenCacheRef.current || {}).find(([, v]) => v === info.mint)?.[0];
+          if (knownSym) {
+            results.walletBalances[knownSym] = uiAmt;
+            results.mintMap[knownSym] = info.mint;
+          } else {
+            unknownMints.push({ mint: info.mint, uiAmt });
+          }
+        }
+        // Resolve unknown mint symbols in parallel (capped at 30)
+        if (unknownMints.length > 0) {
+          const resolved = await Promise.allSettled(
+            unknownMints.slice(0, 30).map(({ mint, uiAmt }) =>
+              resolveMint(mint).then(({ sym, logo }) => ({ mint, uiAmt, sym, logo }))
+            )
+          );
+          for (const res of resolved) {
+            if (res.status !== "fulfilled") continue;
+            const { uiAmt, sym, logo, mint } = res.value;
+            if (!results.walletBalances[sym]) {
+              results.walletBalances[sym] = uiAmt;
+              results.mintMap[sym] = mint;
+              if (logo) results.logoMap[sym] = logo;
+            }
+          }
+        }
+        setPortfolio({ ...results.walletBalances });
+        console.log("[ChatFi Portfolio] RPC SPL sweep — tokens:", Object.keys(results.walletBalances).length);
+      } catch (e) {
+        console.warn("[ChatFi Portfolio] RPC SPL sweep failed:", e?.message);
+      }
     }
 
     // ── 5. Trigger orders ─────────────────────────────────────────────────────
