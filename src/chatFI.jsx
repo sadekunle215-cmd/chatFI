@@ -5634,7 +5634,24 @@ function JupChatInner() {
     if (!amount || parseFloat(amount) <= 0) return;
     if (!walletFull) { push("ai", "Connect your wallet first to send tokens."); return; }
     if (!mint) { push("ai", `Could not resolve mint for **${token}**. Try searching the token first.`); return; }
-    if (!checkBalance(token, parseFloat(amount), "this send")) return;
+
+    // Always fetch fresh balances before checking — portfolio state can be stale
+    // (e.g. race condition where doSend fires before setPortfolio resolves after
+    // WalletConnect / Jupiter Mobile connection). Check the fresh data directly
+    // rather than relying on setPortfolio having flushed into the React closure.
+    let liveBalances = portfolio;
+    try {
+      const freshBalances = await fetchSolanaBalances(walletFull);
+      if (freshBalances) { liveBalances = freshBalances; setPortfolio(freshBalances); }
+    } catch {}
+
+    // Inline balance check against liveBalances (not stale portfolio closure)
+    const sym = token?.toUpperCase();
+    const liveBal = liveBalances[sym] ?? 0;
+    if (parseFloat(amount) > 0 && liveBal < parseFloat(amount)) {
+      push("ai", `Insufficient balance for this send. You have **${liveBal.toFixed(4)} ${sym}** but need **${amount} ${sym}**.`);
+      return;
+    }
 
     const decimals  = token === "SOL" ? 9 : (tokenDecimalsRef.current[token.toUpperCase()] ?? 6);
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
