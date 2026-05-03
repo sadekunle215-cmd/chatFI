@@ -73,7 +73,7 @@ function symToMint(sym) {
 // ── Suggestion group (for PLUGIN_SUGGESTION_GROUPS) ───────────────────────────
 export const suggestionGroup = {
   label: "Yield Rotator",
-  color: "#38bdf8",
+  color: "#c7f284",
   items: [
     "Check my earn yield",
     "Find better APY pools",
@@ -297,11 +297,21 @@ export default function YieldRotatorPlugin({
         throw new Error(withdrawRes?.error || "No withdraw transaction returned");
       }
 
-      // Earn API returns an unsigned base64 transaction — sign and send via RPC directly
-      const withdrawTx     = VersionedTransaction.deserialize(b64ToBytes(withdrawRes.transaction));
+      // Refresh blockhash before signing — stale blockhash causes Custom:1 on-chain error
+      const withdrawTx = VersionedTransaction.deserialize(b64ToBytes(withdrawRes.transaction));
+      try {
+        const { blockhash } = await conn.getLatestBlockhash("confirmed");
+        withdrawTx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal — proceed with original blockhash */ }
       const withdrawSigned = await provider.signTransaction(withdrawTx);
-      const withdrawSig    = await conn.sendRawTransaction(withdrawSigned.serialize(), { skipPreflight: true, maxRetries: 3 });
-      if (!withdrawSig) throw new Error("No signature from withdraw tx");
+      // Send via RPC jsonrpc (same pattern as chatFI doEarnWithdraw)
+      const withdrawSendRes = await jupFetch(rpcUrl, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction",
+                params: [bytesToB64(withdrawSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }] },
+      });
+      const withdrawSig = withdrawSendRes?.result;
+      if (!withdrawSig) throw new Error(withdrawSendRes?.error?.message || "No signature from withdraw tx");
       await waitConfirm(withdrawSig);
       push("ai", `✅ Step 1/3 done — withdrawn from ${posSym} Earn. [Solscan](https://solscan.io/tx/${withdrawSig})`);
 
@@ -368,11 +378,20 @@ export default function YieldRotatorPlugin({
         throw new Error(depositRes?.error || "No deposit transaction returned");
       }
 
-      // Same pattern as withdraw — sign and send via RPC directly
-      const depositTx     = VersionedTransaction.deserialize(b64ToBytes(depositRes.transaction));
+      // Refresh blockhash before signing deposit tx
+      const depositTx = VersionedTransaction.deserialize(b64ToBytes(depositRes.transaction));
+      try {
+        const { blockhash } = await conn.getLatestBlockhash("confirmed");
+        depositTx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal */ }
       const depositSigned = await provider.signTransaction(depositTx);
-      const depositSig    = await conn.sendRawTransaction(depositSigned.serialize(), { skipPreflight: true, maxRetries: 3 });
-      if (!depositSig) throw new Error("No signature from deposit tx");
+      const depositSendRes = await jupFetch(rpcUrl, {
+        method: "POST",
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction",
+                params: [bytesToB64(depositSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }] },
+      });
+      const depositSig = depositSendRes?.result;
+      if (!depositSig) throw new Error(depositSendRes?.error?.message || "No signature from deposit tx");
       await waitConfirm(depositSig);
 
       push("ai",
@@ -406,11 +425,11 @@ export default function YieldRotatorPlugin({
       {/* Section header */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
         {/* rotate icon */}
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#c7f284" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
           <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
         </svg>
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#38bdf8", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#c7f284", letterSpacing: "0.08em", textTransform: "uppercase" }}>
           Better APY Available
         </span>
         <span style={{ fontSize: 10, color: T.text3, background: T.border, borderRadius: 8, padding: "1px 6px" }}>
@@ -424,13 +443,16 @@ export default function YieldRotatorPlugin({
         const usdVal  = op.posAmt; // already in display units if coming from portfolio
         const amtFmt  = usdVal > 0 ? `$${parseFloat(usdVal).toFixed(2)}` : "";
         const apyDiff = op.apyGap.toFixed(2);
+        // Token logos — use img.jup.ag CDN which works for all Solana tokens
+        const posLogo  = op.position?.logo || (op.posMint  ? `https://img.jup.ag/tokens/${op.posMint}`  : null);
+        const bestLogo = op.bestPool?.logoUrl || op.bestPool?.asset?.logo_url || (op.bestMint ? `https://img.jup.ag/tokens/${op.bestMint}` : null);
 
         return (
           <div key={key}
             style={{
               padding: "12px 14px",
-              background: "linear-gradient(135deg, #0f2233, #0d1c2a)",
-              border: "1px solid #38bdf844",
+              background: "linear-gradient(135deg, #0f1a0f, #0d1c0d)",
+              border: "1px solid #c7f28444",
               borderRadius: 12,
               fontSize: 12,
             }}>
@@ -438,17 +460,18 @@ export default function YieldRotatorPlugin({
             {/* Top row: current → best */}
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               {/* Current pool chip */}
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", background: T.surface, borderRadius: 8, padding: "5px 10px", minWidth: 64 }}>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", background: T.surface, borderRadius: 8, padding: "5px 10px", minWidth: 64, gap: 3 }}>
+                {posLogo && <img src={posLogo} alt={op.posSym} style={{ width: 18, height: 18, borderRadius: "50%", objectFit: "cover" }} onError={e => e.target.style.display = "none"} />}
                 <span style={{ fontSize: 11, fontWeight: 700, color: T.text2 }}>{op.posSym}</span>
-                <span style={{ fontSize: 10, color: T.text3, marginTop: 1 }}>{op.posApy.toFixed(2)}%</span>
+                <span style={{ fontSize: 10, color: T.text3 }}>{op.posApy.toFixed(2)}%</span>
               </div>
 
               {/* Arrow + gap badge */}
               <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <div style={{ height: 1, flex: 1, background: "#38bdf844" }}/>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: "#38bdf8" }}>+{apyDiff}%</span>
-                  <div style={{ height: 1, flex: 1, background: "#38bdf844" }}/>
+                  <div style={{ height: 1, flex: 1, background: "#c7f28444" }}/>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#c7f284" }}>+{apyDiff}%</span>
+                  <div style={{ height: 1, flex: 1, background: "#c7f28444" }}/>
                 </div>
                 {op.isCrossAsset && (
                   <span style={{ fontSize: 9, color: T.text3, fontStyle: "italic" }}>cross-asset swap</span>
@@ -456,9 +479,10 @@ export default function YieldRotatorPlugin({
               </div>
 
               {/* Best pool chip */}
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", background: "#0a2a1a", border: "1px solid #2d5a3d", borderRadius: 8, padding: "5px 10px", minWidth: 64 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#68d391" }}>{op.bestSym}</span>
-                <span style={{ fontSize: 10, color: "#68d391", marginTop: 1, fontWeight: 700 }}>{op.bestApy.toFixed(2)}%</span>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", background: "rgba(199,242,132,0.06)", border: "1px solid rgba(199,242,132,0.25)", borderRadius: 8, padding: "5px 10px", minWidth: 64, gap: 3 }}>
+                {bestLogo && <img src={bestLogo} alt={op.bestSym} style={{ width: 18, height: 18, borderRadius: "50%", objectFit: "cover" }} onError={e => e.target.style.display = "none"} />}
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#c7f284" }}>{op.bestSym}</span>
+                <span style={{ fontSize: 10, color: "#c7f284", fontWeight: 700 }}>{op.bestApy.toFixed(2)}%</span>
               </div>
             </div>
 
@@ -466,18 +490,18 @@ export default function YieldRotatorPlugin({
             {amtFmt && (
               <div style={{ fontSize: 11, color: T.text3, marginBottom: 8 }}>
                 Position: <span style={{ color: T.text2, fontWeight: 600 }}>{amtFmt}</span>
-                {op.isCrossAsset && <span style={{ marginLeft: 8, color: "#38bdf8" }}>Includes swap</span>}
+                {op.isCrossAsset && <span style={{ marginLeft: 8, color: "#c7f284" }}>Includes swap</span>}
               </div>
             )}
 
             {/* Progress bar during migration */}
             {isBusy && migrateStep && (
               <div style={{ marginBottom: 8 }}>
-                <div style={{ fontSize: 10, color: "#38bdf8", marginBottom: 4 }}>{migrateStep}</div>
+                <div style={{ fontSize: 10, color: "#c7f284", marginBottom: 4 }}>{migrateStep}</div>
                 <div style={{ height: 3, borderRadius: 3, background: T.border, overflow: "hidden" }}>
                   <div style={{
                     height: "100%",
-                    background: "linear-gradient(90deg, #38bdf8, #68d391)",
+                    background: "linear-gradient(90deg, #c7f284, #68d391)",
                     borderRadius: 3,
                     animation: "rotatorProgress 1.5s ease-in-out infinite",
                     width: "60%",
@@ -493,10 +517,10 @@ export default function YieldRotatorPlugin({
               style={{
                 width: "100%",
                 padding: "8px",
-                background: isBusy ? T.border : "linear-gradient(90deg, #0e3a5c, #0f4a3a)",
-                border: `1px solid ${isBusy ? T.border : "#38bdf866"}`,
+                background: isBusy ? T.border : "linear-gradient(90deg, #1a2e0a, #1a2e1a)",
+                border: `1px solid ${isBusy ? T.border : "#c7f28466"}`,
                 borderRadius: 8,
-                color: isBusy ? T.text3 : "#38bdf8",
+                color: isBusy ? T.text3 : "#c7f284",
                 fontSize: 12,
                 fontWeight: 700,
                 cursor: migrating ? "not-allowed" : "pointer",
@@ -512,8 +536,8 @@ export default function YieldRotatorPlugin({
                     display: "inline-block",
                     width: 10,
                     height: 10,
-                    border: "2px solid #38bdf844",
-                    borderTop: "2px solid #38bdf8",
+                    border: "2px solid #c7f28444",
+                    borderTop: "2px solid #c7f284",
                     borderRadius: "50%",
                     animation: "spin 0.8s linear infinite",
                   }}/>
@@ -539,7 +563,7 @@ export default function YieldRotatorPlugin({
         <div style={{ fontSize: 10, color: T.text3, textAlign: "right", marginTop: 2 }}>
           Last checked: {new Date(lastChecked).toLocaleTimeString()}
           <button onClick={runCheck}
-            style={{ marginLeft: 8, background: "none", border: "none", color: "#38bdf8", fontSize: 10, cursor: "pointer", padding: 0, textDecoration: "underline" }}>
+            style={{ marginLeft: 8, background: "none", border: "none", color: "#c7f284", fontSize: 10, cursor: "pointer", padding: 0, textDecoration: "underline" }}>
             refresh
           </button>
         </div>
