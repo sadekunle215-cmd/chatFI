@@ -2024,6 +2024,70 @@ const SvgDot = ({ color }) => (
   <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill={color}/></svg>
 );
 
+function EarnPositionCard({ e, i, sym, amt, label, vaults, walletFull, T, onRefresh, setShowPortfolio, send }) {
+  const [toggling, setToggling] = React.useState(false);
+  const matchedVault = (vaults || []).find(v =>
+    v.earnMint === e.mint || v.earnSymbol?.toLowerCase() === sym.toLowerCase()
+  );
+  const isAutoHarvest = matchedVault?.autoHarvest || false;
+
+  const toggleAutoHarvest = async () => {
+    if (!matchedVault) return;
+    if (!isAutoHarvest) {
+      const confirmed = window.confirm(
+        `Enable auto-harvest for ${sym} Earn?
+
+Your yield will be automatically harvested and swapped into ${matchedVault.targetTokenSymbol} when your $${matchedVault.thresholdUSD} threshold is reached. No manual action needed.
+
+You can disable this anytime.`
+      );
+      if (!confirmed) return;
+    }
+    setToggling(true);
+    try {
+      const action = isAutoHarvest ? "disable-auto-harvest" : "enable-auto-harvest";
+      const res = await fetch(`/api/yield-vault?action=${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: walletFull, vaultId: matchedVault.id }),
+      });
+      const data = await res.json();
+      if (data.success) onRefresh?.();
+    } catch(err) {
+      console.error("toggleAutoHarvest:", err);
+    } finally {
+      setToggling(false);
+    }
+  };
+
+  return (
+    <div style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+        <span style={{ color:T.text2 }}>{sym} <span style={{ fontSize:10, color:T.text3 }}>Earn{label}</span></span>
+        <span style={{ fontWeight:600, color:"#68d391" }}>{amt}</span>
+      </div>
+      {matchedVault && (
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, padding:"6px 8px", background:"rgba(104,211,145,0.04)", border:"1px solid rgba(104,211,145,0.12)", borderRadius:7 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="#68d391" stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+            <span style={{ fontSize:10, color: isAutoHarvest ? "#68d391" : T.text3, fontWeight: isAutoHarvest ? 600 : 400 }}>
+              {isAutoHarvest ? "Auto-harvest on" : "Auto-harvest off"}
+            </span>
+          </div>
+          <button onClick={toggleAutoHarvest} disabled={toggling}
+            style={{ width:32, height:17, borderRadius:9, background: isAutoHarvest ? "#68d391" : T.border, border:"none", cursor:"pointer", position:"relative", transition:"background 0.2s", padding:0, opacity: toggling ? 0.5 : 1 }}>
+            <div style={{ width:13, height:13, borderRadius:"50%", background:"#fff", position:"absolute", top:2, left: isAutoHarvest ? 17 : 2, transition:"left 0.2s" }}/>
+          </button>
+        </div>
+      )}
+      <button onClick={() => { setShowPortfolio(false); send("show my earn positions"); }} className="hov-btn"
+        style={{ width:"100%", padding:"5px", background:"rgba(104,211,145,0.08)", border:`1px solid rgba(104,211,145,0.25)`, borderRadius:7, color:"#68d391", fontSize:11, fontWeight:600, cursor:"pointer", transition:"all 0.15s" }}>
+        Withdraw
+      </button>
+    </div>
+  );
+}
+
 function YieldVaultPromptCard({ onSetVault }) {
   return (
     <div style={{
@@ -13171,87 +13235,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                               ? `$${usdVal.toFixed(usdVal < 1 ? 4 : 2)}`
                               : tokenAmt > 0 ? `${tokenAmt.toFixed(tokenAmt < 1 ? 6 : 4)} ${sym}` : `$0.00`;
                             const label = e.label ? ` · ${e.label}` : "";
-                            // Find matching vault for auto-harvest toggle
-                            const matchedVault = (vaults || []).find(v =>
-                              v.earnMint === e.mint || v.earnSymbol?.toLowerCase() === sym.toLowerCase()
-                            );
-                            const isAutoHarvest = matchedVault?.autoHarvest || false;
-                            const [togglingAutoHarvest, setTogglingAutoHarvest] = React.useState(false);
-
-                            const toggleAutoHarvest = async () => {
-                              if (!matchedVault || togglingAutoHarvest) return;
-                              if (isAutoHarvest === false) {
-                                // Warn user before enabling
-                                const confirmed = window.confirm(
-                                  `Enable auto-harvest for ${sym} Earn?
-
-Your yield will be automatically harvested and swapped into ${matchedVault.targetTokenSymbol} when your $${matchedVault.thresholdUSD} threshold is reached. No manual action needed.
-
-You can disable this anytime.`
-                                );
-                                if (!confirmed) return;
-                              }
-                              setTogglingAutoHarvest(true);
-                              try {
-                                const action = isAutoHarvest ? "disable-auto-harvest" : "enable-auto-harvest";
-                                const res = await fetch(`/api/yield-vault?action=${action}`, {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ wallet: walletFull, vaultId: matchedVault.id }),
-                                });
-                                const data = await res.json();
-                                if (data.success) onRefresh?.();
-                              } catch(err) {
-                                console.error("toggleAutoHarvest:", err);
-                              } finally {
-                                setTogglingAutoHarvest(false);
-                              }
-                            };
-
                             return (
-                              <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
-                                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
-                                  <span style={{ color:T.text2 }}>{sym} <span style={{ fontSize:10, color:T.text3 }}>Earn{label}</span></span>
-                                  <span style={{ fontWeight:600, color:"#68d391" }}>{amt}</span>
-                                </div>
-
-                                {/* Auto-harvest toggle — only show if vault is configured */}
-                                {matchedVault && (
-                                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, padding:"6px 8px", background:"rgba(104,211,145,0.04)", border:"1px solid rgba(104,211,145,0.12)", borderRadius:7 }}>
-                                    <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-                                      {/* lightning bolt icon */}
-                                      <svg width="11" height="11" viewBox="0 0 24 24" fill="#68d391" stroke="none">
-                                        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-                                      </svg>
-                                      <span style={{ fontSize:10, color: isAutoHarvest ? "#68d391" : T.text3, fontWeight: isAutoHarvest ? 600 : 400 }}>
-                                        {isAutoHarvest ? "Auto-harvest on" : "Auto-harvest off"}
-                                      </span>
-                                    </div>
-                                    {/* Toggle switch */}
-                                    <button
-                                      onClick={toggleAutoHarvest}
-                                      disabled={togglingAutoHarvest}
-                                      style={{
-                                        width: 32, height: 17, borderRadius: 9,
-                                        background: isAutoHarvest ? "#68d391" : T.border,
-                                        border: "none", cursor: "pointer", position: "relative",
-                                        transition: "background 0.2s", padding: 0, opacity: togglingAutoHarvest ? 0.5 : 1,
-                                      }}>
-                                      <div style={{
-                                        width: 13, height: 13, borderRadius: "50%", background: "#fff",
-                                        position: "absolute", top: 2,
-                                        left: isAutoHarvest ? 17 : 2,
-                                        transition: "left 0.2s",
-                                      }}/>
-                                    </button>
-                                  </div>
-                                )}
-
-                                <button onClick={() => { setShowPortfolio(false); send("show my earn positions"); }} className="hov-btn"
-                                  style={{ width:"100%", padding:"5px", background:"rgba(104,211,145,0.08)", border:`1px solid rgba(104,211,145,0.25)`, borderRadius:7, color:"#68d391", fontSize:11, fontWeight:600, cursor:"pointer", transition:"all 0.15s" }}>
-                                  Withdraw
-                                </button>
-                              </div>
+                              <EarnPositionCard
+                                key={i} i={i} e={e} sym={sym} amt={amt} label={label}
+                                vaults={vaults} walletFull={walletFull} T={T}
+                                onRefresh={() => fetchPortfolioData(walletFull)}
+                                setShowPortfolio={setShowPortfolio}
+                                send={send}
+                              />
                             );
                           })}
                         </div>
