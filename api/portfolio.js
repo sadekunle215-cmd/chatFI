@@ -152,6 +152,15 @@ async function fetchTokenBalances(wallet) {
       } catch { return { symbol: null, logoURI: null }; }
     };
 
+    // Run DAS lookups in parallel for all tokens Jupiter couldn't resolve (avoids sequential await timeout)
+    const needsDas = splMints.map((_, i) => {
+      const jupMeta = metaResults[i]?.status === "fulfilled" ? metaResults[i].value : null;
+      return !jupMeta?.symbol;
+    });
+    const dasResults = await Promise.allSettled(
+      splMints.map((m, i) => needsDas[i] ? dasLookup(m.mint) : Promise.resolve({ symbol: null, logoURI: null }))
+    );
+
     const prices   = priceRes?.data || {};
     const solPrice = parseFloat(prices[SOL_MINT]?.price || 0);
     const solUSD   = solAmt * solPrice;
@@ -161,15 +170,14 @@ async function fetchTokenBalances(wallet) {
       mint:     SOL_MINT,
       amount:   solAmt,
       usdValue: solUSD,
-      logoURI:  solMeta?.logoURI || solMeta?.icon || solMeta?.image || `https://img.jup.ag/tokens/${SOL_MINT}`,
+      logoURI:  "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
       price:    solPrice,
     }];
 
     for (let i = 0; i < splMints.length; i++) {
       const { mint, amount } = splMints[i];
       const jupMeta = metaResults[i]?.status === "fulfilled" ? metaResults[i].value : null;
-      // Fall back to Helius DAS if Jupiter doesn't know this token
-      const dasMeta = (!jupMeta?.symbol) ? await dasLookup(mint) : { symbol: null, logoURI: null };
+      const dasMeta = dasResults[i]?.status === "fulfilled" ? dasResults[i].value : { symbol: null, logoURI: null };
       const symbol  = jupMeta?.symbol || dasMeta.symbol || mint.slice(0, 6) + "…";
       const logoURI = jupMeta?.logoURI || jupMeta?.icon || jupMeta?.image
                     || dasMeta.logoURI || `https://img.jup.ag/tokens/${mint}`;
