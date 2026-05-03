@@ -3846,6 +3846,30 @@ function JupChatInner() {
         } catch {}
       }
 
+      // ── Helius fallback: fetch SPL tokens if Jupiter returned empty ────────────
+      // Jupiter's holdings API sometimes returns tokens:{} even when wallet has SPL tokens.
+      // Use our backend /api/portfolio?wallet= which calls Helius getTokenAccountsByOwner.
+      const hasSplFromJup = holdingsData && Object.keys(holdingsData.tokenBalances || holdingsData.tokens || {}).length > 0;
+      if (!hasSplFromJup) {
+        try {
+          const r = await fetch(`/api/portfolio?wallet=${walletAddress}`, { signal: safeTimeout(15000) });
+          if (r.ok) {
+            const d = await r.json();
+            const splTokens = d?.tokens || [];
+            if (splTokens.length > 0) {
+              // Merge into holdingsData shape
+              const tokens = {};
+              for (const t of splTokens) {
+                if (!t.mint || t.mint === SOL_MINT) continue;
+                tokens[t.mint] = { uiAmount: t.amount, symbol: t.symbol, decimals: 6, logoURI: t.logoURI };
+              }
+              const solAmt = holdingsData?.uiAmount ?? splTokens.find(t => t.mint === SOL_MINT)?.amount ?? 0;
+              holdingsData = { uiAmount: solAmt, tokens };
+            }
+          }
+        } catch {}
+      }
+
       if (holdingsData) {
         const solUiAmt2 = holdingsData.uiAmount ?? (holdingsData.nativeBalance != null ? holdingsData.nativeBalance / 1e9 : holdingsData.amount != null ? Number(holdingsData.amount) / 1e9 : 0);
         const balances = { SOL: solUiAmt2 };
@@ -4018,19 +4042,37 @@ function JupChatInner() {
 
         const toEarnPos = (el) => {
           const assets = el.data?.assets || el.data?.positions || [];
+          // el.name is typically "USDT Earn", "USDC Vault" etc — extract base symbol
+          const elSym = (el.name || el.label || "")
+            .replace(/\s*(earn|vault|lend|yield|pool|position)/gi, "").trim() || "Token";
           if (assets.length === 0) {
-            return [{ _fromPortfolio: true, label: el.label, symbol: el.name || el.label || "Token",
-              value: el.value, underlyingAssets: el.value, shares: 0, asset: { decimals: 6 } }];
+            return [{ _fromPortfolio: true, label: el.label,
+              sym: elSym, symbol: elSym,
+              // value is USD amount from portfolio API — use as amount for comparisons
+              amount: parseFloat(el.value || 0),
+              value: el.value,
+              underlyingAssets: el.value,
+              // APY from portfolio element if available
+              apy: parseFloat(el.data?.apy || el.data?.supplyApy || el.data?.rate || 0),
+              shares: 0, asset: { decimals: 6 } }];
           }
-          return assets.map(a => ({
-            _fromPortfolio: true, label: el.label,
-            symbol: a.symbol || a.name || el.name || "Token",
-            value: a.value ?? el.value,
-            underlyingBalance: a.underlyingBalance || 0,
-            underlyingAssets: a.underlyingAssets || a.underlyingBalance || a.amount || a.balance || a.depositedAmount || a.value,
-            shares: a.shares || 0,
-            asset: { decimals: a.decimals ?? a.asset?.decimals ?? 6 },
-          }));
+          return assets.map(a => {
+            const aSym = (a.symbol || a.name || elSym)
+              .replace(/^jl/i, "").replace(/\s*(earn|vault|lend)/gi, "").trim();
+            const usdVal = parseFloat(a.value ?? el.value ?? 0);
+            return {
+              _fromPortfolio: true, label: el.label,
+              sym: aSym, symbol: aSym,
+              amount: usdVal,
+              value: usdVal,
+              underlyingBalance: a.underlyingBalance || 0,
+              underlyingAssets: usdVal, // use USD value not raw shares
+              apy: parseFloat(a.apy || a.supplyApy || a.rate || el.data?.apy || 0),
+              shares: a.shares || 0,
+              mint: a.mint || a.tokenMint || a.assetMint || "",
+              asset: { decimals: a.decimals ?? a.asset?.decimals ?? 6 },
+            };
+          });
         };
         const toLockPos = (el) => {
           const assets = el.data?.assets || el.data?.positions || [];
@@ -12761,12 +12803,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                         </div>
                         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                           {earnPos.slice(0,5).map((e, i) => {
-                            const sym = e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
+                            const sym = e.sym || e.asset?.symbol || e.assetSymbol || e.symbol || "Token";
                             const ua  = parseFloat(e.underlyingBalance || e.underlyingAssets || e.underlying_assets || e.amount || e.balance || e.depositedAmount || 0);
                             const dec = e.asset?.decimals ?? e.decimals ?? 6;
-                            const amt = ua > 1e6 ? (ua/Math.pow(10,dec)).toFixed(4)
-                                      : ua > 0   ? ua.toFixed(4)
-                                      : parseFloat(e.value||0).toFixed(2);
+                            // If ua is raw shares (very large), convert; otherwise use as-is or fall back to USD value
+                            const amt = ua > 1e8 ? `$${(ua/Math.pow(10,dec)).toFixed(4)}`
+                                      : ua > 100  ? `$${parseFloat(e.value||ua).toFixed(2)}`
+                                      : ua > 0    ? `$${ua.toFixed(4)}`
+                                      : `$${parseFloat(e.value||0).toFixed(2)}`;
                             const label = e.label ? ` · ${e.label}` : "";
                             return (
                               <div key={i} style={{ padding:"10px 12px", background:T.bg, border:`1px solid ${T.border}`, borderRadius:10, fontSize:12 }}>
