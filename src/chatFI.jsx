@@ -6406,18 +6406,7 @@ function JupChatInner() {
     push("ai", `Depositing **${colAmount} ${collateral}** as collateral and borrowing **${borrowAmount} ${debt}**…`);
 
     try {
-      // 1. Build transactions on server
-      // Route through /api/lend-positions (POST) — no extra API file needed
-      const { ok, data } = await safeApiFetch("/api/lend-positions", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action:"borrow", vaultId, positionId:0, colAmount:colRaw, debtAmount:debtRaw, signer:walletFull }),
-      });
-      if (!ok || data.error) throw new Error(data.error || "Borrow API error");
-      if (!data.ixs?.length) throw new Error(data.error || "Borrow API returned no instructions.");
-
-      // 2. Deserialize instructions from server response
-      const { ixs: rawIxs, alts: rawAlts } = data;
+      const { AddressLookupTableAccount } = await import("@solana/web3.js");
 
       const deserializeIx = ix => ({
         programId: new PublicKey(ix.programId),
@@ -6425,40 +6414,64 @@ function JupChatInner() {
         data: Buffer.from(ix.data, "base64"),
       });
 
-      // Reconstruct AddressLookupTableAccount objects from serialized data
-      const { AddressLookupTableAccount } = await import("@solana/web3.js");
-      const altAccounts = (rawAlts || []).map(alt => new AddressLookupTableAccount({
+      const buildAltAccounts = (rawAlts) => (rawAlts || []).map(alt => new AddressLookupTableAccount({
         key:   new PublicKey(alt.key),
         state: { addresses: alt.addresses.map(a => new PublicKey(a)), deactivationSlot: BigInt("18446744073709551615"), lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0 },
       }));
 
-      const instructions = rawIxs.map(deserializeIx);
+      const signAndSend = async (ixs, alts) => {
+        const bhRes = await jupFetch(SOLANA_RPC, {
+          method: "POST",
+          body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
+        });
+        const blockhash = bhRes?.result?.value?.blockhash;
+        if (!blockhash) throw new Error("Could not fetch blockhash.");
+        const msg = new TransactionMessage({
+          payerKey: new PublicKey(walletFull),
+          recentBlockhash: blockhash,
+          instructions: ixs.map(deserializeIx),
+        }).compileToV0Message(buildAltAccounts(alts));
+        const tx       = new VersionedTransaction(msg);
+        const signedTx = await provider.signTransaction(tx);
+        const rpcRes   = await jupFetch(SOLANA_RPC, {
+          method: "POST",
+          body: { jsonrpc:"2.0", id:1, method:"sendTransaction",
+            params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true, maxRetries:5 }] },
+        });
+        const sig = rpcRes?.result;
+        if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+        return sig;
+      };
 
-      // 3. Fetch fresh blockhash immediately before building tx — minimises age at signing
-      const bhRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"finalized" }] },
+      // ── Step 1: Deposit collateral (creates new position, positionId=0) ──
+      const { ok: ok1, data: d1 } = await safeApiFetch("/api/lend-positions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action:"deposit", vaultId, positionId:0, colAmount:colRaw, signer:walletFull }),
       });
-      const freshBlockhash     = bhRes?.result?.value?.blockhash;
-      const lastValidBlockHeight = bhRes?.result?.value?.lastValidBlockHeight;
-      if (!freshBlockhash) throw new Error("Could not fetch fresh blockhash.");
+      if (!ok1 || d1.error) throw new Error(d1.error || "Deposit API error");
+      if (!d1.ixs?.length)  throw new Error("No deposit instructions returned.");
 
-      // 4. Build versioned tx client-side, sign + send with skipPreflight:true
-      // skipPreflight avoids wallet simulation blockhash mismatch errors
-      const msg = new TransactionMessage({
-        payerKey: new PublicKey(walletFull),
-        recentBlockhash: freshBlockhash,
-        instructions,
-      }).compileToV0Message(altAccounts);
-      const tx = new VersionedTransaction(msg);
-      const signedTx  = await provider.signTransaction(tx);
-      const rpcRes    = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true, maxRetries:5 }] },
+      push("ai", `Depositing **${colAmount} ${collateral}** as collateral…`);
+      const depositSig = await signAndSend(d1.ixs, d1.alts);
+      push("ai", `Collateral deposited ✓ — confirming…`);
+      await confirmTxLanded(depositSig);
+
+      const newPositionId = d1.positionId;
+      if (!newPositionId) throw new Error("No positionId returned after deposit.");
+
+      // Small wait for position to be fully indexed on-chain before borrow
+      await new Promise(r => setTimeout(r, 3000));
+
+      // ── Step 2: Borrow against the new position ────────────────────────
+      const { ok: ok2, data: d2 } = await safeApiFetch("/api/lend-positions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action:"borrow", vaultId, positionId:newPositionId, debtAmount:debtRaw, signer:walletFull }),
       });
-      const signature = rpcRes?.result;
-      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+      if (!ok2 || d2.error) throw new Error(d2.error || "Borrow API error");
+      if (!d2.ixs?.length)  throw new Error("No borrow instructions returned.");
 
+      push("ai", `Borrowing **${borrowAmount} ${debt}**…`);
+      const signature = await signAndSend(d2.ixs, d2.alts);
       push("ai", "Borrow transaction sent — confirming on-chain…");
       await confirmTxLanded(signature);
       setBorrowStatus("done");
