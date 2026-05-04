@@ -561,6 +561,11 @@ export default function YieldRotatorPlugin({
         });
       } catch { /* non-fatal — migration already succeeded */ }
 
+      // Brief delay — lets Firestore propagate the newly created vault before
+      // fetchEarnPositionsForVault re-fetches, preventing the "NO VAULT" ghost
+      // state that appears when the GET races the POST on the yield-vault API.
+      await new Promise(r => setTimeout(r, 1500));
+
       // Refresh opportunities after successful migration
       await runCheck();
       onMigrationDone?.();
