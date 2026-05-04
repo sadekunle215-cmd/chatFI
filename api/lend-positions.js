@@ -38,7 +38,7 @@ function serializeAlt(alt) {
 }
 
 async function buildOp({ vaultId, positionId, colAmount, debtAmount, signer, connection }) {
-  const { ixs, addressLookupTableAccounts, positionId: returnedPositionId } = await getOperateIx({
+  const { ixs, addressLookupTableAccounts, nftId } = await getOperateIx({
     vaultId:    Number(vaultId),
     positionId: Number(positionId ?? 0),
     colAmount:  new BN(colAmount.toString()),
@@ -50,7 +50,7 @@ async function buildOp({ vaultId, positionId, colAmount, debtAmount, signer, con
   return {
     ixs:        ixs.map(serializeIx),
     alts:       (addressLookupTableAccounts || []).map(serializeAlt),
-    positionId: returnedPositionId ?? positionId ?? 0,
+    nftId:      nftId ?? positionId ?? 0,
   };
 }
 
