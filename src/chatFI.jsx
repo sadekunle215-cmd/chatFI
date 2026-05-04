@@ -6434,15 +6434,17 @@ function JupChatInner() {
 
       const instructions = rawIxs.map(deserializeIx);
 
-      // 3. Fetch fresh blockhash RIGHT before signing (never expires)
+      // 3. Fetch fresh blockhash immediately before building tx — minimises age at signing
       const bhRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
+        body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"finalized" }] },
       });
-      const freshBlockhash = bhRes?.result?.value?.blockhash;
+      const freshBlockhash     = bhRes?.result?.value?.blockhash;
+      const lastValidBlockHeight = bhRes?.result?.value?.lastValidBlockHeight;
       if (!freshBlockhash) throw new Error("Could not fetch fresh blockhash.");
 
-      // 4. Build versioned tx client-side with fresh blockhash — sign + send
+      // 4. Build versioned tx client-side, sign + send with skipPreflight:true
+      // skipPreflight avoids wallet simulation blockhash mismatch errors
       const msg = new TransactionMessage({
         payerKey: new PublicKey(walletFull),
         recentBlockhash: freshBlockhash,
@@ -6452,7 +6454,7 @@ function JupChatInner() {
       const signedTx  = await provider.signTransaction(tx);
       const rpcRes    = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:false, maxRetries:3 }] },
+        body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true, maxRetries:5 }] },
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
