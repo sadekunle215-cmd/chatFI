@@ -2032,35 +2032,57 @@ function EarnPositionCard({ e, i, sym, amt, label, vaults, walletFull, T, onRefr
     v.earnMint === e.mint || v.earnSymbol?.toLowerCase() === sym.toLowerCase()
   );
 
-  // Persistent toggle state:
-  // Priority: 1) server vault autoHarvest field  2) localStorage fallback per wallet+sym
+  // localStorage key — wallet-scoped, used as instant-read cache only
   const lsKey = walletFull ? `chatfi-autoharvest-${walletFull.slice(0,8)}-${sym.toUpperCase()}` : null;
-  const readPersisted = () => {
+
+  const readInitial = () => {
+    // Server vault value wins
     if (matchedVault?.autoHarvest) return true;
+    // Fall back to localStorage cache (written after every successful save)
     if (lsKey) { try { return localStorage.getItem(lsKey) === "1"; } catch {} }
     return false;
   };
-  const [localHarvest, setLocalHarvest] = React.useState(readPersisted);
+
+  const [localHarvest, setLocalHarvest] = React.useState(readInitial);
   const isAutoHarvest = localHarvest;
 
-  // Re-sync whenever server vault data arrives / changes (e.g. after reconnect or refresh)
+  // Re-sync from server whenever vault data refreshes (reconnect / page reload)
   React.useEffect(() => {
-    const serverVal = matchedVault?.autoHarvest || false;
-    // Only override local state from server if server explicitly has a value
-    if (matchedVault) setLocalHarvest(serverVal);
+    if (matchedVault) setLocalHarvest(matchedVault.autoHarvest || false);
   }, [matchedVault?.autoHarvest, matchedVault?.id]);
 
-  const persist = (val) => {
+  // Persist to Firebase via API + localStorage cache
+  const persistHarvest = async (val) => {
+    // Always write localStorage cache immediately (works offline)
     if (lsKey) { try { val ? localStorage.setItem(lsKey, "1") : localStorage.removeItem(lsKey); } catch {} }
+    // Write to Firebase via the yield-vault API (cross-device, survives refresh)
+    if (walletFull) {
+      try {
+        await fetch(`/api/yield-vault?action=set-harvest-pref`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wallet: walletFull,
+            sym: sym.toUpperCase(),
+            earnMint: e.mint || "",
+            autoHarvest: val,
+            ...(matchedVault ? { vaultId: matchedVault.id } : {}),
+          }),
+        });
+      } catch(err) {
+        console.warn("persistHarvest API:", err);
+        // localStorage already written above — user won't notice
+      }
+    }
   };
 
   const toggleAutoHarvest = async () => {
     const next = !isAutoHarvest;
 
-    // No vault configured + turning ON → prompt Yield Vault setup
+    // No vault + turning ON → prompt Yield Vault setup
     if (!matchedVault && next) {
       setLocalHarvest(true);
-      persist(true);
+      await persistHarvest(true);
       const confirmed = window.confirm(
         `Set up Yield Vault for ${sym} Earn?\n\nYield Vault will automatically harvest and swap your ${sym} yield into any token you choose whenever it reaches a threshold you set.\n\nTap OK to open Yield Vault setup.`
       );
@@ -2068,12 +2090,12 @@ function EarnPositionCard({ e, i, sym, amt, label, vaults, walletFull, T, onRefr
         send("set yield vault");
       } else {
         setLocalHarvest(false);
-        persist(false);
+        await persistHarvest(false);
       }
       return;
     }
 
-    // Vault exists — toggle via API
+    // Vault exists → use the existing enable/disable-auto-harvest API (already Firebase-backed)
     if (matchedVault) {
       if (next) {
         const confirmed = window.confirm(
@@ -2082,7 +2104,7 @@ function EarnPositionCard({ e, i, sym, amt, label, vaults, walletFull, T, onRefr
         if (!confirmed) return;
       }
       setLocalHarvest(next);
-      persist(next);
+      await persistHarvest(next);
       setToggling(true);
       try {
         const action = next ? "enable-auto-harvest" : "disable-auto-harvest";
@@ -2092,19 +2114,20 @@ function EarnPositionCard({ e, i, sym, amt, label, vaults, walletFull, T, onRefr
           body: JSON.stringify({ wallet: walletFull, vaultId: matchedVault.id }),
         });
         const data = await res.json();
-        if (!data.success) { setLocalHarvest(!next); persist(!next); } // revert on failure
+        if (!data.success) { setLocalHarvest(!next); await persistHarvest(!next); }
         else onRefresh?.();
       } catch(err) {
         console.error("toggleAutoHarvest:", err);
-        setLocalHarvest(!next); persist(!next);
+        setLocalHarvest(!next); await persistHarvest(!next);
       } finally {
         setToggling(false);
       }
-    } else {
-      // No vault, turning off — persist locally
-      setLocalHarvest(next);
-      persist(next);
+      return;
     }
+
+    // No vault, turning OFF — just persist
+    setLocalHarvest(next);
+    await persistHarvest(next);
   };
 
   return (
@@ -5471,6 +5494,22 @@ function JupChatInner() {
       const res = await fetch(`/api/yield-vault?wallet=${walletFull}`);
       const data = await res.json();
       if (data.vaults) setYieldVaultSaved(data.vaults);
+      // Sync autoHarvest flags from vault records into localStorage cache
+      // so EarnPositionCard reads the correct value instantly on next mount
+      if (data.vaults?.length) {
+        data.vaults.forEach(v => {
+          if (!v.earnSymbol) return;
+          const lsKey = `chatfi-autoharvest-${walletFull.slice(0,8)}-${v.earnSymbol.toUpperCase()}`;
+          try { v.autoHarvest ? localStorage.setItem(lsKey, "1") : localStorage.removeItem(lsKey); } catch {}
+        });
+      }
+      // Also read standalone harvest prefs (for positions without a vault)
+      if (data.harvestPrefs) {
+        Object.entries(data.harvestPrefs).forEach(([sym, val]) => {
+          const lsKey = `chatfi-autoharvest-${walletFull.slice(0,8)}-${sym.toUpperCase()}`;
+          try { val ? localStorage.setItem(lsKey, "1") : localStorage.removeItem(lsKey); } catch {}
+        });
+      }
     } catch {}
   };
 
