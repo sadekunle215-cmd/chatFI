@@ -48,9 +48,9 @@ async function buildOp({ vaultId, positionId, colAmount, debtAmount, signer, con
   });
   if (!ixs?.length) throw new Error("No instructions returned from getOperateIx");
   return {
-    ixs:        ixs.map(serializeIx),
-    alts:       (addressLookupTableAccounts || []).map(serializeAlt),
-    nftId:      nftId ?? positionId ?? 0,
+    ixs:  ixs.map(serializeIx),
+    alts: (addressLookupTableAccounts || []).map(serializeAlt),
+    nftId: nftId ?? null,
   };
 }
 
