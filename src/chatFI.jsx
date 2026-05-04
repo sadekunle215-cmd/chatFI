@@ -5274,7 +5274,7 @@ function JupChatInner() {
             liquidityExchangePrice,
             protocol:     "Jupiter Lend",
             description:  `Supply ${v.asset?.symbol || v.symbol || ""}${rewardsRateRaw > 0 ? ` · Rewards ${fmtApy(rewardsRateRaw)}` : ""}`,
-            logoUrl:      v.asset?.logo_url || v.logoUrl || "",
+            logoUrl:      v.asset?.logoURI || v.asset?.logo_url || v.asset?.logoUrl || v.logoURI || v.logoUrl || (v.asset?.address ? `https://img.jup.ag/tokens/${v.asset.address}` : ""),
             price:        v.asset?.price || 0,
           };
         }).sort((a, b) => b.apy - a.apy);
@@ -13740,7 +13740,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 apyDisplay: vault.apyDisplay || (parseFloat(vault.apy||0).toFixed(2) + "%"),
                 mint:       vault.assetMint || "",
                 vaultId:    vault.id || "",
-                logoUrl:    vault.logoUrl || "",
+                logoUrl:    vault.logoUrl || (vault.assetMint ? `https://img.jup.ag/tokens/${vault.assetMint}` : ""),
               });
             }
 
