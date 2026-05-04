@@ -2987,7 +2987,7 @@ function JupChatInner() {
 
   // UI
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [directMode,  setDirectMode]  = useState(false);
+  const [directMode,  setDirectMode]  = useState(() => localStorage.getItem("chatfi_directMode") === "true");
   const [pendingDirectAction, setPendingDirectAction] = useState(null); // { type, label, exec }
   const [chatHistory, setChatHistory] = useState([{ id:"default", title:"New conversation", active:true }]);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
@@ -11143,7 +11143,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 <div style={{ fontSize:12, fontWeight:600, color:T.text1 }}>Direct Mode</div>
                 <div style={{ fontSize:10, color:T.text3, marginTop:1 }}>Transact without panels</div>
               </div>
-              <button onClick={() => setDirectMode(d => !d)} style={{
+              <button onClick={() => setDirectMode(d => { const next = !d; localStorage.setItem("chatfi_directMode", next); return next; })} style={{
                 width:44, height:24, borderRadius:12, border:"none", cursor:"pointer", padding:0,
                 background: directMode ? T.green : T.border,
                 transition:"background 0.2s", position:"relative", flexShrink:0,
