@@ -54,6 +54,8 @@ async function buildOp({ vaultId, positionId, colAmount, debtAmount, signer, con
     cluster:    "mainnet",
   });
   if (!ixs?.length) throw new Error("No instructions returned from getOperateIx");
+  // Debug: log instruction programs to help diagnose on-chain errors
+  console.log(`[buildOp] vaultId=${vaultId} positionId=${positionId} ixCount=${ixs.length} programs=${ixs.map(ix => ix.programId.toBase58().slice(0,8)).join(",")}`);
   return {
     ixs:  ixs.map(serializeIx),
     alts: (addressLookupTableAccounts || []).map(serializeAlt),
