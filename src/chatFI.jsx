@@ -6508,49 +6508,24 @@ function JupChatInner() {
         return sig;
       };
 
-      // ── Step 1: Deposit collateral (creates new position, positionId=0) ──
+      // ── Single tx: deposit collateral + borrow in one call (positionId=0 = new position) ──
       const { ok: ok1, data: d1 } = await safeApiFetch("/api/lend-positions", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action:"deposit", vaultId, positionId:0, colAmount:colRaw, signer:walletFull }),
+        body: JSON.stringify({ action:"deposit_and_borrow", vaultId, colAmount:colRaw, debtAmount:debtRaw, signer:walletFull }),
       });
-      if (!ok1 || d1.error) throw new Error(d1.error || "Deposit API error");
-      if (!d1.ixs?.length)  throw new Error("No deposit instructions returned.");
+      if (!ok1 || d1.error) throw new Error(d1.error || "Deposit & Borrow API error");
+      if (!d1.ixs?.length)  throw new Error("No instructions returned.");
 
-      push("ai", `Depositing **${colAmount} ${collateral}** as collateral…`);
-      const depositSig = await signAndSend(d1.ixs, d1.alts);
-      push("ai", `Collateral deposited ✓ — confirming…`);
-      await confirmTxLanded(depositSig);
-
-      // SDK returns nftId directly — use it; fall back to chain query if missing
-      let newPositionId = d1.nftId;
-      if (!newPositionId) {
-        push("ai", "Fetching position ID from chain…");
-        await new Promise(r => setTimeout(r, 3000));
-        const posRes = await fetch(`/api/lend-positions?wallet=${walletFull}&all=1`);
-        const posData = await posRes.json();
-        const newPos = (posData.positions || []).find(p => String(p.vaultId) === String(vaultId));
-        if (!newPos?.positionId) throw new Error("No positionId returned after deposit.");
-        newPositionId = newPos.positionId;
-      }
-
-      // ── Step 2: Borrow against the new position ────────────────────────
-      const { ok: ok2, data: d2 } = await safeApiFetch("/api/lend-positions", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action:"borrow", vaultId, positionId:newPositionId, debtAmount:debtRaw, signer:walletFull }),
-      });
-      if (!ok2 || d2.error) throw new Error(d2.error || "Borrow API error");
-      if (!d2.ixs?.length)  throw new Error("No borrow instructions returned.");
-
-      push("ai", `Borrowing **${borrowAmount} ${debt}**…`);
-      const signature = await signAndSend(d2.ixs, d2.alts);
-      push("ai", "Borrow transaction sent — confirming on-chain…");
+      push("ai", `Signing deposit + borrow transaction…`);
+      const signature = await signAndSend(d1.ixs, d1.alts);
+      push("ai", "Transaction sent — confirming on-chain…");
       await confirmTxLanded(signature);
       setBorrowStatus("done");
       setShowBorrow(false);
       push("ai",
         "Borrow confirmed ✓\n\n" +
-        "Deposited: **" + colAmount + " " + collateral + "** deposited as collateral\n" +
-        "Borrowed: **" + borrowAmount + " " + debt + "** borrowed to your wallet\n\n" +
+        "Deposited: **" + colAmount + " " + collateral + "** as collateral\n" +
+        "Borrowed: **" + borrowAmount + " " + debt + "** to your wallet\n\n" +
         "Position NFT is in your wallet.\nTx: `" + signature.slice(0,20) + "…`\n" +
         "[View on Solscan →](https://solscan.io/tx/" + signature + ")\n\n" +
         "Note: Monitor your LTV at [jup.ag/lend](https://jup.ag/lend) to avoid liquidation."
