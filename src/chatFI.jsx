@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Connection, Transaction, VersionedTransaction, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { Connection, Transaction, VersionedTransaction, TransactionMessage, Keypair, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, createTransferInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import nacl from "tweetnacl"; // used for invite keypair signing in Jupiter Send
 
@@ -6416,39 +6416,62 @@ function JupChatInner() {
       if (!ok || data.error) throw new Error(data.error || "Borrow API error");
       if (!data.transaction) throw new Error("No transaction returned from borrow API.");
 
-      // 2. Fetch fresh blockhash RIGHT before signing (avoids "blockhash not found" expiry)
-      const bhRes = await jupFetch(SOLANA_RPC, {
-        method: "POST",
-        body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
-      });
-      let freshBlockhash = bhRes?.result?.value?.blockhash;
-      if (!freshBlockhash) throw new Error("Could not fetch fresh blockhash.");
+      // 2. Deserialize instructions returned by server
+      const { mainIxs: rawMainIxs, setupIxs: rawSetupIxs, altKeys } = data;
 
-      // 3. If setupTransaction exists — patch blockhash, sign + send first
-      if (data.setupTransaction) {
-        const setupBytes = b64ToBytes(data.setupTransaction);
-        const setupTx    = Transaction.from(setupBytes);
-        setupTx.recentBlockhash = freshBlockhash;
+      const deserializeIx = (ix) => ({
+        programId: new PublicKey(ix.programId),
+        keys: ix.keys.map(k => ({ pubkey: new PublicKey(k.pubkey), isSigner: k.isSigner, isWritable: k.isWritable })),
+        data: Buffer.from(ix.data, "base64"),
+      });
+
+      const mainIxs  = (rawMainIxs  || []).map(deserializeIx);
+      const setupIxs = (rawSetupIxs || []).map(deserializeIx);
+
+      // 3. Fetch ALTs so versioned tx can resolve accounts
+      const altAccounts = await Promise.all(
+        (altKeys || []).map(async key => {
+          const res = await jupFetch(SOLANA_RPC, {
+            method: "POST",
+            body: { jsonrpc:"2.0", id:1, method:"getAddressLookupTable", params:[key] },
+          });
+          return res?.result?.value || null;
+        })
+      ).then(r => r.filter(Boolean));
+
+      // 4. If setup ixs exist — build + sign + send legacy tx first (creates position NFT)
+      if (setupIxs.length > 0) {
+        const bhRes0 = await jupFetch(SOLANA_RPC, {
+          method: "POST",
+          body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
+        });
+        const bh0 = bhRes0?.result?.value?.blockhash;
+        if (!bh0) throw new Error("Could not fetch blockhash for setup tx.");
+        const setupTx = new Transaction();
+        setupTx.recentBlockhash = bh0;
+        setupTx.feePayer = new PublicKey(walletFull);
+        setupTx.add(...setupIxs);
         const signedSetup = await provider.signTransaction(setupTx);
-        const setupRes    = await jupFetch(SOLANA_RPC, {
+        const setupRes = await jupFetch(SOLANA_RPC, {
           method: "POST",
           body: { jsonrpc:"2.0", id:1, method:"sendTransaction", params:[bytesToB64(signedSetup.serialize()), { encoding:"base64", skipPreflight:false }] },
         });
         const setupSig = setupRes?.result;
-        if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction (create position) failed to send.");
+        if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction failed.");
         await new Promise(r => setTimeout(r, 4000));
-        // Refresh blockhash again after the wait
-        const bhRes2 = await jupFetch(SOLANA_RPC, {
-          method: "POST",
-          body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
-        });
-        if (bhRes2?.result?.value?.blockhash) freshBlockhash = bhRes2.result.value.blockhash;
       }
 
-      // 4. Patch fresh blockhash into main versioned tx, sign + send
-      const bytes  = b64ToBytes(data.transaction);
-      const tx     = VersionedTransaction.deserialize(bytes);
-      tx.message.recentBlockhash = freshBlockhash;
+      // 5. Fetch fresh blockhash RIGHT before building main tx
+      const bhRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
+      });
+      const freshBlockhash = bhRes?.result?.value?.blockhash;
+      if (!freshBlockhash) throw new Error("Could not fetch fresh blockhash.");
+
+      // 6. Build versioned tx client-side with fresh blockhash, sign + send
+      const msg    = new TransactionMessage({ payerKey: new PublicKey(walletFull), recentBlockhash: freshBlockhash, instructions: mainIxs }).compileToV0Message(altAccounts);
+      const tx     = new VersionedTransaction(msg);
       const signedTx  = await provider.signTransaction(tx);
       const rpcRes    = await jupFetch(SOLANA_RPC, {
         method: "POST",
