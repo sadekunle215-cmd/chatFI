@@ -13720,67 +13720,80 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Best Yield Panel — standalone, triggered by chat keywords ──── */}
           {showYieldRotator && walletFull && (() => {
-            // Build user positions with their current APY
+            // Build user positions with their current APY from earnVaults
             const positions = [];
             for (const [sym, pos] of Object.entries(earnUserPositions || {})) {
               if (!pos || parseFloat(pos.amount || 0) <= 0) continue;
-              const vault = earnVaults.find(v =>
+              // Find the vault the user is currently in for this token
+              // Pick the one with lowest APY match (their current pool) — or just first match
+              const matchingVaults = earnVaults.filter(v =>
                 (v.token  || "").toUpperCase() === sym.toUpperCase() ||
                 (v.symbol || "").toUpperCase() === sym.toUpperCase()
               );
-              if (!vault) continue;
+              if (!matchingVaults.length) continue;
+              // User's current vault = lowest APY among same-token vaults (most conservative match)
+              const vault = matchingVaults.reduce((a, b) => a.apy <= b.apy ? a : b);
               positions.push({
                 sym, symbol: sym,
-                amount: parseFloat(pos.amount || 0),
-                value:  parseFloat(pos.amount || 0),
-                apy:    parseFloat(vault.apy || 0),
+                amount:     parseFloat(pos.amount || 0),
+                apy:        parseFloat(vault.apy || 0),
                 apyDisplay: vault.apyDisplay || (parseFloat(vault.apy||0).toFixed(2) + "%"),
-                mint:   vault.assetMint || "",
-                planId: vault.id || "",
-                logoUrl: vault.logoUrl || "",
+                mint:       vault.assetMint || "",
+                vaultId:    vault.id || "",
+                logoUrl:    vault.logoUrl || "",
               });
             }
 
-            // For each user position, find the single best APY vault for the same token family
-            // (across all earnVaults), then for cross-token find top APY vault overall
-            const sortedVaults = [...earnVaults].sort((a,b) => b.apy - a.apy);
-            const topVault = sortedVaults[0]; // overall best APY vault
+            // All vaults sorted best APY first
+            const sortedVaults = [...earnVaults].sort((a, b) => b.apy - a.apy);
 
+            // For each user position, find the absolute best APY vault across ALL earn tokens
+            // (USDC, USDT, SOL, USDG, etc.) — not just the same token
             const comparisons = positions.map(pos => {
-              // Best vault for same token
-              const sameToken = sortedVaults.find(v =>
-                (v.token||"").toUpperCase() === pos.sym.toUpperCase() && v.planId !== pos.planId
-              );
-              // Best vault across all tokens (different from user's current)
-              const crossBest = sortedVaults.find(v =>
-                (v.token||"").toUpperCase() !== pos.sym.toUpperCase()
-              );
-              const bestSameApy = sameToken ? sameToken.apy : 0;
-              const bestSameSym = sameToken ? sameToken.token : null;
-              // Is user already in best pool for their token?
-              const alreadyBest = !sameToken || pos.apy >= bestSameApy;
-              return { pos, sameToken, crossBest, alreadyBest };
+              // Best same-token vault (user stays in same asset)
+              const bestSameToken = sortedVaults.find(v =>
+                (v.token||"").toUpperCase() === pos.sym.toUpperCase()
+              ) || null;
+              // Best vault across ALL tokens (may be a different asset entirely)
+              const bestAnyToken = sortedVaults[0] || null;
+              // Pick whichever is truly highest APY
+              const bestVault = (bestAnyToken && bestSameToken && bestAnyToken.apy > bestSameToken.apy + 0.01)
+                ? bestAnyToken
+                : bestSameToken;
+              // User is already at best if their APY >= best available (within 0.01% tolerance)
+              const alreadyBest = !bestVault || pos.apy >= bestVault.apy - 0.01;
+              // Flag if the best is a different token (so UI can show a note)
+              const isCrossToken = bestVault && (bestVault.token||"").toUpperCase() !== pos.sym.toUpperCase();
+              return { pos, bestVault, alreadyBest, isCrossToken };
             });
 
-            const SvgZapIcon = () => (
-              <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-              </svg>
-            );
-            const SvgArrowRight = () => (
-              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-              </svg>
-            );
-            const SvgExternalLink = ({size=13}) => (
-              <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
-              </svg>
-            );
+            // ── Local UI state (inline, inside IIFE) via a ref trick ──
+            // We use a small stateful wrapper component so we can have local state
+            // for the "show all pools" toggle without polluting parent state.
+            const BestYieldPanelInner = React.memo(() => {
+              const [showAllPools, setShowAllPools] = React.useState(false);
 
-            return (
-              <ErrorBoundary fallback={null}>
+              const SvgZapIcon = () => (
+                <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                </svg>
+              );
+              const TokenLogo = ({ logoUrl, symbol, size=26 }) => (
+                logoUrl ? (
+                  <img
+                    src={logoUrl}
+                    alt={symbol}
+                    style={{ width:size, height:size, borderRadius:"50%", objectFit:"cover", flexShrink:0 }}
+                    onError={e => { e.target.style.display="none"; e.target.nextSibling && (e.target.nextSibling.style.display="flex"); }}
+                  />
+                ) : (
+                  <div style={{ width:size, height:size, borderRadius:"50%", background: T.accent+"33", display:"flex", alignItems:"center", justifyContent:"center", fontSize:size*0.42, fontWeight:700, color:T.accent, flexShrink:0 }}>
+                    {(symbol||"?")[0]}
+                  </div>
+                )
+              );
+
+              return (
                 <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", background: T.surface, border:`1px solid ${T.border}`, borderRadius:12, overflow:"hidden" }}>
                   {/* Header */}
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 16px", borderBottom:`1px solid ${T.border}` }}>
@@ -13791,19 +13804,15 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   </div>
 
                   {positions.length === 0 ? (
-                    /* No open positions — show top available pools + link */
+                    /* No open positions — show top available pools inline */
                     <div style={{ padding:16 }}>
                       <div style={{ fontSize:13, color:T.text3, marginBottom:14 }}>
-                        No active earn positions found. Here are the top available pools — deposit to start earning:
+                        No active earn positions found. Here are the top available pools:
                       </div>
-                      {sortedVaults.slice(0,4).map((v,i) => (
+                      {(showAllPools ? sortedVaults : sortedVaults.slice(0, 4)).map((v, i) => (
                         <div key={v.id||i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", marginBottom:8, background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
                           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                            {v.logoUrl ? (
-                              <img src={v.logoUrl} alt={v.token} style={{ width:28,height:28,borderRadius:"50%",objectFit:"cover" }} onError={e=>{e.target.style.display="none"}} />
-                            ) : (
-                              <div style={{ width:28,height:28,borderRadius:"50%",background:T.border,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:T.text2 }}>{(v.token||"?")[0]}</div>
-                            )}
+                            <TokenLogo logoUrl={v.logoUrl} symbol={v.token} size={28} />
                             <div>
                               <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{v.token}</div>
                               <div style={{ fontSize:11, color:T.text3 }}>Jupiter Earn</div>
@@ -13815,25 +13824,26 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           </div>
                         </div>
                       ))}
-                      <a href="https://jup.ag/earn" target="_blank" rel="noopener noreferrer"
-                        style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, marginTop:4, padding:"9px", borderRadius:8, background:"none", border:`1px solid ${T.border}`, color:T.accent, fontSize:12, fontWeight:600, textDecoration:"none" }}>
-                        View all pools on Jupiter Earn <SvgExternalLink />
-                      </a>
+                      <button
+                        onClick={() => setShowAllPools(p => !p)}
+                        style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, width:"100%", marginTop:4, padding:"9px", borderRadius:8, background:"none", border:`1px solid ${T.border}`, color:T.accent, fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                        {showAllPools ? "Show less" : `Explore all ${sortedVaults.length} pools on Jupiter Earn`}
+                        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points={showAllPools ? "18 15 12 9 6 15" : "6 9 12 15 18 9"}/>
+                        </svg>
+                      </button>
                     </div>
                   ) : (
                     /* User has positions — show comparison cards */
                     <div style={{ padding:"12px 16px 8px" }}>
                       <div style={{ fontSize:12, color:T.text3, marginBottom:12 }}>Comparing your open positions against available pools:</div>
-                      {comparisons.map(({ pos, sameToken, crossBest, alreadyBest }, idx) => (
-                        <div key={pos.sym+idx} style={{ marginBottom:12, background:T.bg, border:`1px solid ${alreadyBest ? T.green+"55" : T.border}`, borderRadius:10, overflow:"hidden" }}>
+
+                      {comparisons.map(({ pos, bestVault, alreadyBest, isCrossToken }, idx) => (
+                        <div key={pos.sym+idx} style={{ marginBottom:12, background:T.bg, border:`1px solid ${alreadyBest ? T.green+"55" : T.accent+"55"}`, borderRadius:10, overflow:"hidden" }}>
                           {/* Current position row */}
                           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 14px", borderBottom:`1px solid ${T.border}` }}>
                             <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-                              {pos.logoUrl ? (
-                                <img src={pos.logoUrl} alt={pos.sym} style={{ width:26,height:26,borderRadius:"50%",objectFit:"cover" }} onError={e=>{e.target.style.display="none"}} />
-                              ) : (
-                                <div style={{ width:26,height:26,borderRadius:"50%",background:T.border,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:T.text2 }}>{pos.sym[0]}</div>
-                              )}
+                              <TokenLogo logoUrl={pos.logoUrl} symbol={pos.sym} size={26} />
                               <div>
                                 <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{pos.sym} Earn</div>
                                 <div style={{ fontSize:11, color:T.text3 }}>{pos.amount.toLocaleString(undefined,{maximumFractionDigits:4})} {pos.sym}</div>
@@ -13846,39 +13856,43 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           </div>
 
                           {alreadyBest ? (
-                            /* Already best */
+                            /* Already in best pool across all tokens */
                             <div style={{ padding:"9px 14px", display:"flex", alignItems:"center", gap:7 }}>
                               <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={T.green} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                              <span style={{ fontSize:12, color:T.green, fontWeight:600 }}>Already in best available APY for {pos.sym}</span>
+                              <span style={{ fontSize:12, color:T.green, fontWeight:600 }}>Best APY across all Jupiter Earn pools ✓</span>
                             </div>
-                          ) : sameToken ? (
-                            /* Better pool found */
+                          ) : bestVault ? (
+                            /* Better pool found — same or different token */
                             <div style={{ padding:"10px 14px" }}>
-                              <div style={{ fontSize:11, color:T.text3, marginBottom:8 }}>Better pool available:</div>
-                              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
-                                <div style={{ display:"flex", alignItems:"center", gap:7 }}>
-                                  {sameToken.logoUrl ? (
-                                    <img src={sameToken.logoUrl} alt={sameToken.token} style={{ width:22,height:22,borderRadius:"50%",objectFit:"cover" }} onError={e=>{e.target.style.display="none"}} />
-                                  ) : (
-                                    <div style={{ width:22,height:22,borderRadius:"50%",background:T.border,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:T.text2 }}>{(sameToken.token||"?")[0]}</div>
-                                  )}
-                                  <span style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{sameToken.token} Earn</span>
-                                  <span style={{ fontSize:11, color:T.text3 }}>Jupiter Earn</span>
+                              <div style={{ fontSize:11, color:T.text3, marginBottom:8 }}>
+                                {isCrossToken
+                                  ? `Higher yield available in a different token (${bestVault.token}):`
+                                  : "Better pool available:"}
+                              </div>
+                              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0 }}>
+                                  <TokenLogo logoUrl={bestVault.logoUrl} symbol={bestVault.token} size={24} />
+                                  <div style={{ minWidth:0 }}>
+                                    <div style={{ fontSize:13, fontWeight:600, color:T.text1, whiteSpace:"nowrap" }}>{bestVault.token} Earn</div>
+                                    <div style={{ fontSize:10, color: isCrossToken ? T.accent : T.text3 }}>
+                                      {isCrossToken ? `swap ${pos.sym} → ${bestVault.token} first` : "Jupiter Earn"}
+                                    </div>
+                                  </div>
                                 </div>
-                                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
                                   <div style={{ textAlign:"right" }}>
-                                    <div style={{ fontSize:14, fontWeight:700, color:T.green }}>{sameToken.apyDisplay}</div>
-                                    <div style={{ fontSize:10, color:T.text3 }}>+{(sameToken.apy - pos.apy).toFixed(2)}% more</div>
+                                    <div style={{ fontSize:14, fontWeight:700, color:T.green }}>{bestVault.apyDisplay}</div>
+                                    <div style={{ fontSize:10, color:T.green }}>+{(bestVault.apy - pos.apy).toFixed(2)}% more</div>
                                   </div>
                                   <button
                                     onClick={() => {
                                       setShowYieldRotator(false);
-                                      push("user", `Migrate my ${pos.sym} earn position`);
-                                      push("ai", `Opening migration for **${pos.sym} → ${sameToken.token}** (${pos.apyDisplay} → **${sameToken.apyDisplay}**)…`);
+                                      push("user", `Migrate my ${pos.sym} earn position to ${bestVault.token}`);
+                                      push("ai", `Opening migration for **${pos.sym} → ${bestVault.token}** (${pos.apyDisplay} → **${bestVault.apyDisplay}**)…`);
                                       setShowYieldRotator(true);
                                     }}
-                                    style={{ padding:"6px 12px", borderRadius:8, background:T.accent, border:"none", color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                                    Migrate
+                                    style={{ padding:"6px 14px", borderRadius:8, background:T.accent, border:"none", color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}>
+                                    Migrate ↗
                                   </button>
                                 </div>
                               </div>
@@ -13886,10 +13900,57 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           ) : null}
                         </div>
                       ))}
-                      <a href="https://jup.ag/earn" target="_blank" rel="noopener noreferrer"
-                        style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, marginTop:4, padding:"8px", borderRadius:8, background:"none", border:`1px solid ${T.border}`, color:T.accent, fontSize:12, fontWeight:600, textDecoration:"none" }}>
-                        Explore all pools on Jupiter Earn <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                      </a>
+
+                      {/* Explore all pools inline — no redirect */}
+                      <button
+                        onClick={() => setShowAllPools(p => !p)}
+                        style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, width:"100%", marginTop:4, padding:"8px", borderRadius:8, background:"none", border:`1px solid ${T.border}`, color:T.accent, fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                        {showAllPools ? "Hide all pools" : `Explore all ${sortedVaults.length} Jupiter Earn pools`}
+                        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points={showAllPools ? "18 15 12 9 6 15" : "6 9 12 15 18 9"}/>
+                        </svg>
+                      </button>
+
+                      {/* Inline all-pools list */}
+                      {showAllPools && (
+                        <div style={{ marginTop:10 }}>
+                          <div style={{ fontSize:11, color:T.text3, marginBottom:8 }}>All available pools — sorted by APY:</div>
+                          {sortedVaults.map((v, i) => {
+                            // Check if user has a position in this token
+                            const userPos = positions.find(p => p.sym.toUpperCase() === (v.token||"").toUpperCase());
+                            const isBetter = userPos && v.apy > userPos.apy + 0.01;
+                            return (
+                              <div key={v.id||i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 12px", marginBottom:6, background:T.bg, border:`1px solid ${isBetter ? T.accent+"66" : T.border}`, borderRadius:9 }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+                                  <TokenLogo logoUrl={v.logoUrl} symbol={v.token} size={26} />
+                                  <div>
+                                    <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{v.token}</div>
+                                    <div style={{ fontSize:10, color:T.text3 }}>Jupiter Earn{v.rewardsApy ? ` · +${v.rewardsApy} rewards` : ""}</div>
+                                  </div>
+                                </div>
+                                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                                  <div style={{ textAlign:"right" }}>
+                                    <div style={{ fontSize:14, fontWeight:700, color:T.green }}>{v.apyDisplay}</div>
+                                    {isBetter && <div style={{ fontSize:10, color:T.accent }}>+{(v.apy - userPos.apy).toFixed(2)}% vs yours</div>}
+                                  </div>
+                                  {isBetter && (
+                                    <button
+                                      onClick={() => {
+                                        setShowYieldRotator(false);
+                                        push("user", `Migrate my ${userPos.sym} earn position`);
+                                        push("ai", `Opening migration for **${userPos.sym} → ${v.token}** (${userPos.apyDisplay} → **${v.apyDisplay}**)…`);
+                                        setShowYieldRotator(true);
+                                      }}
+                                      style={{ padding:"5px 10px", borderRadius:7, background:T.accent, border:"none", color:"#0d1117", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+                                      Migrate
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
 
                       {/* YieldRotatorPlugin still handles actual migrations */}
                       <div style={{ display:"none" }}>
@@ -13908,6 +13969,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     </div>
                   )}
                 </div>
+              );
+            });
+
+            return (
+              <ErrorBoundary fallback={null}>
+                <BestYieldPanelInner />
               </ErrorBoundary>
             );
           })()}
