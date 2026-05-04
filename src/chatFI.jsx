@@ -6437,7 +6437,7 @@ function JupChatInner() {
           buildAltAccounts(alts),
           jupFetch(SOLANA_RPC, {
             method: "POST",
-            body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
+            body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"finalized" }] },
           }),
         ]);
         const blockhash = bhRes?.result?.value?.blockhash;
@@ -6452,7 +6452,7 @@ function JupChatInner() {
         const rpcRes   = await jupFetch(SOLANA_RPC, {
           method: "POST",
           body: { jsonrpc:"2.0", id:1, method:"sendTransaction",
-            params:[bytesToB64(signedTx.serialize()), { encoding:"base64", maxRetries:5 }] },
+            params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:false, preflightCommitment:"confirmed", maxRetries:3 }] },
         });
         const sig = rpcRes?.result;
         if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
@@ -6472,17 +6472,14 @@ function JupChatInner() {
       push("ai", `Collateral deposited ✓ — confirming…`);
       await confirmTxLanded(depositSig);
 
-      // SDK returns nftId directly — use it; fall back to chain query if missing
-      let newPositionId = d1.nftId;
-      if (!newPositionId) {
-        push("ai", "Fetching new position ID from chain…");
-        await new Promise(r => setTimeout(r, 3000));
-        const posRes = await fetch(`/api/lend-positions?wallet=${walletFull}&all=1`);
-        const posData = await posRes.json();
-        const newPosition = (posData.positions || []).find(p => String(p.vaultId) === String(vaultId));
-        if (!newPosition?.positionId) throw new Error("No positionId returned after deposit.");
-        newPositionId = newPosition.positionId;
-      }
+      // Query chain for the newly created position (SDK returns 0 for new positions)
+      push("ai", "Fetching new position ID from chain…");
+      await new Promise(r => setTimeout(r, 3000)); // let indexer catch up
+      const posRes = await fetch(`/api/lend-positions?wallet=${walletFull}&all=1`);
+      const posData = await posRes.json();
+      const newPosition = (posData.positions || []).find(p => String(p.vaultId) === String(vaultId));
+      if (!newPosition?.positionId) throw new Error("No positionId returned after deposit.");
+      const newPositionId = newPosition.positionId;
 
       // ── Step 2: Borrow against the new position ────────────────────────
       const { ok: ok2, data: d2 } = await safeApiFetch("/api/lend-positions", {
