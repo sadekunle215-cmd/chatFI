@@ -2522,7 +2522,15 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch, onConnectTelegram, telegra
 function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefresh, earnPositions = [], onSetVault, jupFetch, onConnectTelegram, telegramLinked }) {
   if (!show) return null;
   const configuredMints = new Set((vaults || []).map((v) => v.earnMint));
-  const unconfigured = (earnPositions || []).filter((p) => p.mint && !configuredMints.has(p.mint));
+  // Also index by symbol — after a Yield Rotator migration the stored earnMint
+  // (from bestPool._mint) and the live position mint (from tok.address) can differ
+  // slightly; symbol is a reliable secondary key to prevent "NO VAULT" ghost state.
+  const configuredSyms  = new Set((vaults || []).map(v => (v.earnSymbol || "").toUpperCase()).filter(Boolean));
+  const unconfigured = (earnPositions || []).filter((p) =>
+    p.mint &&
+    !configuredMints.has(p.mint) &&
+    !(p.sym && configuredSyms.has(p.sym.toUpperCase()))
+  );
   const hasAnything = (vaults && vaults.length > 0) || unconfigured.length > 0;
   return (
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 16, overflow: "hidden", marginBottom: 8, animation: "fadeUp 0.22s ease forwards" }}>
@@ -5451,8 +5459,15 @@ function JupChatInner() {
           (mint ? `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mint}/logo.png` : null);
 
         // ── VAULT STATUS ─────────────────────────────────────────────────────────
-        // Check if this mint already has an active vault configured
-        const existingVault = mint ? vaultByMint.get(mint) : null;
+        // Check if this mint already has an active vault configured.
+        // Fall back to symbol match in case bestMint stored at migration time
+        // came from a different API field than tok.address used here (e.g. after
+        // a Yield Rotator migration USDC→USDG the mints must match exactly, but
+        // symbol is a reliable secondary key).
+        const existingVault = (mint ? vaultByMint.get(mint) : null)
+          ?? (sym ? savedVaults.find(v =>
+              (v.earnSymbol || "").toUpperCase() === sym.toUpperCase()
+            ) : null);
         const isVaulted = !!(existingVault && existingVault.status === "active");
         // The vault's deposited amount at setup time (used for top-up delta display)
         const vaultedAmount = existingVault ? (existingVault.depositedAmount || 0) : 0;
