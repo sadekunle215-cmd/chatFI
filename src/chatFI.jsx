@@ -6422,10 +6422,15 @@ function JupChatInner() {
     if (!walletFull) { push("ai", "Connect your wallet first to borrow."); return; }
     const provider = getActiveProvider();
     if (!provider?.signTransaction) { push("ai", "Wallet does not support signing."); return; }
-    const { vaultId, collateral, debt, colDecimals, debtDecimals, colAmount, borrowAmount } = borrowCfg;
+    const { vaultId, collateral, debt, colAmount, borrowAmount } = borrowCfg;
     if (!colAmount || parseFloat(colAmount) <= 0 || !borrowAmount || parseFloat(borrowAmount) <= 0) { push("ai", "Please enter valid collateral and borrow amounts."); return; }
 
-    const debtRaw = Math.floor(parseFloat(borrowAmount) * Math.pow(10, debtDecimals ?? 6)).toString();
+    // Always resolve decimals from the vault definition — never trust borrowCfg state which may lag
+    const vaultDef = MULTIPLY_VAULTS.find(v => v.vaultId === vaultId) || MULTIPLY_VAULTS[0];
+    const colDecimals  = vaultDef.colDecimals;
+    const debtDecimals = vaultDef.debtDecimals;
+
+    const debtRaw = Math.floor(parseFloat(borrowAmount) * Math.pow(10, debtDecimals)).toString();
 
     // Balance check — live from Helius RPC (bypasses stale portfolio)
     const colSym = (collateral || "SOL").toUpperCase();
@@ -6433,10 +6438,18 @@ function JupChatInner() {
     const FEE_BUFFER = colSym === "SOL" ? 0.003 : 0;
     const safeColAmount = Math.min(parseFloat(colAmount), colBal - FEE_BUFFER);
     if (safeColAmount <= 0 || colBal < parseFloat(colAmount) + FEE_BUFFER) {
-      push("ai", `Insufficient ${colSym}. You have **${colBal.toFixed(4)} ${colSym}** — need deposit amount plus **0.003 SOL** for WSOL rent and fees.`);
+      push("ai", `Insufficient ${colSym}. You have **${colBal.toFixed(4)} ${colSym}** — need deposit amount${FEE_BUFFER > 0 ? ` plus **0.003 SOL** for WSOL rent and fees` : ""}.`);
       return;
     }
-    const colRaw = Math.floor(safeColAmount * Math.pow(10, colDecimals ?? 9)).toString();
+    // For non-SOL collateral, still need SOL for tx fees + NFT rent (~0.003 SOL)
+    if (colSym !== "SOL") {
+      const solBal = await fetchLiveBalance(walletFull, "SOL");
+      if (solBal < 0.003) {
+        push("ai", `You need at least **0.003 SOL** for transaction fees and account rent (position NFT creation). You have **${solBal.toFixed(4)} SOL**.`);
+        return;
+      }
+    }
+    const colRaw = Math.floor(safeColAmount * Math.pow(10, colDecimals)).toString();
 
     setBorrowStatus("signing");
     push("ai", `Depositing **${colAmount} ${collateral}** as collateral and borrowing **${borrowAmount} ${debt}**…`);
