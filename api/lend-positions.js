@@ -1,6 +1,7 @@
 // /api/lend-positions.js — Vercel serverless function
 // GET  ?wallet=xxx  → reads all open borrow positions (existing)
-// POST action:borrow → returns raw instructions + ALT keys (client builds tx with fresh blockhash)
+// POST action:borrow → deposit collateral + borrow in ONE getOperateIx call
+//                      returns serialized ixs + ALT account data (no blockhash baked in)
 
 import { Connection, PublicKey } from "@solana/web3.js";
 import { Client } from "@jup-ag/lend-read";
@@ -10,16 +11,16 @@ import BN from "bn.js";
 const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 
 const VAULT_META = {
-  1: { collateral: "SOL",    debt: "USDC", colDecimals: 9, debtDecimals: 6 },
-  2: { collateral: "JitoSOL",debt: "SOL",  colDecimals: 9, debtDecimals: 9 },
-  3: { collateral: "JupSOL", debt: "SOL",  colDecimals: 9, debtDecimals: 9 },
-  4: { collateral: "WBTC",   debt: "USDC", colDecimals: 8, debtDecimals: 6 },
-  5: { collateral: "JLP",    debt: "USDC", colDecimals: 6, debtDecimals: 6 },
-  6: { collateral: "JUP",    debt: "USDC", colDecimals: 6, debtDecimals: 6 },
-  7: { collateral: "USDC",   debt: "USDT", colDecimals: 6, debtDecimals: 6 },
+  1: { collateral: "SOL",     debt: "USDC", colDecimals: 9, debtDecimals: 6 },
+  2: { collateral: "JitoSOL", debt: "SOL",  colDecimals: 9, debtDecimals: 9 },
+  3: { collateral: "JupSOL",  debt: "SOL",  colDecimals: 9, debtDecimals: 9 },
+  4: { collateral: "WBTC",    debt: "USDC", colDecimals: 8, debtDecimals: 6 },
+  5: { collateral: "JLP",     debt: "USDC", colDecimals: 6, debtDecimals: 6 },
+  6: { collateral: "JUP",     debt: "USDC", colDecimals: 6, debtDecimals: 6 },
+  7: { collateral: "USDC",    debt: "USDT", colDecimals: 6, debtDecimals: 6 },
 };
 
-// Serialize a TransactionInstruction to a plain JSON-safe object
+// Serialize a TransactionInstruction to JSON-safe object
 function serializeIx(ix) {
   return {
     programId: ix.programId.toBase58(),
@@ -32,6 +33,14 @@ function serializeIx(ix) {
   };
 }
 
+// Serialize AddressLookupTableAccount to JSON-safe object (includes full account data)
+function serializeAlt(alt) {
+  return {
+    key: alt.key.toBase58(),
+    addresses: alt.state.addresses.map(a => a.toBase58()),
+  };
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -40,7 +49,7 @@ export default async function handler(req, res) {
 
   const connection = new Connection(RPC_URL, { commitment: "confirmed" });
 
-  // ── POST — return raw instructions so client can build tx with fresh blockhash
+  // ── POST — deposit collateral + borrow in one combined getOperateIx call ──
   if (req.method === "POST") {
     const { action, vaultId, positionId, signer: signerStr, colAmount, debtAmount } = req.body || {};
 
@@ -56,27 +65,24 @@ export default async function handler(req, res) {
     catch { return res.status(400).json({ error: "Invalid signer public key" }); }
 
     try {
+      // Per Jupiter docs: deposit+borrow is ONE call with colAmount>0 AND debtAmount>0
+      // positionId=0 auto-creates a new position
       const { ixs, addressLookupTableAccounts } = await getOperateIx({
         vaultId:    Number(vaultId),
         positionId: Number(positionId ?? 0),
-        colAmount:  new BN(colAmount.toString()),
-        debtAmount: new BN(debtAmount.toString()),
-        signer,
+        colAmount:  new BN(colAmount.toString()),   // positive = deposit collateral
+        debtAmount: new BN(debtAmount.toString()),  // positive = borrow
         connection,
+        signer,
       });
 
       if (!ixs?.length) throw new Error("No instructions returned from getOperateIx");
 
-      // Return serialized instructions + ALT pubkeys — NO blockhash baked in
-      // Client will fetch a fresh blockhash and build the versioned tx itself
-      const serializedIxs   = ixs.map(serializeIx);
-      const altKeys = (addressLookupTableAccounts || []).map(a => a.key.toBase58());
-
-      // Split: setup ixs (all but last) + main ix (last)
-      const setupIxs = serializedIxs.length > 1 ? serializedIxs.slice(0, -1) : [];
-      const mainIxs  = serializedIxs.length > 1 ? [serializedIxs[serializedIxs.length - 1]] : serializedIxs;
-
-      return res.status(200).json({ mainIxs, setupIxs, altKeys });
+      // Return serialized ixs + full ALT data — client builds tx with fresh blockhash
+      return res.status(200).json({
+        ixs:  ixs.map(serializeIx),
+        alts: (addressLookupTableAccounts || []).map(serializeAlt),
+      });
     } catch (err) {
       console.error("[/api/lend-positions] borrow error:", err.message);
       return res.status(500).json({ error: err.message });
@@ -111,8 +117,6 @@ export default async function handler(req, res) {
       const borrowNum = parseFloat(borrowRaw);
       if (supplyNum > 0) riskRatio = borrowNum / supplyNum;
 
-      const lt = p.vault?.configs?.liquidationThreshold ?? null;
-
       return {
         positionId:           p.nftId,
         vaultId,
@@ -125,7 +129,7 @@ export default async function handler(req, res) {
         borrow:               borrowRaw,
         dustBorrow:           dustRaw,
         riskRatio,
-        liquidationThreshold: lt,
+        liquidationThreshold: p.vault?.configs?.liquidationThreshold ?? null,
         isLiquidated:         p.isLiquidated ?? false,
         tick:                 p.tick   ?? null,
         tickId:               p.tickId ?? null,
@@ -134,18 +138,10 @@ export default async function handler(req, res) {
     });
 
     const borrowPositions = positions.filter(p => !p.isSupplyOnly);
-
-    return res.status(200).json({
-      positions: borrowPositions,
-      total:     borrowPositions.length,
-      wallet,
-    });
+    return res.status(200).json({ positions: borrowPositions, total: borrowPositions.length, wallet });
 
   } catch (err) {
     console.error("[/api/lend-positions] error:", err);
-    return res.status(500).json({
-      error:     err?.message || "Failed to fetch positions",
-      positions: [],
-    });
+    return res.status(500).json({ error: err?.message || "Failed to fetch positions", positions: [] });
   }
 }
