@@ -328,21 +328,33 @@ export default function YieldRotatorPlugin({
       setStep("Fetching position details…");
       let withdrawAmtRaw;
       try {
-        const positions = await jupFetch(`${JUP_EARN_API}/positions?wallet=${walletFull}`);
+        // ── FIX: correct query param is ?users= not ?wallet= ──────────────────
+        const positions = await jupFetch(`${JUP_EARN_API}/positions?users=${walletFull}`);
         const arr = Array.isArray(positions) ? positions : (positions?.positions || positions?.data || []);
         const matched = arr.find(p => {
           const pId   = p.planId || p.poolId || p.marketId || p.id || "";
           const pMint = p.asset?.address || p.asset?.mint || p.mint || p.tokenMint || p.assetMint || "";
           return (posPoolId && pId === posPoolId) || (posMint && pMint === posMint);
         });
-        const rawFromApi = matched?.depositedAmount ?? matched?.shares ?? matched?.rawAmount ?? null;
-        if (rawFromApi && Number(rawFromApi) > 0) {
-          withdrawAmtRaw = Math.floor(Number(rawFromApi));
-          console.log(`[YieldRotator] Using API share amount: ${withdrawAmtRaw}`);
+        // Log full matched position so we can see all available fields
+        console.log(`[YieldRotator] Matched position:`, JSON.stringify(matched, null, 2));
+        // ── FIX: Jupiter tracks positions in jlToken shares, not token units.
+        // Priority: lpAmount / positionAmount / jlAmount (share units) first.
+        // depositedAmount is token units — do NOT use it as the withdraw amount.
+        // underlyingAssets is also token units — only use as scaled fallback.
+        const shareAmt = matched?.lpAmount ?? matched?.positionAmount ?? matched?.jlAmount
+                      ?? matched?.shareAmount ?? matched?.shares ?? null;
+        if (shareAmt && Number(shareAmt) > 0) {
+          withdrawAmtRaw = Math.floor(Number(shareAmt));
+          console.log(`[YieldRotator] Using share amount: ${withdrawAmtRaw}`);
+        } else if (matched?.underlyingAssets && Number(matched.underlyingAssets) > 0) {
+          // underlyingAssets is already in raw token units (e.g. 399000 for 0.399 USDC)
+          withdrawAmtRaw = Math.floor(Number(matched.underlyingAssets));
+          console.log(`[YieldRotator] Using underlyingAssets as raw amount: ${withdrawAmtRaw}`);
         } else {
           const dec = KNOWN_DECIMALS[posSym] ?? KNOWN_DECIMALS[posMint] ?? 6;
           withdrawAmtRaw = posAmt > 1e6 ? Math.floor(posAmt) : Math.floor(posAmt * Math.pow(10, dec));
-          console.warn(`[YieldRotator] /positions returned no raw amount — falling back to scaled posAmt: ${withdrawAmtRaw}`);
+          console.warn(`[YieldRotator] No raw amount from API — falling back to scaled posAmt: ${withdrawAmtRaw}`);
         }
       } catch (fetchErr) {
         console.warn("[YieldRotator] Could not fetch /positions, falling back:", fetchErr);
@@ -513,14 +525,20 @@ export default function YieldRotatorPlugin({
 
           for (const vault of staleVaults) {
             await fetch(`/api/yield-vault?id=${vault.id}&wallet=${walletFull}`, {
-              method: "DELETE",
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                earnMint:   bestMint,
+                earnSymbol: bestSym,   // matches vault schema field (earnSymbol, not earnSym)
+                // targetTokenSymbol / threshold unchanged — only source position changed
+              }),
             });
           }
 
           if (staleVaults.length > 0) {
             push("ai",
-              `[Vault] Cancelled ${staleVaults.length} yield vault${staleVaults.length > 1 ? "s" : ""} ` +
-              `— ${posSym} Earn position closed. Set up a new vault on ${bestSym} Earn if needed.`
+              `[Vault] Updated ${staleVaults.length} yield vault${staleVaults.length > 1 ? "s" : ""} ` +
+              `— now tracking ${bestSym} Earn instead of ${posSym} Earn.`
             );
           }
         }
