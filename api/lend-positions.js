@@ -38,11 +38,15 @@ function serializeAlt(alt) {
 }
 
 async function buildOp({ vaultId, positionId, colAmount, debtAmount, signer, connection }) {
-  // positionId=0 (number) → create new position
-  // positionId=<base58 nftId string> → existing position (pass as PublicKey)
+  // positionId=0 → create new position
+  // positionId=<number> → existing position NFT ID (the SDK uses numbers, not PublicKeys)
   const resolvedPositionId = (!positionId || positionId === "0" || positionId === 0)
     ? 0
-    : new PublicKey(positionId);
+    : Number(positionId); // nftId is always a number per SDK docs
+
+  if (resolvedPositionId !== 0 && isNaN(resolvedPositionId)) {
+    throw new Error(`Invalid positionId: ${positionId} — expected a number`);
+  }
 
   const { ixs, addressLookupTableAccounts, nftId } = await getOperateIx({
     vaultId:    Number(vaultId),
@@ -83,14 +87,19 @@ export default async function handler(req, res) {
 
     try {
       if (action === "deposit") {
-        // Step 1: deposit collateral only (colAmount>0, debtAmount=0)
-        // positionId=0 creates a new position; SDK returns the new positionId
+        // Deposit only (colAmount>0, debtAmount=0), positionId=0 creates new position
         const result = await buildOp({ vaultId, positionId: 0, colAmount, debtAmount: "0", signer, connection });
         return res.status(200).json(result);
       }
 
+      if (action === "deposit_and_borrow") {
+        // New position: deposit + borrow in one tx (positionId=0, both amounts > 0)
+        const result = await buildOp({ vaultId, positionId: 0, colAmount, debtAmount, signer, connection });
+        return res.status(200).json(result);
+      }
+
       if (action === "borrow") {
-        // Step 2: borrow only against existing position (colAmount=0, debtAmount>0)
+        // Borrow against existing position (colAmount=0, debtAmount>0, positionId = nftId number)
         if (!positionId) return res.status(400).json({ error: "positionId required for borrow action" });
         const result = await buildOp({ vaultId, positionId, colAmount: "0", debtAmount, signer, connection });
         return res.status(200).json(result);
