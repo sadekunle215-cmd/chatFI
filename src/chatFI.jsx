@@ -13778,20 +13778,34 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
                 </svg>
               );
-              const TokenLogo = ({ logoUrl, symbol, size=26 }) => (
-                logoUrl ? (
-                  <img
-                    src={logoUrl}
-                    alt={symbol}
-                    style={{ width:size, height:size, borderRadius:"50%", objectFit:"cover", flexShrink:0 }}
-                    onError={e => { e.target.style.display="none"; e.target.nextSibling && (e.target.nextSibling.style.display="flex"); }}
-                  />
-                ) : (
+              // TokenLogo: logoUrl first → img.jup.ag CDN by mint → letter fallback
+              const TokenLogo = ({ logoUrl, mint, symbol, size=26 }) => {
+                const cdnUrl = mint ? `https://img.jup.ag/tokens/${mint}` : null;
+                const primary = logoUrl || cdnUrl;
+                if (!primary) return (
                   <div style={{ width:size, height:size, borderRadius:"50%", background: T.accent+"33", display:"flex", alignItems:"center", justifyContent:"center", fontSize:size*0.42, fontWeight:700, color:T.accent, flexShrink:0 }}>
                     {(symbol||"?")[0]}
                   </div>
-                )
-              );
+                );
+                return (
+                  <img
+                    src={primary}
+                    alt={symbol}
+                    style={{ width:size, height:size, borderRadius:"50%", objectFit:"cover", flexShrink:0 }}
+                    onError={e => {
+                      if (primary === logoUrl && cdnUrl && cdnUrl !== logoUrl) {
+                        e.target.src = cdnUrl;
+                      } else {
+                        e.target.style.display = "none";
+                        const fallback = document.createElement("div");
+                        fallback.style.cssText = `width:${size}px;height:${size}px;border-radius:50%;background:${T.accent}33;display:flex;align-items:center;justify-content:center;font-size:${Math.round(size*0.42)}px;font-weight:700;color:${T.accent};flex-shrink:0`;
+                        fallback.textContent = (symbol||"?")[0];
+                        e.target.parentNode && e.target.parentNode.insertBefore(fallback, e.target.nextSibling);
+                      }
+                    }}
+                  />
+                );
+              };
 
               return (
                 <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", background: T.surface, border:`1px solid ${T.border}`, borderRadius:12, overflow:"hidden" }}>
@@ -13812,7 +13826,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       {(showAllPools ? sortedVaults : sortedVaults.slice(0, 4)).map((v, i) => (
                         <div key={v.id||i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", marginBottom:8, background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
                           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                            <TokenLogo logoUrl={v.logoUrl} symbol={v.token} size={28} />
+                            <TokenLogo logoUrl={v.logoUrl} mint={v.assetMint} symbol={v.token} size={28} />
                             <div>
                               <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{v.token}</div>
                               <div style={{ fontSize:11, color:T.text3 }}>Jupiter Earn</div>
@@ -13843,7 +13857,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                           {/* Current position row */}
                           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 14px", borderBottom:`1px solid ${T.border}` }}>
                             <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-                              <TokenLogo logoUrl={pos.logoUrl} symbol={pos.sym} size={26} />
+                              <TokenLogo logoUrl={pos.logoUrl} mint={pos.mint} symbol={pos.sym} size={26} />
                               <div>
                                 <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{pos.sym} Earn</div>
                                 <div style={{ fontSize:11, color:T.text3 }}>{pos.amount.toLocaleString(undefined,{maximumFractionDigits:4})} {pos.sym}</div>
@@ -13871,7 +13885,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                               </div>
                               <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
                                 <div style={{ display:"flex", alignItems:"center", gap:8, minWidth:0 }}>
-                                  <TokenLogo logoUrl={bestVault.logoUrl} symbol={bestVault.token} size={24} />
+                                  <TokenLogo logoUrl={bestVault.logoUrl} mint={bestVault.assetMint} symbol={bestVault.token} size={24} />
                                   <div style={{ minWidth:0 }}>
                                     <div style={{ fontSize:13, fontWeight:600, color:T.text1, whiteSpace:"nowrap" }}>{bestVault.token} Earn</div>
                                     <div style={{ fontSize:10, color: isCrossToken ? T.accent : T.text3 }}>
@@ -13886,10 +13900,20 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                                   </div>
                                   <button
                                     onClick={() => {
-                                      setShowYieldRotator(false);
-                                      push("user", `Migrate my ${pos.sym} earn position to ${bestVault.token}`);
-                                      push("ai", `Opening migration for **${pos.sym} → ${bestVault.token}** (${pos.apyDisplay} → **${bestVault.apyDisplay}**)…`);
-                                      setShowYieldRotator(true);
+                                      const op = {
+                                        position: { ...pos, logo: pos.logoUrl },
+                                        posSym: pos.sym, posMint: pos.mint, posApy: pos.apy, posAmt: pos.amount,
+                                        posPoolId: pos.vaultId,
+                                        bestPool: bestVault, bestSym: bestVault.token, bestMint: bestVault.assetMint,
+                                        bestApy: bestVault.apy, apyGap: bestVault.apy - pos.apy,
+                                        isCrossAsset: (bestVault.assetMint||"") !== (pos.mint||""),
+                                      };
+                                      if (directMigrateRef?.current?.migrate) {
+                                        directMigrateRef.current.migrate(op);
+                                      } else {
+                                        push("user", `Migrate my ${pos.sym} earn position to ${bestVault.token}`);
+                                        push("ai", `Opening migration for **${pos.sym} → ${bestVault.token}** (${pos.apyDisplay} → **${bestVault.apyDisplay}**)…`);
+                                      }
                                     }}
                                     style={{ padding:"6px 14px", borderRadius:8, background:T.accent, border:"none", color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap" }}>
                                     Migrate ↗
@@ -13922,7 +13946,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                             return (
                               <div key={v.id||i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 12px", marginBottom:6, background:T.bg, border:`1px solid ${isBetter ? T.accent+"66" : T.border}`, borderRadius:9 }}>
                                 <div style={{ display:"flex", alignItems:"center", gap:9 }}>
-                                  <TokenLogo logoUrl={v.logoUrl} symbol={v.token} size={26} />
+                                  <TokenLogo logoUrl={v.logoUrl} mint={v.assetMint} symbol={v.token} size={26} />
                                   <div>
                                     <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{v.token}</div>
                                     <div style={{ fontSize:10, color:T.text3 }}>Jupiter Earn{v.rewardsApy ? ` · +${v.rewardsApy} rewards` : ""}</div>
@@ -13936,10 +13960,20 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                                   {isBetter && (
                                     <button
                                       onClick={() => {
-                                        setShowYieldRotator(false);
-                                        push("user", `Migrate my ${userPos.sym} earn position`);
-                                        push("ai", `Opening migration for **${userPos.sym} → ${v.token}** (${userPos.apyDisplay} → **${v.apyDisplay}**)…`);
-                                        setShowYieldRotator(true);
+                                        const op = {
+                                          position: { ...userPos, logo: userPos.logoUrl },
+                                          posSym: userPos.sym, posMint: userPos.mint, posApy: userPos.apy, posAmt: userPos.amount,
+                                          posPoolId: userPos.vaultId,
+                                          bestPool: v, bestSym: v.token, bestMint: v.assetMint,
+                                          bestApy: v.apy, apyGap: v.apy - userPos.apy,
+                                          isCrossAsset: (v.assetMint||"") !== (userPos.mint||""),
+                                        };
+                                        if (directMigrateRef?.current?.migrate) {
+                                          directMigrateRef.current.migrate(op);
+                                        } else {
+                                          push("user", `Migrate my ${userPos.sym} earn position to ${v.token}`);
+                                          push("ai", `Opening migration for **${userPos.sym} → ${v.token}** (${userPos.apyDisplay} → **${v.apyDisplay}**)…`);
+                                        }
                                       }}
                                       style={{ padding:"5px 10px", borderRadius:7, background:T.accent, border:"none", color:"#0d1117", fontSize:11, fontWeight:700, cursor:"pointer" }}>
                                       Migrate
