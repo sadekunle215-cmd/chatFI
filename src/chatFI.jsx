@@ -97,6 +97,13 @@ const SvgCoin = ({size=16,color="currentColor"}) => (
     <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
   </svg>
 );
+const SvgKey = ({size=16,color="currentColor"}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="7.5" cy="15.5" r="5.5"/>
+    <path d="M21 2l-9.6 9.6"/>
+    <path d="M15.5 7.5l3 3L22 7l-3-3"/>
+  </svg>
+);
 const SvgMap = ({size=16,color="currentColor"}) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/>
@@ -8296,7 +8303,8 @@ Order: \`${orderKey.slice(0,20)}…\`
       setConnectedWalletName(wName);
       fetchSolanaBalances(reownAddress).then(balances => {
         setPortfolio(balances);
-        if (justConnected) {
+        const alreadyShown = !!sessionStorage.getItem("chatfi-wallet-shown");
+        if (justConnected && !alreadyShown) {
           walletWasConnectedThisSessionRef.current = true;
           fetchPrices().then(async live => {
             const solUSD = balances.SOL && live.SOL ? (balances.SOL * live.SOL).toFixed(2) : null;
@@ -8316,6 +8324,8 @@ Order: \`${orderKey.slice(0,20)}…\`
               }
               return { symbol: sym, name, amount: amt < 1 ? amt.toFixed(6) : amt.toFixed(2), logo, mint };
             }));
+            // Remove any existing walletCard messages before pushing a new one
+            setMsgs(m => m.filter(msg => !msg.walletCard));
             push("ai", "", {
               walletCard: {
                 emailLabel: reownWalletInfo?.name || connectedWalletName || "Wallet",
@@ -8327,6 +8337,7 @@ Order: \`${orderKey.slice(0,20)}…\`
                 tokens,
               }
             });
+            try { sessionStorage.setItem("chatfi-wallet-shown", "1"); } catch {};
             // ── Idle wallet / earn detection ───────────────────────────────
             setTimeout(async () => {
               try {
@@ -8361,6 +8372,7 @@ Order: \`${orderKey.slice(0,20)}…\`
       setWalletFull(null);
       setConnectedWalletName(null);
       setPortfolio({});
+      try { sessionStorage.removeItem("chatfi-wallet-shown"); } catch {}
       // Only show "disconnected" message if the user explicitly disconnected during this session
       // (not on page refresh where Reown momentarily reports disconnected before restoring session)
       if (walletWasConnectedThisSessionRef.current) {
@@ -8426,6 +8438,8 @@ Order: \`${orderKey.slice(0,20)}…\`
               }
               return { symbol: sym, name, amount: amt < 1 ? amt.toFixed(6) : amt.toFixed(2), logo, mint };
             }));
+            // Remove any existing walletCard messages before pushing a new one
+            setMsgs(m => m.filter(msg => !msg.walletCard));
             push("ai", "", {
               walletCard: {
                 emailLabel,
@@ -9499,35 +9513,10 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         }
 
       } else if (action === "SHOW_BORROW") {
-        // Pre-fill vault from collateral token or default SOL→USDC
-        const colSym  = (actionData?.collateral || "SOL").toUpperCase();
-        const debtSym = (actionData?.debt || "USDC").toUpperCase();
-        const vault   = MULTIPLY_VAULTS.find(v =>
-          v.collateral.toUpperCase() === colSym && v.debt.toUpperCase() === debtSym
-        ) || MULTIPLY_VAULTS.find(v => v.collateral.toUpperCase() === colSym)
-          || MULTIPLY_VAULTS[0]; // SOL→USDC fallback
-        setBorrowCfg(c => ({
-          ...c,
-          vaultId:      vault.vaultId,
-          collateral:   vault.collateral,
-          debt:         vault.debt,
-          colDecimals:  vault.colDecimals,
-          debtDecimals: vault.debtDecimals,
-          colAmount:    (parseFloat(actionData?.colAmount) > 0 ? actionData.colAmount : c.colAmount) || "",
-          borrowAmount: (parseFloat(actionData?.borrowAmount) > 0 ? actionData.borrowAmount : c.borrowAmount) || "",
-        }));
-        push("ai", text);
-        if (directMode && walletFull && actionData?.colAmount && actionData?.borrowAmount) {
-          push("ai", `⚡ **Direct Mode** — Borrow: deposit **${actionData.colAmount} ${colSym}**, borrow **${actionData.borrowAmount} ${debtSym}**`);
-          setPendingDirectAction({ type:"borrow", label:`${actionData.colAmount} ${colSym} → borrow ${actionData.borrowAmount} ${debtSym}` });
-        } else {
-          setShowBorrow(true);
-        }
+        push("ai", "🔑 **Borrow is coming soon!**\n\nFull deposit & borrow functionality is on the way. In the meantime, you can manage your borrow positions directly at [jup.ag/lend/borrow](https://jup.ag/lend/borrow).");
 
       } else if (action === "SHOW_MULTIPLY") {
-        setMultiplyFilter(actionData?.asset?.toUpperCase() || null);
-        setShowMultiply(true);
-        push("ai", text);
+        push("ai", "🔑 **Multiply is coming soon!**\n\nLooped leverage positions are on the way. In the meantime, you can open multiply positions directly at [jup.ag/lend/multiply](https://jup.ag/lend/multiply).");
 
       } else if (action === "SHOW_LEND_POSITIONS") {
         push("ai", text);
@@ -9771,15 +9760,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         }
 
       } else if (action === "SHOW_PERPS") {
-        const { market = "SOL-PERP", side = "long", collateral = "", leverage = "10" } = actionData || {};
-        push("ai", text);
-        setPerpCfg({ market, side, collateral, leverage });
-        if (directMode && walletFull && collateral) {
-          push("ai", `⚡ **Direct Mode** — Open **${side.toUpperCase()}** ${market} · ${collateral} SOL · ${leverage}x leverage`);
-          setPendingDirectAction({ type:"perps", label:`${side} ${market} ${collateral} SOL ${leverage}x` });
-        } else {
-          setShowPerps(true);
-        }
+        push("ai", "🔑 **Perps is coming soon!**\n\nPerpetual futures trading is on the way. In the meantime, you can trade perps directly at [jup.ag/perps](https://jup.ag/perps).");
 
       } else if (action === "FETCH_PERPS_POSITIONS") {
         if (!walletFull) {
@@ -14910,12 +14891,17 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
                 {/* Action buttons */}
                 <div style={{ display:"flex", gap:8 }}>
-                  <button onClick={doBorrow}
-                    disabled={!walletFull || !borrowCfg.colAmount || !borrowCfg.borrowAmount || parseFloat(borrowCfg.colAmount)<=0 || parseFloat(borrowCfg.borrowAmount)<=0 || isSigning || belowMin}
-                    className="hov-btn"
-                    style={{ flex:1, padding:"10px", background:(!walletFull||!borrowCfg.colAmount||!borrowCfg.borrowAmount||isSigning)?T.border:T.accent, border:"none", borderRadius:8, color:(!walletFull||!borrowCfg.colAmount||!borrowCfg.borrowAmount||isSigning)?T.text3:"#0d1117", fontSize:13, fontWeight:700, cursor:isSigning?"default":"pointer" }}>
-                    {isSigning ? "Signing…" : !walletFull ? "Connect wallet" : "Deposit & Borrow"}
-                  </button>
+                  <div style={{ flex:1, position:"relative" }}>
+                    <button disabled
+                      className="hov-btn"
+                      style={{ width:"100%", padding:"10px", background:T.border, border:"none", borderRadius:8, color:T.text3, fontSize:13, fontWeight:700, cursor:"not-allowed", opacity:0.6 }}>
+                      Deposit & Borrow
+                    </button>
+                    <div style={{ position:"absolute", top:-8, right:-8, display:"flex", alignItems:"center", gap:4, background:"#7c3aed", borderRadius:20, padding:"2px 8px 2px 5px", boxShadow:"0 2px 8px #7c3aed55" }}>
+                      <SvgKey size={10} color="#fff" />
+                      <span style={{ fontSize:10, fontWeight:700, color:"#fff", letterSpacing:"0.04em" }}>SOON</span>
+                    </div>
+                  </div>
                   <a href="https://jup.ag/lend/borrow" target="_blank" rel="noreferrer"
                     style={{ padding:"10px 14px", background:T.accentBg, border:`1px solid ${T.accent}44`, borderRadius:8, color:T.accent, fontSize:12, fontWeight:600, textDecoration:"none", display:"flex", alignItems:"center", whiteSpace:"nowrap" }}>
                     jup.ag ↗
