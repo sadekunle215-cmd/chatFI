@@ -6472,14 +6472,17 @@ function JupChatInner() {
       push("ai", `Collateral deposited ✓ — confirming…`);
       await confirmTxLanded(depositSig);
 
-      // Query chain for the newly created position (SDK returns 0 for new positions)
-      push("ai", "Fetching new position ID from chain…");
-      await new Promise(r => setTimeout(r, 3000)); // let indexer catch up
-      const posRes = await fetch(`/api/lend-positions?wallet=${walletFull}&all=1`);
-      const posData = await posRes.json();
-      const newPosition = (posData.positions || []).find(p => String(p.vaultId) === String(vaultId));
-      if (!newPosition?.positionId) throw new Error("No positionId returned after deposit.");
-      const newPositionId = newPosition.positionId;
+      // SDK returns nftId directly — use it; fall back to chain query if missing
+      let newPositionId = d1.nftId;
+      if (!newPositionId) {
+        push("ai", "Fetching position ID from chain…");
+        await new Promise(r => setTimeout(r, 3000));
+        const posRes = await fetch(`/api/lend-positions?wallet=${walletFull}&all=1`);
+        const posData = await posRes.json();
+        const newPos = (posData.positions || []).find(p => String(p.vaultId) === String(vaultId));
+        if (!newPos?.positionId) throw new Error("No positionId returned after deposit.");
+        newPositionId = newPos.positionId;
+      }
 
       // ── Step 2: Borrow against the new position ────────────────────────
       const { ok: ok2, data: d2 } = await safeApiFetch("/api/lend-positions", {
