@@ -32,8 +32,6 @@ function inviteCodeToKeypair(code) {
 // Jupiter Send program — used to derive invitePDA for clawback
 const JUPITER_SEND_PROGRAM = new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
 
-// Derive the invitePDA Jupiter's craft-clawback now requires
-// Seeds: ["invite", inviteKeypair.publicKey]
 function deriveInvitePDA(invitePubkey) {
   const [pda] = PublicKey.findProgramAddressSync(
     [Buffer.from("invite"), invitePubkey.toBuffer()],
@@ -59,22 +57,21 @@ export default async function handler(req, res) {
     ...(process.env.JUPITER_API_KEY ? { "x-api-key": process.env.JUPITER_API_KEY } : {}),
   };
 
-  // ── GET — pending invites or invite history ────────────────────────────────
+  // ── GET — pending invites or invite history ──────────────────────────────
   if (req.method === "GET") {
     const { wallet, type = "pending" } = req.query;
     if (!wallet) return res.status(400).json({ error: "Missing wallet query param" });
     try {
       const endpoint = type === "history" ? "invite-history" : "pending-invites";
-      const url      = `${JUP_SEND_API}/${endpoint}?wallet=${wallet}`;
-      console.log(`[/api/send] GET ${endpoint} wallet=${wallet}`);
-      const jupRes = await fetch(url, { headers: jupHeaders });
+      console.log(`[api/send] GET ${endpoint} wallet=${wallet}`);
+      const jupRes = await fetch(`${JUP_SEND_API}/${endpoint}?wallet=${wallet}`, { headers: jupHeaders });
       const raw    = await jupRes.text();
-      console.log(`[/api/send] GET ${endpoint} raw:`, raw.slice(0, 500));
+      console.log(`[api/send] GET ${endpoint} response:`, raw.slice(0, 500));
       let data;
       try { data = JSON.parse(raw); } catch { data = []; }
       return res.status(200).json(data);
     } catch (err) {
-      console.error("[/api/send] GET error:", err.message);
+      console.error("[api/send] GET error:", err.message);
       return res.status(500).json({ error: err.message });
     }
   }
