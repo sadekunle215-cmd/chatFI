@@ -5997,8 +5997,11 @@ function JupChatInner() {
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Clawback transaction failed.");
 
+      push("ai", `Confirming clawback on-chain…`);
+      await confirmTxLanded(signature);
+
       push("ai",
-        `Clawback submitted ✓\n\nUnclaimed tokens are being returned to your wallet.\n\n` +
+        `Clawback confirmed ✓\n\nUnclaimed tokens have been returned to your wallet.\n\n` +
         `Transaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})`
       );
       const updated = await fetchSolanaBalances(walletFull);
@@ -6040,6 +6043,9 @@ function JupChatInner() {
       });
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+
+      push("ai", `Confirming position close on-chain…`);
+      await confirmTxLanded(signature);
 
       setClosingPerp(null);
       // Remove closed position from local state
@@ -6118,10 +6124,13 @@ function JupChatInner() {
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
+      push("ai", `Confirming prediction order on-chain…`);
+      await confirmTxLanded(signature);
+
       const orderPubkey = orderRes?.order?.orderPubkey;
       const contracts   = orderRes?.order?.contracts;
       setBetStatus("done");
-      push("ai", `Prediction order submitted ✓\n\n**${betSide.toUpperCase()}** on _${betMarket.title}_\nAmount: **$${betAmount} USDC**${contracts ? `  ·  Contracts: **${contracts}**` : ""}\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})${orderPubkey ? `\n\nOrder account: \`${orderPubkey.slice(0,20)}…\`` : ""}`);
+      push("ai", `Prediction order confirmed ✓\n\n**${betSide.toUpperCase()}** on _${betMarket.title}_\nAmount: **$${betAmount} USDC**${contracts ? `  ·  Contracts: **${contracts}**` : ""}\n\nTransaction: \`${signature.slice(0,20)}…\`\n\n[View on Solscan →](https://solscan.io/tx/${signature})${orderPubkey ? `\n\nOrder account: \`${orderPubkey.slice(0,20)}…\`` : ""}`);
     } catch (err) {
       setBetStatus("error");
       const msg = err?.message || "Unknown error";
@@ -6205,6 +6214,7 @@ function JupChatInner() {
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
       const contracts = orderRes?.order?.contracts;
       const estWin = foundYesPrice ? ` · Est. win: $${(amtNum / parseFloat(foundYesPrice)).toFixed(2)}` : "";
+      await confirmTxLanded(signature);
       return {
         success: true,
         msg: `✓ **${side.toUpperCase()}** $${amtNum} on _${outcome}_ (${foundEventTitle})${estWin}\n[Solscan →](https://solscan.io/tx/${signature})`,
@@ -6268,6 +6278,9 @@ function JupChatInner() {
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
+      push("ai", `Confirming deposit on-chain…`);
+      await confirmTxLanded(signature);
+
       push("ai",
         `✅ **Deposited ${amount} ${vault.token}** into ${vault.name}\n\n` +
         `You are now earning **${vault.apyDisplay} APY**.\n\n` +
@@ -6277,7 +6290,7 @@ function JupChatInner() {
       setPortfolio(updated);
       if (walletFull) fetchEarnUserPositions();
     } catch (err) {
-      push("ai", `Earn deposit failed: ${err?.message || "Unknown error"}. Please try again.`);
+      push("ai", `Earn deposit failed: ${err?.message || "Unknown error"}.`);
     }
   };
 
@@ -6317,6 +6330,9 @@ function JupChatInner() {
       const signature = rpcRes?.result;
       if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
+      push("ai", `Confirming withdrawal on-chain…`);
+      await confirmTxLanded(signature);
+
       push("ai",
         `✅ **Withdrew ${amount} ${vault.token}** from ${vault.name}\n\n` +
         `[View on Solscan →](https://solscan.io/tx/${signature})`
@@ -6325,7 +6341,7 @@ function JupChatInner() {
       setPortfolio(updated);
       if (walletFull) fetchEarnUserPositions();
     } catch (err) {
-      push("ai", `Earn withdraw failed: ${err?.message || "Unknown error"}. Please try again.`);
+      push("ai", `Earn withdraw failed: ${err?.message || "Unknown error"}.`);
     }
   };
 
@@ -6769,6 +6785,7 @@ function JupChatInner() {
           });
           const sig = rpcRes?.result;
           if (!sig) throw new Error(rpcRes?.error?.message || "Send failed.");
+          await confirmTxLanded(sig);
           const payoutUsd = (parseInt(pos.payoutUsd || 0) / 1_000_000).toFixed(2);
           const title = pos.marketMetadata?.title || pos.marketId || "market";
           push("ai", `Claimed **$${payoutUsd} USDC** from _${title.slice(0, 50)}_\n[View on Solscan →](https://solscan.io/tx/${sig})`);
@@ -6813,8 +6830,11 @@ function JupChatInner() {
               });
               const sig = rpcRes?.result;
               if (sig) {
+                await confirmTxLanded(sig);
                 push("ai", `Claimed ASR reward: **${parseFloat(asr.amount || 0).toFixed(4)} ${token}**\n[View on Solscan →](https://solscan.io/tx/${sig})`);
                 asrClaimed++;
+              } else {
+                throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
               }
             } else {
               // No on-chain tx available — inform user
@@ -8152,6 +8172,9 @@ function JupChatInner() {
       if (execRes.status === "Failed") throw new Error("Transaction failed on-chain.");
 
       const sig = execRes.signature;
+      if (!sig) throw new Error("No signature returned from Jupiter Recurring API.");
+      await confirmTxLanded(sig);
+
       const totalSpend = (parseFloat(amountPerCycle) * parseInt(numberOfOrders)).toFixed(2);
       const intervalLabel = { "60":"minute","300":"5 min","3600":"hour","86400":"day","604800":"week","2592000":"month" }[intervalSecs] || `${intervalSecs}s`;
       setRecurringStatus("done");
