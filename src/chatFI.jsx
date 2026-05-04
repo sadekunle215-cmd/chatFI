@@ -13283,6 +13283,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   })()}
 
                   {/* ── Earn Positions ── */}
+                  <ErrorBoundary fallback={null}>
                   {(() => {
                     // Prefer live yieldVaultPositions (from fetchEarnPositionsForVault) over
                     // portfolioData.earnPositions which may be stale or empty from the portfolio API.
@@ -13315,7 +13316,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                             return (
                               <EarnPositionCard
                                 key={i} i={i} e={e} sym={sym} amt={amt} label={label}
-                                vaults={vaults} walletFull={walletFull} T={T}
+                                vaults={yieldVaultSaved} walletFull={walletFull} T={T}
                                 onRefresh={() => fetchPortfolioData(walletFull)}
                                 setShowPortfolio={setShowPortfolio}
                                 send={send}
@@ -13326,6 +13327,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                       </div>
                     ) : null;
                   })()}
+                  </ErrorBoundary>
 
 
 
