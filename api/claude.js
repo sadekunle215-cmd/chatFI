@@ -41,7 +41,15 @@ export default async function handler(req, res) {
           .map(b => b.text)
           .join("");
 
-        const cleanText = textContent.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        let cleanText = textContent.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+
+        // If response is a JSON action object, extract just the text field
+        try {
+          const parsed = JSON.parse(cleanText);
+          if (parsed && typeof parsed.text === "string" && "action" in parsed) {
+            cleanText = parsed.text;
+          }
+        } catch {}
 
         return res.status(200).json({
           content: [{ type: "text", text: cleanText }],
