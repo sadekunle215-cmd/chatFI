@@ -1,7 +1,7 @@
 // /api/lend-positions.js — Vercel serverless function
-// GET  ?wallet=xxx  → reads all open borrow positions (existing)
-// POST action:borrow → deposit collateral + borrow in ONE getOperateIx call
-//                      returns serialized ixs + ALT account data (no blockhash baked in)
+// GET  ?wallet=xxx        → reads all open borrow positions
+// POST action:deposit     → deposit collateral only (creates position, returns positionId)
+// POST action:borrow      → borrow against existing position (colAmount=0, debtAmount>0)
 
 import { Connection, PublicKey } from "@solana/web3.js";
 import { Client } from "@jup-ag/lend-read";
@@ -20,24 +20,37 @@ const VAULT_META = {
   7: { collateral: "USDC",    debt: "USDT", colDecimals: 6, debtDecimals: 6 },
 };
 
-// Serialize a TransactionInstruction to JSON-safe object
 function serializeIx(ix) {
   return {
     programId: ix.programId.toBase58(),
     keys: ix.keys.map(k => ({
-      pubkey:     k.pubkey.toBase58(),
-      isSigner:   k.isSigner,
-      isWritable: k.isWritable,
+      pubkey: k.pubkey.toBase58(), isSigner: k.isSigner, isWritable: k.isWritable,
     })),
     data: Buffer.from(ix.data).toString("base64"),
   };
 }
 
-// Serialize AddressLookupTableAccount to JSON-safe object (includes full account data)
 function serializeAlt(alt) {
   return {
     key: alt.key.toBase58(),
     addresses: alt.state.addresses.map(a => a.toBase58()),
+  };
+}
+
+async function buildOp({ vaultId, positionId, colAmount, debtAmount, signer, connection }) {
+  const { ixs, addressLookupTableAccounts, positionId: returnedPositionId } = await getOperateIx({
+    vaultId:    Number(vaultId),
+    positionId: Number(positionId ?? 0),
+    colAmount:  new BN(colAmount.toString()),
+    debtAmount: new BN(debtAmount.toString()),
+    connection,
+    signer,
+  });
+  if (!ixs?.length) throw new Error("No instructions returned from getOperateIx");
+  return {
+    ixs:        ixs.map(serializeIx),
+    alts:       (addressLookupTableAccounts || []).map(serializeAlt),
+    positionId: returnedPositionId ?? positionId ?? 0,
   };
 }
 
@@ -49,50 +62,41 @@ export default async function handler(req, res) {
 
   const connection = new Connection(RPC_URL, { commitment: "confirmed" });
 
-  // ── POST — deposit collateral + borrow in one combined getOperateIx call ──
   if (req.method === "POST") {
     const { action, vaultId, positionId, signer: signerStr, colAmount, debtAmount } = req.body || {};
 
-    if (action !== "borrow") {
-      return res.status(400).json({ error: `Unknown action: ${action}` });
+    if (!signerStr || !vaultId) {
+      return res.status(400).json({ error: "Missing required fields: signer, vaultId" });
     }
-    if (!signerStr || !vaultId || !colAmount || !debtAmount) {
-      return res.status(400).json({ error: "Missing required fields: signer, vaultId, colAmount, debtAmount" });
-    }
-
     let signer;
     try { signer = new PublicKey(signerStr); }
     catch { return res.status(400).json({ error: "Invalid signer public key" }); }
 
     try {
-      // Per Jupiter docs: deposit+borrow is ONE call with colAmount>0 AND debtAmount>0
-      // positionId=0 auto-creates a new position
-      const { ixs, addressLookupTableAccounts } = await getOperateIx({
-        vaultId:    Number(vaultId),
-        positionId: Number(positionId ?? 0),
-        colAmount:  new BN(colAmount.toString()),   // positive = deposit collateral
-        debtAmount: new BN(debtAmount.toString()),  // positive = borrow
-        connection,
-        signer,
-      });
+      if (action === "deposit") {
+        // Step 1: deposit collateral only (colAmount>0, debtAmount=0)
+        // positionId=0 creates a new position; SDK returns the new positionId
+        const result = await buildOp({ vaultId, positionId: 0, colAmount, debtAmount: "0", signer, connection });
+        return res.status(200).json(result);
+      }
 
-      if (!ixs?.length) throw new Error("No instructions returned from getOperateIx");
+      if (action === "borrow") {
+        // Step 2: borrow only against existing position (colAmount=0, debtAmount>0)
+        if (!positionId) return res.status(400).json({ error: "positionId required for borrow action" });
+        const result = await buildOp({ vaultId, positionId, colAmount: "0", debtAmount, signer, connection });
+        return res.status(200).json(result);
+      }
 
-      // Return serialized ixs + full ALT data — client builds tx with fresh blockhash
-      return res.status(200).json({
-        ixs:  ixs.map(serializeIx),
-        alts: (addressLookupTableAccounts || []).map(serializeAlt),
-      });
+      return res.status(400).json({ error: `Unknown action: ${action}` });
+
     } catch (err) {
-      console.error("[/api/lend-positions] borrow error:", err.message);
+      console.error(`[/api/lend-positions] ${action} error:`, err.message);
       return res.status(500).json({ error: err.message });
     }
   }
 
-  // ── GET — fetch open borrow positions (original unchanged) ────────────────
-  if (req.method !== "GET") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  // ── GET — fetch open borrow positions ────────────────────────────────────
+  if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
   const { wallet } = req.query;
   if (!wallet) return res.status(400).json({ error: "Missing wallet query param" });
@@ -111,29 +115,20 @@ export default async function handler(req, res) {
       const supplyRaw = p.supply?.toString()     ?? "0";
       const borrowRaw = p.borrow?.toString()     ?? "0";
       const dustRaw   = p.dustBorrow?.toString() ?? "0";
-
-      let riskRatio = null;
+      let riskRatio   = null;
       const supplyNum = parseFloat(supplyRaw);
       const borrowNum = parseFloat(borrowRaw);
       if (supplyNum > 0) riskRatio = borrowNum / supplyNum;
-
       return {
-        positionId:           p.nftId,
-        vaultId,
-        owner:                p.owner?.toBase58() ?? wallet,
-        collateral:           meta.collateral  ?? "Unknown",
-        debt:                 meta.debt        ?? "Unknown",
-        colDecimals:          meta.colDecimals ?? 9,
-        debtDecimals:         meta.debtDecimals ?? 6,
-        supply:               supplyRaw,
-        borrow:               borrowRaw,
-        dustBorrow:           dustRaw,
-        riskRatio,
-        liquidationThreshold: p.vault?.configs?.liquidationThreshold ?? null,
-        isLiquidated:         p.isLiquidated ?? false,
-        tick:                 p.tick   ?? null,
-        tickId:               p.tickId ?? null,
-        isSupplyOnly:         p.isSupplyPosition ?? false,
+        positionId: p.nftId, vaultId,
+        owner: p.owner?.toBase58() ?? wallet,
+        collateral: meta.collateral ?? "Unknown", debt: meta.debt ?? "Unknown",
+        colDecimals: meta.colDecimals ?? 9, debtDecimals: meta.debtDecimals ?? 6,
+        supply: supplyRaw, borrow: borrowRaw, dustBorrow: dustRaw,
+        riskRatio, liquidationThreshold: p.vault?.configs?.liquidationThreshold ?? null,
+        isLiquidated: p.isLiquidated ?? false,
+        tick: p.tick ?? null, tickId: p.tickId ?? null,
+        isSupplyOnly: p.isSupplyPosition ?? false,
       };
     });
 
@@ -141,7 +136,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ positions: borrowPositions, total: borrowPositions.length, wallet });
 
   } catch (err) {
-    console.error("[/api/lend-positions] error:", err);
+    console.error("[/api/lend-positions] GET error:", err);
     return res.status(500).json({ error: err?.message || "Failed to fetch positions", positions: [] });
   }
 }
