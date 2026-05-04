@@ -4864,7 +4864,7 @@ function JupChatInner() {
       // Check if the tx actually succeeded on-chain (confirmed ≠ succeeded)
       const txResult = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
       if (txResult?.meta?.err) {
-        throw new Error(`Transaction failed on-chain: ${JSON.stringify(txResult.meta.err)}`);
+        throw new Error(`Transaction failed on-chain: ${JSON.stringify(txResult.meta.err).replace(/[{}"]/g, " ").trim()}`);
       }
 
       setLockStatus("done");
@@ -4969,7 +4969,7 @@ function JupChatInner() {
         maxSupportedTransactionVersion: 0,
       });
       if (txResult?.meta?.err) {
-        throw new Error(`On-chain tx failed: ${JSON.stringify(txResult.meta.err)}`);
+        throw new Error(`On-chain tx failed: ${JSON.stringify(txResult.meta.err).replace(/[{}"]/g, " ").trim()}`);
       }
 
       push("ai", `Vested tokens claimed ✓\n\nTx: [View on Solscan →](https://solscan.io/tx/${sig})`);
@@ -6165,6 +6165,30 @@ function JupChatInner() {
     setBetStatus(null);
   };
 
+  // ── Sanitize error messages — strip raw JSON so users never see it ──────────
+  const humanizeError = (err) => {
+    const raw = err?.message || String(err || "Unknown error");
+    // If the message contains a JSON object, try to extract a readable field
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const obj = JSON.parse(jsonMatch[0]);
+        const readable = obj.message || obj.error || obj.msg || obj.detail || null;
+        if (readable && typeof readable === "string") {
+          // Map known API codes to friendly messages
+          if (readable.toLowerCase().includes("insufficient")) return "Insufficient funds — not enough balance for this action.";
+          return readable;
+        }
+        const code = obj.code || obj.type || null;
+        if (code === "INSUFFICIENT_FUNDS") return "Insufficient funds — not enough balance for this action.";
+        if (code) return `Action failed (${code}). Please try again.`;
+      } catch { /* not JSON, fall through */ }
+      // JSON blob but couldn't parse — strip it entirely
+      return raw.replace(/\{[\s\S]*\}/, "").trim() || "Action failed. Please try again.";
+    }
+    return raw;
+  };
+
   // ── Direct prediction bet — used by PLACE_PREDICTION and BASKET_PREDICTION ──
   // Fetches market, finds matching outcome, executes bet without UI panel.
   // Returns { success: bool, msg: string }
@@ -6219,7 +6243,20 @@ function JupChatInner() {
         if (res?.transaction) { orderRes = res; usedMint = mint; break; }
         orderRes = res;
       }
-      if (!orderRes?.transaction) throw new Error(`Jupiter API: ${JSON.stringify(orderRes).slice(0, 200)}`);
+      if (!orderRes?.transaction) {
+        // Parse a human-readable reason from the API response
+        const apiMsg = orderRes?.message || orderRes?.error?.message || orderRes?.error || null;
+        const apiCode = orderRes?.code || orderRes?.type || null;
+        let humanErr = "Could not place the bet. Please try again.";
+        if (apiCode === "INSUFFICIENT_FUNDS" || (apiMsg && apiMsg.toLowerCase().includes("insufficient"))) {
+          humanErr = "Insufficient funds — you don't have enough USDC to place this bet.";
+        } else if (apiMsg && apiMsg.toLowerCase().includes("market")) {
+          humanErr = `Market error: ${apiMsg}`;
+        } else if (apiMsg) {
+          humanErr = apiMsg;
+        }
+        throw new Error(humanErr);
+      }
 
       const binaryStr = atob(orderRes.transaction);
       const txBytes = new Uint8Array(binaryStr.length);
@@ -6242,7 +6279,7 @@ function JupChatInner() {
         msg: `✓ **${side.toUpperCase()}** $${amtNum} on _${outcome}_ (${foundEventTitle})${estWin}\n[Solscan →](https://solscan.io/tx/${signature})`,
       };
     } catch (err) {
-      return { success: false, msg: `Failed: ${err?.message || "Unknown error"}` };
+      return { success: false, msg: `❌ ${humanizeError(err)}` };
     }
   };
   const safeApiFetch = async (url, opts = {}) => {
@@ -10162,7 +10199,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             }));
 
             const invalid = initialOrders.filter(o => !o.ok);
-            invalid.forEach(o => { failed++; push("ai", `Failed: ${o.meta.fromSym}→${o.meta.toSym}: ${o.err}`); });
+            invalid.forEach(o => { failed++; push("ai", `❌ ${o.meta.fromSym}→${o.meta.toSym}: ${humanizeError({ message: o.err })}`); });
             const validOrders = initialOrders.filter(o => o.ok);
 
             if (validOrders.length === 0) { push("ai", `**Basket done** — ${done} succeeded, ${failed} failed`); return; }
