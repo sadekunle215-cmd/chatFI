@@ -496,6 +496,45 @@ export default function YieldRotatorPlugin({
       // Show success card in the panel
       setSuccessCard({ posSym, bestSym, posApy, bestApy, depositSig });
 
+      // ── Sync yield vault to reflect the new position ──────────────────────
+      // After a successful migration the user's active earn position has moved
+      // from posSym → bestSym. Any yield vault that was watching posSym must be
+      // updated so it tracks the new asset, otherwise it silently becomes stale
+      // (pointing at a token the user no longer holds in Earn).
+      try {
+        const vaultRes = await fetch(`/api/yield-vault?wallet=${walletFull}`);
+        if (vaultRes.ok) {
+          const { vaults = [] } = await vaultRes.json();
+
+          // Find any vault whose fromSym matches the position we just migrated out of
+          const staleVaults = vaults.filter(v =>
+            v.earnMint === posMint || (v.earnSym || v.sym || "").toUpperCase() === posSym.toUpperCase()
+          );
+
+          for (const vault of staleVaults) {
+            await fetch(`/api/yield-vault?id=${vault.id}&wallet=${walletFull}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                earnMint:   bestMint,
+                earnSymbol: bestSym,   // matches vault schema field (earnSymbol, not earnSym)
+                // targetTokenSymbol / threshold unchanged — only source position changed
+              }),
+            });
+          }
+
+          if (staleVaults.length > 0) {
+            push("ai",
+              `[Vault] Updated ${staleVaults.length} yield vault${staleVaults.length > 1 ? "s" : ""} ` +
+              `— now tracking ${bestSym} Earn instead of ${posSym} Earn.`
+            );
+          }
+        }
+      } catch (vaultErr) {
+        // Non-fatal — migration succeeded, vault sync failed
+        console.warn("[YieldRotator] Vault sync failed (non-fatal):", vaultErr);
+      }
+
       // Notify user via Telegram if they have it linked
       try {
         await fetch("/api/yield-vault?action=notify-rotation-complete", {
