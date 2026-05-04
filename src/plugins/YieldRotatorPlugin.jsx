@@ -267,83 +267,123 @@ export default function YieldRotatorPlugin({
     const rpcUrl = process.env?.NEXT_PUBLIC_SOLANA_RPC || import.meta.env?.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
     const conn   = new Connection(rpcUrl, "confirmed");
 
-    // Bug fix 1: track current step in a ref so the catch block always reads
-    // the latest value — React state is stale inside async closures
     const stepRef = { current: "" };
     const setStep = (s) => { stepRef.current = s; setMigrateStep(s); };
 
-    const waitConfirm = async (sig, maxMs = 30000) => {
+    // waitConfirm: polls every 800ms, accepts processed/confirmed/finalized
+    const waitConfirm = async (sig, maxMs = 75000, minLevel = "processed") => {
+      const LEVELS = { processed: 0, confirmed: 1, finalized: 2 };
+      const minIdx = LEVELS[minLevel] ?? 0;
       const start = Date.now();
       while (Date.now() - start < maxMs) {
-        const res = await conn.getSignatureStatuses([sig], { searchTransactionHistory: true });
-        const st  = res?.value?.[0];
-        if (st?.err) throw new Error("On-chain error: " + JSON.stringify(st.err));
-        if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") return;
-        await new Promise(r => setTimeout(r, 1500));
+        try {
+          const res = await conn.getSignatureStatuses([sig], { searchTransactionHistory: true });
+          const st  = res?.value?.[0];
+          if (st?.err) throw new Error("On-chain error: " + JSON.stringify(st.err));
+          if (st?.confirmationStatus && (LEVELS[st.confirmationStatus] ?? -1) >= minIdx) return;
+        } catch (pollErr) {
+          if (pollErr.message?.startsWith("On-chain error")) throw pollErr;
+        }
+        await new Promise(r => setTimeout(r, 800));
       }
       throw new Error("Tx timeout — check Solscan");
     };
 
-    // Bug fix 2: don't mutate recentBlockhash on VersionedTransactions — the
-    // message is already compiled and blockhash replacement breaks the signature.
-    // Jupiter issues transactions with a fresh blockhash; just sign and submit.
-    const signAndSend = async (txBase64) => {
+    // FIX 3: send signed txs directly via conn.sendRawTransaction, not
+    // jupFetch(rpcUrl, …). jupFetch routes through the app's API proxy which
+    // isn't designed for raw Solana RPC calls — that's what caused "Failed to fetch".
+    const sendSigned = async (txBase64) => {
       const tx = VersionedTransaction.deserialize(b64ToBytes(txBase64));
       const signed = await provider.signTransaction(tx);
-      return bytesToB64(signed.serialize());
+      const sig = await conn.sendRawTransaction(signed.serialize(), {
+        skipPreflight: true,
+        maxRetries: 5,
+        preflightCommitment: "processed",
+      });
+      return sig;
+    };
+
+    // Read actual on-chain token balance for a mint after a tx confirms
+    const readTokenBalance = async (mint) => {
+      try {
+        const { PublicKey } = await import("@solana/web3.js");
+        const accounts = await conn.getParsedTokenAccountsByOwner(
+          new PublicKey(walletFull),
+          { mint: new PublicKey(mint) }
+        );
+        const raw = accounts.value?.[0]
+          ?.account?.data?.parsed?.info?.tokenAmount?.amount;
+        return raw && Number(raw) > 0 ? Math.floor(Number(raw)) : null;
+      } catch {
+        return null;
+      }
     };
 
     try {
+      // ── FIX 1: Resolve the real on-chain share amount before withdrawing ──
+      // Jupiter Earn tracks positions in shares, not token units. Scaling
+      // posAmt (e.g. 0.4 USDC → 400000) does NOT match the share amount the
+      // API expects, which is why the withdraw was returning "insufficient funds".
+      // Always fetch /positions first and use depositedAmount directly.
+      setStep("Fetching position details…");
+      let withdrawAmtRaw;
+      try {
+        const positions = await jupFetch(`${JUP_EARN_API}/positions?wallet=${walletFull}`);
+        const arr = Array.isArray(positions) ? positions : (positions?.positions || positions?.data || []);
+        const matched = arr.find(p => {
+          const pId   = p.planId || p.poolId || p.marketId || p.id || "";
+          const pMint = p.asset?.address || p.asset?.mint || p.mint || p.tokenMint || p.assetMint || "";
+          return (posPoolId && pId === posPoolId) || (posMint && pMint === posMint);
+        });
+        const rawFromApi = matched?.depositedAmount ?? matched?.shares ?? matched?.rawAmount ?? null;
+        if (rawFromApi && Number(rawFromApi) > 0) {
+          withdrawAmtRaw = Math.floor(Number(rawFromApi));
+          console.log(`[YieldRotator] Using API share amount: ${withdrawAmtRaw}`);
+        } else {
+          const dec = KNOWN_DECIMALS[posSym] ?? KNOWN_DECIMALS[posMint] ?? 6;
+          withdrawAmtRaw = posAmt > 1e6 ? Math.floor(posAmt) : Math.floor(posAmt * Math.pow(10, dec));
+          console.warn(`[YieldRotator] /positions returned no raw amount — falling back to scaled posAmt: ${withdrawAmtRaw}`);
+        }
+      } catch (fetchErr) {
+        console.warn("[YieldRotator] Could not fetch /positions, falling back:", fetchErr);
+        const dec = KNOWN_DECIMALS[posSym] ?? KNOWN_DECIMALS[posMint] ?? 6;
+        withdrawAmtRaw = posAmt > 1e6 ? Math.floor(posAmt) : Math.floor(posAmt * Math.pow(10, dec));
+      }
+
       // ── Tx 1: Withdraw from current Earn pool ──────────────────────────────
       setStep("Withdrawing from current pool…");
       push("ai", `[Migrate] ${posSym} Earn → ${bestSym} Earn\nStep 1/3 — withdrawing from current pool…`);
 
-      const dec = KNOWN_DECIMALS[posSym] ?? KNOWN_DECIMALS[posMint] ?? 6;
-      const withdrawAmtRaw = posAmt > 1e6
-        ? Math.floor(posAmt)                           // already in raw units
-        : Math.floor(posAmt * Math.pow(10, dec));      // convert from human-readable
+      const preMint    = posMint || symToMint(posSym);
+      const bestPlanId = bestPool.planId || bestPool.id || bestPool.poolId;
 
       const withdrawRes = await jupFetch(`${JUP_EARN_API}/withdraw`, {
         method: "POST",
-        body: {
-          asset:  posMint || symToMint(posSym),  // underlying token mint
-          amount: withdrawAmtRaw.toString(),
-          signer: walletFull,
-        },
+        body: { asset: preMint, amount: withdrawAmtRaw.toString(), signer: walletFull },
       });
       if (withdrawRes?.error || !withdrawRes?.transaction) {
         throw new Error(withdrawRes?.error || "No withdraw transaction returned");
       }
 
-      // Refresh blockhash before signing — stale blockhash causes Custom:1 on-chain error
-      const withdrawTx = VersionedTransaction.deserialize(b64ToBytes(withdrawRes.transaction));
-      try {
-        const { blockhash } = await conn.getLatestBlockhash("confirmed");
-        withdrawTx.message.recentBlockhash = blockhash;
-      } catch { /* non-fatal — proceed with original blockhash */ }
-      const withdrawSigned = await provider.signTransaction(withdrawTx);
-      // Send via RPC jsonrpc (same pattern as chatFI doEarnWithdraw)
-      const withdrawSendRes = await jupFetch(rpcUrl, {
-        method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction",
-                params: [bytesToB64(withdrawSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }] },
-      });
-      const withdrawSig = withdrawSendRes?.result;
-      if (!withdrawSig) throw new Error(withdrawSendRes?.error?.message || "No signature from withdraw tx");
-      await waitConfirm(withdrawSig);
+      const withdrawSig = await sendSigned(withdrawRes.transaction);
+      if (!withdrawSig) throw new Error("No signature from withdraw tx");
+      await waitConfirm(withdrawSig, 75000, "processed");
       push("ai", `[Done] Step 1/3 — withdrawn from ${posSym} Earn. [Solscan](https://solscan.io/tx/${withdrawSig})`);
 
       // ── Tx 2: Swap if cross-asset ──────────────────────────────────────────
-      let depositMint   = posMint || symToMint(posSym);
-      let depositSym    = posSym;
-      let depositAmtRaw = withdrawAmtRaw;
+      let depositMint = preMint;
+      let depositSym  = posSym;
 
       if (isCrossAsset && bestMint && bestMint !== depositMint) {
         setStep("Swapping to target asset…");
         push("ai", `[Swap] Step 2/3 — swapping ${posSym} → ${bestSym}…`);
 
+        // Read actual post-withdraw wallet balance — shares redeemed to tokens
+        const postWithdrawBalance = await readTokenBalance(depositMint);
+        const swapInputAmt = postWithdrawBalance ?? withdrawAmtRaw;
+
         const swapOrderRes = await jupFetch(
-          `${JUP_SWAP_ORDER}?inputMint=${depositMint}&outputMint=${bestMint}&amount=${withdrawAmtRaw}&slippageBps=50&taker=${walletFull}`
+          `${JUP_SWAP_ORDER}?inputMint=${depositMint}&outputMint=${bestMint}&amount=${swapInputAmt}&slippageBps=50&taker=${walletFull}`
         );
         if (swapOrderRes?.error || !swapOrderRes?.transaction) {
           throw new Error(swapOrderRes?.error || "No swap transaction returned");
@@ -358,47 +398,17 @@ export default function YieldRotatorPlugin({
         if (swapExec?.error) throw new Error(swapExec.error);
         const swapSig = swapExec?.signature || swapExec?.txid;
         if (!swapSig) throw new Error("No signature from swap tx");
-        await waitConfirm(swapSig);
+        await waitConfirm(swapSig, 75000, "processed");
 
         depositMint = bestMint;
         depositSym  = bestSym;
 
-        // Fix: read actual post-swap wallet balance from chain — this is the
-        // ground truth. swapOrderRes.outAmount is sometimes absent, and
-        // otherAmountThreshold is only the slippage minimum, not what arrived.
-        try {
-          const { PublicKey } = await import("@solana/web3.js");
-          const tokenAccounts = await conn.getParsedTokenAccountsByOwner(
-            new PublicKey(walletFull),
-            { mint: new PublicKey(bestMint) }
-          );
-          const rawBalance = tokenAccounts.value?.[0]
-            ?.account?.data?.parsed?.info?.tokenAmount?.amount;
-          if (rawBalance && Number(rawBalance) > 0) {
-            depositAmtRaw = Math.floor(Number(rawBalance));
-          } else {
-            // Fallback 1: outAmount from swap response (already raw units)
-            const swapOutAmt = swapOrderRes.outAmount || swapOrderRes.outputAmount || null;
-            if (swapOutAmt && Number(swapOutAmt) > 0) {
-              depositAmtRaw = Math.floor(Number(swapOutAmt));
-            } else {
-              // Fallback 2: re-scale posAmt using output token decimals
-              const outDec = KNOWN_DECIMALS[bestSym] ?? 6;
-              depositAmtRaw = Math.floor(posAmt * Math.pow(10, outDec));
-            }
-          }
-        } catch (balErr) {
-          console.warn("Balance fetch failed, falling back to swapOrderRes:", balErr);
-          const swapOutAmt = swapOrderRes.outAmount || swapOrderRes.outputAmount || null;
-          const outDec = KNOWN_DECIMALS[bestSym] ?? 6;
-          depositAmtRaw = swapOutAmt
-            ? Math.floor(Number(swapOutAmt))
-            : Math.floor(posAmt * Math.pow(10, outDec));
-        }
-
-        // Show exact amount being deposited so it's visible in chat if something looks wrong
-        const depositHuman = (depositAmtRaw / Math.pow(10, KNOWN_DECIMALS[bestSym] ?? 6)).toFixed(4);
-        push("ai", `[Done] Step 2/3 — swapped to ${bestSym}. Depositing ${depositHuman} ${bestSym}. [Solscan](https://solscan.io/tx/${swapSig})`);
+        const outDec = KNOWN_DECIMALS[bestSym] ?? 6;
+        const outAmt = swapOrderRes.outAmount || swapOrderRes.outputAmount;
+        const depositHuman = outAmt
+          ? (Number(outAmt) / Math.pow(10, outDec)).toFixed(4)
+          : "~" + (swapInputAmt / Math.pow(10, KNOWN_DECIMALS[posSym] ?? 6)).toFixed(4);
+        push("ai", `[Done] Step 2/3 — swapped to ${bestSym}. Depositing ~${depositHuman} ${bestSym}. [Solscan](https://solscan.io/tx/${swapSig})`);
       } else {
         push("ai", `[Skip] Step 2/3 — same asset (${posSym}), no swap needed.`);
       }
@@ -407,10 +417,20 @@ export default function YieldRotatorPlugin({
       setStep("Depositing into new pool…");
       push("ai", `[Deposit] Step 3/3 — depositing into ${bestSym} Earn (${bestApy.toFixed(2)}% APY)…`);
 
-      // Fix: include bestPlanId so Jupiter routes to the correct pool
-      const bestPlanId = bestPool.planId || bestPool.id || bestPool.poolId;
+      // FIX 2: always read actual wallet balance before building the deposit tx.
+      // The old prefetch used pre-withdraw amounts which were wrong. Reading chain
+      // state here is the ground truth for both same-asset and cross-asset paths.
+      const actualBalance = await readTokenBalance(depositMint);
+      const depositAmtRaw = actualBalance ?? (() => {
+        const dec = KNOWN_DECIMALS[depositSym] ?? 6;
+        return posAmt > 1e6 ? Math.floor(posAmt) : Math.floor(posAmt * Math.pow(10, dec));
+      })();
 
-      const depositRes = await jupFetch(`${JUP_EARN_API}/deposit`, {
+      if (!depositAmtRaw || depositAmtRaw <= 0) {
+        throw new Error(`Could not determine deposit amount for ${depositSym} — check wallet balance.`);
+      }
+
+      let depositRes = await jupFetch(`${JUP_EARN_API}/deposit`, {
         method: "POST",
         body: {
           asset:  depositMint,
@@ -423,34 +443,14 @@ export default function YieldRotatorPlugin({
         throw new Error(depositRes?.error || `No deposit transaction returned (amount: ${depositAmtRaw}, mint: ${depositMint})`);
       }
 
-      // Fix: retry deposit up to 2 times with a fresh blockhash each attempt.
-      // Deposit is the highest-risk step — funds are already swapped — so we
-      // must not give up on a single timeout.
+      // Retry deposit up to 2 times — funds already moved, can't give up easily
       let depositSig = null;
       let lastDepositErr = null;
 
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const depositTx = VersionedTransaction.deserialize(b64ToBytes(depositRes.transaction));
-
-          try {
-            const { blockhash } = await conn.getLatestBlockhash("confirmed");
-            depositTx.message.recentBlockhash = blockhash;
-          } catch (bhErr) {
-            console.warn(`Deposit attempt ${attempt + 1}: blockhash refresh failed:`, bhErr);
-          }
-
-          const depositSigned = await provider.signTransaction(depositTx);
-          const depositSendRes = await jupFetch(rpcUrl, {
-            method: "POST",
-            body: {
-              jsonrpc: "2.0", id: 1, method: "sendTransaction",
-              params: [bytesToB64(depositSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }],
-            },
-          });
-
-          depositSig = depositSendRes?.result;
-          if (!depositSig) throw new Error(depositSendRes?.error?.message || "No signature from deposit tx");
+          depositSig = await sendSigned(depositRes.transaction);
+          if (!depositSig) throw new Error("No signature from deposit tx");
           await waitConfirm(depositSig);
           break; // success — exit retry loop
 
@@ -461,6 +461,19 @@ export default function YieldRotatorPlugin({
             setStep("Deposit timed out — retrying…");
             push("ai", `[Retry] Deposit attempt 1 timed out — retrying automatically…`);
             await new Promise(r => setTimeout(r, 2000));
+            // Fetch a fresh deposit tx with a new blockhash for the retry
+            try {
+              const retryRes = await jupFetch(`${JUP_EARN_API}/deposit`, {
+                method: "POST",
+                body: {
+                  asset:  depositMint,
+                  amount: depositAmtRaw.toString(),
+                  signer: walletFull,
+                  ...(bestPlanId ? { planId: bestPlanId } : {}),
+                },
+              });
+              if (retryRes?.transaction && !retryRes?.error) depositRes = retryRes;
+            } catch { /* use original tx as last resort */ }
           }
         }
       }
@@ -488,15 +501,7 @@ export default function YieldRotatorPlugin({
         await fetch("/api/yield-vault?action=notify-rotation-complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            wallet:      walletFull,
-            posSym,
-            bestSym,
-            posApy,
-            bestApy,
-            depositSig,
-            isCrossAsset,
-          }),
+          body: JSON.stringify({ wallet: walletFull, posSym, bestSym, posApy, bestApy, depositSig, isCrossAsset }),
         });
       } catch { /* non-fatal — migration already succeeded */ }
 
@@ -506,7 +511,6 @@ export default function YieldRotatorPlugin({
 
     } catch (err) {
       const msg = err?.message || "Unknown error";
-      // Bug fix 4: use stepRef.current (always current) not migrateStep (stale closure)
       push("ai", `[Failed] Migration stopped at: ${stepRef.current || "unknown step"}\n${msg}`);
     } finally {
       setMigrating(null);
