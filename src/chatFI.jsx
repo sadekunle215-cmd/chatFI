@@ -189,6 +189,7 @@ const TOKEN_MINTS = {
   PYTH:    "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
   MSOL:    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
   JITOSOL: "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",
+  JUPSOL:  "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v",
   BSOL:    "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",
   SAMO:    "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
   ORCA:    "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",
@@ -203,7 +204,7 @@ const TOKEN_MINTS = {
 
 const TOKEN_DECIMALS = {
   SOL:9, JUP:6, BONK:5, WIF:6, USDC:6, USDT:6, RAY:6, PYTH:6,
-  MSOL:9, JITOSOL:9, BSOL:9, SAMO:9, ORCA:6, POPCAT:9, TRUMP:6,
+  MSOL:9, JITOSOL:9, JUPSOL:9, BSOL:9, SAMO:9, ORCA:6, POPCAT:9, TRUMP:6,
   BTC:8, WBTC:8, ETH:8, WETH:8,
 };
 
@@ -2693,6 +2694,7 @@ function JupChatInner() {
   const [lendPosLoading, setLendPosLoading]     = useState(false);
   const [unwindStatus, setUnwindStatus]         = useState(null); // null | positionId | "done"
   const [showBorrow, setShowBorrow]             = useState(false);
+  const [borrowLiveBal, setBorrowLiveBal]       = useState(0);
 
   // ── Send panel ───────────────────────────────────────────────────────────────
   const [showSend, setShowSend]         = useState(false);
@@ -6381,6 +6383,38 @@ function JupChatInner() {
     }
   };
 
+  // ── Live balance fetch via Helius RPC — bypasses stale portfolio state ───────
+  // Used by borrow panel so LSTs (JitoSOL, JupSOL, etc.) always show real balance.
+  const fetchLiveBalance = async (wallet, sym) => {
+    try {
+      const upper = sym.toUpperCase();
+      if (upper === "SOL") {
+        const res = await fetch(SOLANA_RPC, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"getBalance", params:[wallet] }),
+        });
+        const j = await res.json();
+        return (j?.result?.value ?? 0) / 1e9;
+      }
+      // SPL token — look up mint from TOKEN_MINTS
+      const mint = TOKEN_MINTS[upper];
+      if (!mint) return 0;
+      const res = await fetch(SOLANA_RPC, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 1,
+          method: "getTokenAccountsByOwner",
+          params: [wallet, { mint }, { encoding: "jsonParsed" }],
+        }),
+      });
+      const j = await res.json();
+      const accounts = j?.result?.value || [];
+      if (!accounts.length) return 0;
+      // Sum all token accounts for this mint (usually just one)
+      return accounts.reduce((sum, a) => sum + (a?.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0), 0);
+    } catch { return 0; }
+  };
+
   // ── Borrow — deposit collateral + borrow in one tx via /api/borrow ───────────
   // Uses getOperateIx from @jup-ag/lend/borrow on the server (same pattern as /api/multiply).
   // positionId:0 → SDK auto-creates position + deposits + borrows atomically (versioned tx v0 + ALTs).
@@ -6393,9 +6427,9 @@ function JupChatInner() {
 
     const debtRaw = Math.floor(parseFloat(borrowAmount) * Math.pow(10, debtDecimals ?? 6)).toString();
 
-    // Balance check — for SOL collateral reserve 0.003 SOL for WSOL rent + tx fees
+    // Balance check — live from Helius RPC (bypasses stale portfolio)
     const colSym = (collateral || "SOL").toUpperCase();
-    const colBal = portfolio[colSym] ?? 0;
+    const colBal = await fetchLiveBalance(walletFull, colSym);
     const FEE_BUFFER = colSym === "SOL" ? 0.003 : 0;
     const safeColAmount = Math.min(parseFloat(colAmount), colBal - FEE_BUFFER);
     if (safeColAmount <= 0 || colBal < parseFloat(colAmount) + FEE_BUFFER) {
@@ -6533,7 +6567,14 @@ function JupChatInner() {
     setBorrowStatus(null);
   };
 
-  // ── Unwind (close) a Lend position ───────────────────────────────────────────
+  // Fetch live collateral balance from Helius whenever borrow panel is open or vault changes
+  useEffect(() => {
+    if (!showBorrow || !walletFull) { setBorrowLiveBal(0); return; }
+    const sym = (borrowCfg.collateral || "SOL").toUpperCase();
+    fetchLiveBalance(walletFull, sym).then(setBorrowLiveBal).catch(() => setBorrowLiveBal(0));
+  }, [showBorrow, borrowCfg.vaultId, walletFull]);
+
+
   // Jupiter's Borrow close/repay API is not yet public ("Borrow API — Soon" in their docs).
   // Attempting it programmatically causes on-chain assertion errors due to undocumented
   // parameter requirements. We redirect to Jupiter's own UI which handles it correctly.
@@ -6682,8 +6723,8 @@ function JupChatInner() {
       "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So":  "MSOL",
       "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
       "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1":  "BSOL",
-      "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v":  "jupSOL",
-      "Jito4APyf642JPzcbhPdHtTkuLFkHy5SfxGgwGiRBGP":  "JitoSOL",
+      "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v":  "JUPSOL",
+      "Jito4APyf642JPzcbhPdHtTkuLFkHy5SfxGgwGiRBGP":  "JITOSOL",
       "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs": "ETH",
       "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh": "WBTC",
       "AFbX8oGjGpmVFywabs9MZfXMTEcmjAnzu9UZwwE5UQFJ": "GST",
@@ -9315,8 +9356,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           debt:         vault.debt,
           colDecimals:  vault.colDecimals,
           debtDecimals: vault.debtDecimals,
-          colAmount:    actionData?.colAmount    || c.colAmount,
-          borrowAmount: actionData?.borrowAmount || c.borrowAmount,
+          colAmount:    (parseFloat(actionData?.colAmount) > 0 ? actionData.colAmount : c.colAmount) || "",
+          borrowAmount: (parseFloat(actionData?.borrowAmount) > 0 ? actionData.borrowAmount : c.borrowAmount) || "",
         }));
         push("ai", text);
         if (directMode && walletFull && actionData?.colAmount && actionData?.borrowAmount) {
@@ -10420,8 +10461,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 ...c,
                 vaultId: vault.vaultId, collateral: vault.collateral, debt: vault.debt,
                 colDecimals: vault.colDecimals, debtDecimals: vault.debtDecimals,
-                colAmount: stepData.colAmount || c.colAmount,
-                borrowAmount: stepData.borrowAmount || c.borrowAmount,
+                colAmount: (parseFloat(stepData.colAmount) > 0 ? stepData.colAmount : c.colAmount) || "",
+                borrowAmount: (parseFloat(stepData.borrowAmount) > 0 ? stepData.borrowAmount : c.borrowAmount) || "",
               }));
               setShowBorrow(true);
 
@@ -14328,7 +14369,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             const debtUsd  = debtAmt * debtPrice;
             const riskPct  = maxBorrowUsd > 0 ? Math.min(100, Math.round((debtUsd / maxBorrowUsd) * 100)) : 0;
             const riskColor = riskPct > 80 ? T.red : riskPct > 60 ? "#f59e0b" : T.green;
-            const colBal   = portfolio[colSym] ?? 0;
+            const colBal   = borrowLiveBal; // live from Helius RPC
             const isSigning = borrowStatus === "signing";
             const belowMin  = debtAmt > 0 && debtAmt < minBorrow;
             return (
