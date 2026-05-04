@@ -1386,12 +1386,12 @@ const BLOG_POSTS = [
         body: "\"Show my earn positions\" or \"withdraw my USDC from Earn\" — ChatFi pulls up your current positions with live balances and one-click withdraw buttons. Withdrawals are settled on-chain instantly; no lock-up periods."
       },
       {
-        heading: "Multiply: Leveraged Yield",
-        body: "For more advanced users, Multiply lets you loop your position using Jupiter Lend flashloans to amplify yield exposure. For example, deposit JupSOL as collateral, borrow SOL, convert to more JupSOL, and repeat — resulting in 2x–5x leveraged staking yield. ChatFi explains the mechanics and manages the loop for you."
+        heading: "Multiply: Leveraged Yield — Coming Soon",
+        body: "For more advanced users, Multiply will let you loop your position using Jupiter Lend flashloans to amplify yield exposure. For example, deposit JupSOL as collateral, borrow SOL, convert to more JupSOL, and repeat — resulting in 2x–5x leveraged staking yield. This feature is coming soon to ChatFi. In the meantime, you can access it directly at jup.ag/lend/multiply."
       },
       {
-        heading: "Borrow Against Your Assets",
-        body: "You can also borrow stablecoins against your SOL or JLP without selling. \"Borrow 200 USDC using 2 SOL as collateral\" — ChatFi opens the Borrow panel with LTV ratios, liquidation prices, and interest rates displayed clearly before you confirm."
+        heading: "Borrow Against Your Assets — Coming Soon",
+        body: "Soon you'll be able to borrow stablecoins against your SOL or JLP without selling, right from ChatFi. The Borrow feature is on its way. Until then, you can manage borrow positions directly at jup.ag/lend/borrow."
       }
     ],
     tips: [
@@ -1454,8 +1454,8 @@ const BLOG_POSTS = [
         body: "Beyond spot balances, ChatFi pulls your full DeFi footprint: open limit and DCA orders, Jupiter Earn deposits with live APY, Lend borrow positions with LTV health, LP positions with earned fees, staked JUP, and prediction market bets — all in one panel."
       },
       {
-        heading: "Perpetuals Positions",
-        body: "If you've opened leveraged perps positions on Jupiter, they appear in your portfolio with unrealised PnL, liquidation price, and position size. You can increase, decrease, or close perps positions directly from the portfolio panel."
+        heading: "Perpetuals Positions — Coming Soon",
+        body: "Jupiter Perps support is coming soon to ChatFi. Once live, your leveraged perps positions will appear here with unrealised PnL, liquidation price, and position size — with the ability to increase, decrease, or close directly from the portfolio panel. Until then, you can trade perps at jup.ag/perps."
       },
       {
         heading: "Trade Journal",
@@ -1471,6 +1471,114 @@ const BLOG_POSTS = [
       "Portfolio data refreshes each time you open the panel — always live",
       "\"My pending invites\" shows unclaimed token sends you've sent via invite link",
       "You can check any wallet's portfolio, not just yours — paste any Solana address"
+    ]
+  },
+  {
+    id: 8,
+    title: "Jupiter Send: Share Tokens via a Simple Link",
+    category: "Feature",
+    readTime: "3 min read",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
+    summary: "Jupiter Send lets you transfer any SPL token to anyone using a shareable invite link — no wallet address required. Perfect for gifting tokens or paying people who are new to Solana.",
+    sections: [
+      {
+        heading: "What Is Jupiter Send?",
+        body: "Jupiter Send is a gasless, link-based token transfer system built on Solana. Instead of asking for a wallet address, you generate a claim link and share it — via chat, DM, or anywhere else. The recipient opens the link and claims the tokens directly into their wallet. If they don't have a wallet yet, they can create one right on the claim page."
+      },
+      {
+        heading: "How to Send Tokens",
+        body: "\"Send 10 USDC via link\" or \"create a send link for 5 SOL\" — ChatFi generates a unique invite keypair, prepares the transfer transaction, and gives you a shareable URL. The tokens are locked to that keypair until the recipient claims them or you clawback the unclaimed funds."
+      },
+      {
+        heading: "Who Can Claim?",
+        body: "Anyone with the link can claim the tokens — they just need to connect or create a Solana wallet on the claim page. This makes Jupiter Send ideal for onboarding new users to Solana, paying friends who don't yet have a wallet, or distributing rewards to a group without collecting addresses."
+      },
+      {
+        heading: "Clawback: Reclaim Unclaimed Tokens",
+        body: "If a recipient never claims the tokens, you can reclaim them. Say \"show my pending sends\" or \"clawback my unclaimed links\" — ChatFi lists all your unclaimed invite links with clawback buttons. Clicking one returns the tokens to your wallet instantly."
+      },
+      {
+        heading: "Supported Tokens",
+        body: "Jupiter Send works with any SPL token — SOL, USDC, JUP, meme coins, and more. The claim experience shows the token name, logo, and amount, so recipients know exactly what they're receiving before connecting a wallet."
+      }
+    ],
+    tips: [
+      "Send links expire only when you clawback — recipients can claim at any time",
+      "\"Show my pending sends\" lists all active unclaimed links with their amounts",
+      "Great for gifting meme coins, paying for services, or onboarding friends to Solana",
+      "Each send creates a unique keypair — links cannot be reused or double-claimed"
+    ]
+  },
+  {
+    id: 9,
+    title: "Jupiter Lock: Vesting & Token Locking Explained",
+    category: "Feature",
+    readTime: "3 min read",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
+    summary: "Jupiter Lock lets you create on-chain vesting schedules and token locks for any SPL token. Ideal for teams, DAOs, and founders who need to prove long-term commitment to their community.",
+    sections: [
+      {
+        heading: "What Is Token Locking?",
+        body: "Token locking is a mechanism where tokens are locked in a smart contract and released according to a schedule — either all at once after a cliff period, or gradually over time (vesting). It's commonly used by project teams to show token holders that founders can't dump immediately, and by DAOs to distribute grants and contributor rewards fairly."
+      },
+      {
+        heading: "What ChatFi Can Do",
+        body: "\"Show my token locks\" or \"list my vesting schedules\" — ChatFi fetches all your active Jupiter Lock positions and displays them with unlock dates, claimable amounts, and one-click claim buttons. You can see exactly how much is locked, how much has vested, and when the next unlock occurs."
+      },
+      {
+        heading: "Claiming Unlocked Tokens",
+        body: "When tokens vest or a lock period expires, ChatFi notifies you and presents a claim button. \"Claim my unlocked tokens\" — ChatFi identifies all lock positions with claimable amounts and executes the on-chain claim in one transaction."
+      },
+      {
+        heading: "Why Projects Use Jupiter Lock",
+        body: "Jupiter Lock is fully on-chain and audited — the schedule is enforced by the smart contract, not by a centralised custodian. This makes it the credible-commitment tool of choice on Solana: token holders can independently verify the lock on-chain, and there is no way to circumvent the release schedule."
+      },
+      {
+        heading: "Creating a Lock",
+        body: "To create a new lock or vesting schedule, you can navigate to jup.ag/lock directly. ChatFi currently supports viewing and claiming from existing locks — full lock creation via chat is on the roadmap."
+      }
+    ],
+    tips: [
+      "\"Show my locks\" displays all your active vesting positions with unlock timelines",
+      "Tokens unlock according to the schedule set at creation — no early release possible",
+      "Lock creation for teams and DAOs is available at jup.ag/lock",
+      "Claimed tokens go directly to the recipient wallet set when the lock was created"
+    ]
+  },
+  {
+    id: 10,
+    title: "Token Research & Price Data: Know Before You Trade",
+    category: "Guide",
+    readTime: "3 min read",
+    date: new Date().toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" }),
+    summary: "ChatFi gives you instant token research — live prices, market cap, liquidity, safety scores, and on-chain metadata — so you can make informed decisions before you trade.",
+    sections: [
+      {
+        heading: "Live Price Lookups",
+        body: "\"What's the price of SOL?\" or \"how much is JUP worth?\" — ChatFi queries Jupiter's Price API v3 in real time and returns the current USD price along with 24-hour change, market cap, and volume. Prices are sourced from actual on-chain liquidity, not just exchange data feeds."
+      },
+      {
+        heading: "Token Safety Scores",
+        body: "Before trading any token, ChatFi can show you its safety score — a composite signal based on liquidity depth, holder concentration, contract verification, freeze authority, and other on-chain risk factors. \"Is BONK safe to trade?\" gives you an instant risk snapshot so you can gauge a token before putting capital in."
+      },
+      {
+        heading: "Searching Unknown Tokens",
+        body: "\"Tell me about FARTCOIN\" or \"search for tokens called PNUT\" — ChatFi queries Jupiter's full token index and returns matching results with contract addresses, descriptions, and social links. You can also paste a raw mint address to look up any Solana token that exists on-chain."
+      },
+      {
+        heading: "Comparing Multiple Tokens",
+        body: "\"Compare SOL, JUP, and BONK\" — ChatFi pulls live data for all three and lays out a side-by-side summary of price, market cap, and liquidity. Useful for deciding where to allocate capital across multiple candidates."
+      },
+      {
+        heading: "Tracking Prices While You Chat",
+        body: "You can set in-session price alerts so ChatFi monitors tokens in the background while you work on other things. \"Alert me when SOL hits $180\" — ChatFi tracks the price and pings you with a message in chat the moment the condition is met. Multiple alerts across different tokens are supported simultaneously."
+      }
+    ],
+    tips: [
+      "Paste a contract address to look up any token, even ones not listed by name",
+      "Always check the safety score for new or unknown tokens before trading",
+      "\"Price of X in SOL\" gives you the token's value denominated in SOL, not USD",
+      "Price alerts are active for the current session — re-set them if you reload the page"
     ]
   },
 ];
@@ -9033,13 +9141,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         const next = { ...data, description };
         setStudioCfg(c => ({ ...c, description }));
         setTokenWizard({ step: "image", data: next });
-        push("ai", `Got it. Now upload the **token image** — tap the 🖼 button next to the input bar.`);
+        push("ai", `Got it. Now upload the **token image** — tap the <span style="display:inline-flex;align-items:center;vertical-align:middle;margin:0 2px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#c7f284" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span> button next to the input bar.`);
 
       } else if (step === "confirm") {
         const answer = raw.toLowerCase().trim();
         if (answer === "yes" || answer === "y" || answer === "launch" || answer === "confirm" || answer === "go") {
           setTokenWizard(null);
-          push("ai", `🚀 Launching **${data.name}** ($${data.symbol})… Approve the transaction in your wallet.`);
+          push("ai", `<span style="display:inline-flex;align-items:center;gap:6px;vertical-align:middle"><svg width="18" height="18" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0"><circle cx="16" cy="16" r="16" fill="#C7F284"/><path d="M9 16.5C9 12.358 12.358 9 16.5 9H23v1.5c0 4.142-3.358 7.5-7.5 7.5H14v1h-1.5A3.5 3.5 0 0 1 9 15.5v1Z" fill="#0B1219"/><path d="M14 18v1.5A3.5 3.5 0 0 0 17.5 23H19v-1.5A3.5 3.5 0 0 0 15.5 18H14Z" fill="#0B1219"/></svg></span> Launching **${data.name}** ($${data.symbol})… Approve the transaction in your wallet.`);
           await doCreateToken();
         } else if (answer === "no" || answer === "cancel" || answer === "n") {
           setTokenWizard(null);
@@ -9057,7 +9165,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             push("ai", `What should the **description** say?`);
           } else if (/image|logo|icon/i.test(raw)) {
             setTokenWizard({ step: "image", data });
-            push("ai", `Upload a new **image** using the 🖼 button.`);
+            push("ai", `Upload a new **image** using the <span style="display:inline-flex;align-items:center;vertical-align:middle;margin:0 2px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#c7f284" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span> button.`);
           } else {
             push("ai", `Type **yes** to launch, **no** to cancel, or mention a field (name / symbol / description / image) to change it.`);
           }
@@ -10014,7 +10122,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             firstStep === "name"        ? "Let's create your token! What's the **token name**?" :
             firstStep === "symbol"      ? `${knownText}What **symbol** should it use? (e.g. MTK)` :
             firstStep === "description" ? `${knownText}Give it a short **description**.` :
-                                          `${knownText}Now upload the **token image** using the 🖼 button next to the input bar.`;
+                                          `${knownText}Now upload the **token image** using the <span style="display:inline-flex;align-items:center;vertical-align:middle;margin:0 2px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#c7f284" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span> button next to the input bar.`;
           push("ai", `⚡ **Token Wizard** — ${firstQ}`);
         } else {
           // Non-direct mode: open panel as before
@@ -16012,7 +16120,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} }}
-              placeholder={tokenWizard ? (tokenWizard.step === "image" ? "Upload image with 🖼 button →" : "Reply to continue…") : "Ask about prices, swaps, tokens…"}
+              placeholder={tokenWizard ? (tokenWizard.step === "image" ? "Upload image with the 📷 button →" : "Reply to continue…") : "Ask about prices, swaps, tokens…"}
               rows={1}
               style={{
                 flex:1, border:"none", outline:"none", background:"transparent",
@@ -16033,7 +16141,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     // Advance wizard to confirm step
                     setTokenWizard(prev => {
                       const next = { ...prev.data };
-                      push("ai", `🖼 **${file.name}** uploaded!\n\nHere's your token summary:\n- **Name:** ${next.name || studioCfg.name}\n- **Symbol:** $${next.symbol || studioCfg.symbol}\n- **Description:** ${next.description || studioCfg.description}\n\nType **yes** to launch, or mention a field to change it.`);
+                      push("ai", `<span style="display:inline-flex;align-items:center;gap:6px;vertical-align:middle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c7f284" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span> **${file.name}** uploaded!\n\nHere's your token summary:\n- **Name:** ${next.name || studioCfg.name}\n- **Symbol:** $${next.symbol || studioCfg.symbol}\n- **Description:** ${next.description || studioCfg.description}\n\nType **yes** to launch, or mention a field to change it.`);
                       return { step: "confirm", data: next };
                     });
                   };
@@ -16042,7 +16150,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 }} />
                 {studioImage
                   ? <img src={studioImage.dataUrl} alt="token" style={{ width:24, height:24, borderRadius:"50%", objectFit:"cover" }} />
-                  : <span style={{ fontSize:16 }}>🖼</span>
+                  : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                 }
               </label>
             )}
