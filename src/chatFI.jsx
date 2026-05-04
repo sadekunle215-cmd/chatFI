@@ -6107,18 +6107,19 @@ function JupChatInner() {
       if (!data?.transaction) throw new Error(data?.error?.message || data?.error || `Earn deposit API returned: ${JSON.stringify(data).slice(0, 200)}`);
 
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
-      try {
-        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
-        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
-        tx.message.recentBlockhash = blockhash;
-      } catch { /* non-fatal */ }
+      // Do NOT replace the blockhash — Jupiter bakes account state into the tx
       const signedTx = await provider.signTransaction(tx);
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 3 }] },
       });
       const signature = rpcRes?.result;
-      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+      if (!signature) {
+        const rpcErr = rpcRes?.error;
+        const logs = rpcErr?.data?.logs || [];
+        const logMsg = logs.find(l => l.includes("Error") || l.includes("failed") || l.includes("insufficient"));
+        throw new Error(logMsg || rpcErr?.message || "Transaction simulation failed.");
+      }
 
       push("ai",
         `✅ **Deposited ${amount} ${vault.token}** into ${vault.name}\n\n` +
@@ -6142,6 +6143,25 @@ function JupChatInner() {
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
     if (!provider.signTransaction) { push("ai", "Your wallet does not support transaction signing."); return; }
 
+    // ── SOL fee check — withdraw tx costs ~0.000005 SOL, need a small buffer ──
+    // This prevents the wallet "Insufficient funds" error for fee coverage.
+    try {
+      const solRes = await fetch(SOLANA_RPC, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [walletFull] }),
+      });
+      const solJson = await solRes.json();
+      const solBalance = (solJson?.result?.value ?? 0) / 1e9;
+      if (solBalance < 0.002) {
+        push("ai",
+          `⚠️ **Insufficient SOL for transaction fees**\n\n` +
+          `Your wallet only has **${solBalance.toFixed(5)} SOL** — you need at least **0.002 SOL** (~$${(0.002 * 170).toFixed(2)}) to cover the network fee.\n\n` +
+          `Add a small amount of SOL to your wallet and try again.`
+        );
+        return;
+      }
+    } catch { /* non-fatal — proceed and let the tx simulation catch it */ }
+
     const decimals = vault.assetDecimals ?? 6;
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
 
@@ -6155,19 +6175,33 @@ function JupChatInner() {
       });
       if (!data?.transaction) throw new Error(data?.error?.message || data?.error || `Earn withdraw API returned: ${JSON.stringify(data).slice(0, 200)}`);
 
+      // ── Sign the transaction exactly as Jupiter returned it ──
+      // Do NOT replace the blockhash — Jupiter bakes account state into the tx
+      // that is tied to the blockhash. Replacing it causes on-chain assertion failures.
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
-      try {
-        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
-        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
-        tx.message.recentBlockhash = blockhash;
-      } catch { /* non-fatal */ }
       const signedTx = await provider.signTransaction(tx);
+
+      // ── Send with preflight enabled so simulation catches errors before submitting ──
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
+        body: {
+          jsonrpc: "2.0", id: 1, method: "sendTransaction",
+          params: [bytesToB64(signedTx.serialize()), {
+            encoding: "base64",
+            skipPreflight: false,       // simulate first — catches fee/state errors
+            preflightCommitment: "confirmed",
+            maxRetries: 3,
+          }],
+        },
       });
       const signature = rpcRes?.result;
-      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
+      if (!signature) {
+        // Extract a clean error message from preflight simulation
+        const rpcErr = rpcRes?.error;
+        const logs = rpcErr?.data?.logs || [];
+        const logMsg = logs.find(l => l.includes("Error") || l.includes("failed") || l.includes("insufficient"));
+        throw new Error(logMsg || rpcErr?.message || "Transaction simulation failed — check your SOL balance for fees.");
+      }
 
       push("ai",
         `✅ **Withdrew ${amount} ${vault.token}** from ${vault.name}\n\n` +
