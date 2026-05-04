@@ -6459,7 +6459,7 @@ function JupChatInner() {
       // Query chain for the newly created position (SDK returns 0 for new positions)
       push("ai", "Fetching new position ID from chain…");
       await new Promise(r => setTimeout(r, 3000)); // let indexer catch up
-      const posRes = await fetch(`/api/lend-positions?wallet=${walletFull}`);
+      const posRes = await fetch(`/api/lend-positions?wallet=${walletFull}&all=1`);
       const posData = await posRes.json();
       const newPosition = (posData.positions || []).find(p => String(p.vaultId) === String(vaultId));
       if (!newPosition?.positionId) throw new Error("No positionId returned after deposit.");
