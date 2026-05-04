@@ -513,20 +513,14 @@ export default function YieldRotatorPlugin({
 
           for (const vault of staleVaults) {
             await fetch(`/api/yield-vault?id=${vault.id}&wallet=${walletFull}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                earnMint:   bestMint,
-                earnSymbol: bestSym,   // matches vault schema field (earnSymbol, not earnSym)
-                // targetTokenSymbol / threshold unchanged — only source position changed
-              }),
+              method: "DELETE",
             });
           }
 
           if (staleVaults.length > 0) {
             push("ai",
-              `[Vault] Updated ${staleVaults.length} yield vault${staleVaults.length > 1 ? "s" : ""} ` +
-              `— now tracking ${bestSym} Earn instead of ${posSym} Earn.`
+              `[Vault] Cancelled ${staleVaults.length} yield vault${staleVaults.length > 1 ? "s" : ""} ` +
+              `— ${posSym} Earn position closed. Set up a new vault on ${bestSym} Earn if needed.`
             );
           }
         }
