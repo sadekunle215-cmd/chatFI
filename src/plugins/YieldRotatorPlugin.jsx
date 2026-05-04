@@ -272,14 +272,23 @@ export default function YieldRotatorPlugin({
     const stepRef = { current: "" };
     const setStep = (s) => { stepRef.current = s; setMigrateStep(s); };
 
-    const waitConfirm = async (sig, maxMs = 30000) => {
+    // waitConfirm: polls every 800ms, accepts processed/confirmed/finalized
+    // maxMs=75s gives Solana enough time on congested slots without hanging forever
+    const waitConfirm = async (sig, maxMs = 75000, minLevel = "processed") => {
+      const LEVELS = { processed: 0, confirmed: 1, finalized: 2 };
+      const minIdx = LEVELS[minLevel] ?? 0;
       const start = Date.now();
       while (Date.now() - start < maxMs) {
-        const res = await conn.getSignatureStatuses([sig], { searchTransactionHistory: true });
-        const st  = res?.value?.[0];
-        if (st?.err) throw new Error("On-chain error: " + JSON.stringify(st.err));
-        if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") return;
-        await new Promise(r => setTimeout(r, 1500));
+        try {
+          const res = await conn.getSignatureStatuses([sig], { searchTransactionHistory: true });
+          const st  = res?.value?.[0];
+          if (st?.err) throw new Error("On-chain error: " + JSON.stringify(st.err));
+          if (st?.confirmationStatus && (LEVELS[st.confirmationStatus] ?? -1) >= minIdx) return;
+        } catch (pollErr) {
+          // RPC hiccup — keep polling, don't abort
+          if (pollErr.message?.startsWith("On-chain error")) throw pollErr;
+        }
+        await new Promise(r => setTimeout(r, 800));
       }
       throw new Error("Tx timeout — check Solscan");
     };
@@ -315,22 +324,20 @@ export default function YieldRotatorPlugin({
         throw new Error(withdrawRes?.error || "No withdraw transaction returned");
       }
 
-      // Refresh blockhash before signing — stale blockhash causes Custom:1 on-chain error
+      // Do NOT mutate recentBlockhash on VersionedTransactions — message is already
+      // compiled and blockhash mutation corrupts the hash, causing Custom:1 errors.
+      // Jupiter issues txs with a fresh blockhash; sign and send immediately.
       const withdrawTx = VersionedTransaction.deserialize(b64ToBytes(withdrawRes.transaction));
-      try {
-        const { blockhash } = await conn.getLatestBlockhash("confirmed");
-        withdrawTx.message.recentBlockhash = blockhash;
-      } catch { /* non-fatal — proceed with original blockhash */ }
       const withdrawSigned = await provider.signTransaction(withdrawTx);
       // Send via RPC jsonrpc (same pattern as chatFI doEarnWithdraw)
       const withdrawSendRes = await jupFetch(rpcUrl, {
         method: "POST",
         body: { jsonrpc: "2.0", id: 1, method: "sendTransaction",
-                params: [bytesToB64(withdrawSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }] },
+                params: [bytesToB64(withdrawSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 5, preflightCommitment: "processed" }] },
       });
       const withdrawSig = withdrawSendRes?.result;
       if (!withdrawSig) throw new Error(withdrawSendRes?.error?.message || "No signature from withdraw tx");
-      await waitConfirm(withdrawSig);
+      await waitConfirm(withdrawSig, 75000, "processed");
       push("ai", `[Done] Step 1/3 — withdrawn from ${posSym} Earn. [Solscan](https://solscan.io/tx/${withdrawSig})`);
 
       // ── Tx 2: Swap if cross-asset ──────────────────────────────────────────
@@ -433,19 +440,14 @@ export default function YieldRotatorPlugin({
         try {
           const depositTx = VersionedTransaction.deserialize(b64ToBytes(depositRes.transaction));
 
-          try {
-            const { blockhash } = await conn.getLatestBlockhash("confirmed");
-            depositTx.message.recentBlockhash = blockhash;
-          } catch (bhErr) {
-            console.warn(`Deposit attempt ${attempt + 1}: blockhash refresh failed:`, bhErr);
-          }
+          // Do NOT mutate recentBlockhash on VersionedTransaction — sign immediately
 
           const depositSigned = await provider.signTransaction(depositTx);
           const depositSendRes = await jupFetch(rpcUrl, {
             method: "POST",
             body: {
               jsonrpc: "2.0", id: 1, method: "sendTransaction",
-              params: [bytesToB64(depositSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 3 }],
+              params: [bytesToB64(depositSigned.serialize()), { encoding: "base64", skipPreflight: true, maxRetries: 5, preflightCommitment: "processed" }],
             },
           });
 
