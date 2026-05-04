@@ -133,7 +133,8 @@ export default async function handler(req, res) {
     });
 
     const borrowPositions = positions.filter(p => !p.isSupplyOnly);
-    return res.status(200).json({ positions: borrowPositions, total: borrowPositions.length, wallet });
+    const all = req.query.all === "1";
+    return res.status(200).json({ positions: all ? positions : borrowPositions, total: borrowPositions.length, wallet });
 
   } catch (err) {
     console.error("[/api/lend-positions] GET error:", err);
