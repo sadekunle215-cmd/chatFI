@@ -38,9 +38,15 @@ function serializeAlt(alt) {
 }
 
 async function buildOp({ vaultId, positionId, colAmount, debtAmount, signer, connection }) {
+  // positionId=0 (number) → create new position
+  // positionId=<base58 nftId string> → existing position (pass as PublicKey)
+  const resolvedPositionId = (!positionId || positionId === "0" || positionId === 0)
+    ? 0
+    : new PublicKey(positionId);
+
   const { ixs, addressLookupTableAccounts, nftId } = await getOperateIx({
     vaultId:    Number(vaultId),
-    positionId: Number(positionId ?? 0),
+    positionId: resolvedPositionId,
     colAmount:  new BN(colAmount.toString()),
     debtAmount: new BN(debtAmount.toString()),
     connection,
@@ -90,7 +96,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: `Unknown action: ${action}` });
 
     } catch (err) {
-      console.error(`[/api/lend-positions] ${action} error:`, err.message);
+      console.error(`[/api/lend-positions] ${action} error (vaultId=${vaultId}, positionId=${positionId}):`, err.message);
       return res.status(500).json({ error: err.message });
     }
   }
