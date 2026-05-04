@@ -1,121 +1,182 @@
-// api/send.js — Vercel serverless function (ESM)
+// /api/send.js — Vercel serverless function
+// Handles Jupiter Send: craft-send, craft-clawback, pending-invites, invite-history
 //
-// CHANGES FROM ORIGINAL:
-//  1. Server still derives invite keypair from inviteCode and partially signs
-//     using nacl.sign.detached (writes only the invite slot, no other slots reset).
-//  2. Response now includes blockhash + lastValidBlockHeight alongside
-//     partiallySignedTx — client uses these for confirmTransaction instead of
-//     making a second getLatestBlockhash call that could return a different value.
-//  3. Everything else unchanged from original.
+// POST action:send       → craft invite-based send tx (partially signed by invite keypair)
+// POST action:clawback   → craft clawback tx to reclaim unclaimed tokens
+// GET  type:pending      → fetch pending (unclaimed) invites for a wallet
+// GET  type:history      → fetch full invite history for a wallet
 
-import { Connection, Keypair, VersionedTransaction } from "@solana/web3.js";
+import { Connection, PublicKey, Keypair } from "@solana/web3.js";
 import nacl from "tweetnacl";
-import crypto from "crypto";
 
 const JUP_SEND_API = "https://api.jup.ag/send/v1";
-const RPC_URL      = process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+const RPC_URL      = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 
-function b64ToBytes(b64) {
-  return Uint8Array.from(Buffer.from(b64, "base64"));
-}
-function bytesToB64(bytes) {
-  return Buffer.from(bytes).toString("base64");
-}
+// Jupiter Send program ID — used to derive invitePDA
+const JUPITER_SEND_PROGRAM = new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
 
-// Jupiter spec: SHA-256("invite:" + code) → 32-byte seed → 64-byte Solana secret key
-function inviteCodeToKeypair(code) {
-  const priv_key = crypto.createHash("sha256").update("invite:" + code).digest();
-  // Keypair.fromSeed derives ed25519 pubkey from the seed
-  return Keypair.fromSeed(new Uint8Array(priv_key));
+// ── Derive invite keypair from code (must match client-side logic) ──────────
+// Client uses: SHA-256("invite:" + code) as the 32-byte seed
+async function inviteCodeToKeypair(code) {
+  const data     = new TextEncoder().encode("invite:" + code);
+  const hashBuf  = await crypto.subtle.digest("SHA-256", data);
+  const seed32   = new Uint8Array(hashBuf);
+  return Keypair.fromSeed(seed32);
 }
 
-// Write the invite keypair signature into its slot only — does not touch other slots
-function partialSignWithInviteKeypair(tx, inviteKeypair) {
-  const inviteIdx = tx.message.staticAccountKeys.findIndex(
-    key => key.equals(inviteKeypair.publicKey)
+// ── Derive the invitePDA from the invite keypair's pubkey ────────────────────
+// Jupiter's craft-clawback requires the PDA, not the raw keypair pubkey.
+// Seeds: ["invite", inviteKeypair.publicKey]
+function deriveInvitePDA(invitePubkey) {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("invite"), invitePubkey.toBuffer()],
+    JUPITER_SEND_PROGRAM
   );
-  if (inviteIdx < 0) throw new Error("inviteSigner not found in transaction accounts.");
-  const msgBytes = tx.message.serialize();
-  const sig = nacl.sign.detached(msgBytes, inviteKeypair.secretKey);
-  tx.signatures[inviteIdx] = sig;
+  return pda;
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.status(200).end();
+
+  // ── GET — pending invites or invite history ──────────────────────────────
+  if (req.method === "GET") {
+    const { wallet, type = "pending" } = req.query;
+    if (!wallet) return res.status(400).json({ error: "Missing wallet query param" });
+
+    try {
+      const endpoint = type === "history" ? "invite-history" : "pending-invites";
+      const jupRes  = await fetch(`${JUP_SEND_API}/${endpoint}?wallet=${wallet}`);
+      const data    = await jupRes.json();
+      return res.status(200).json(data);
+    } catch (err) {
+      console.error("[/api/send] GET error:", err.message);
+      return res.status(500).json({ error: err.message });
+    }
   }
 
-  let body = req.body;
-  if (typeof body === "string") {
-    try { body = JSON.parse(body); } catch { body = {}; }
-  }
-  body = body || {};
+  // ── POST — send or clawback ──────────────────────────────────────────────
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const { action = "send", sender, amount, mint, inviteCode } = body;
-  const jupHeaders = {
-    "Content-Type": "application/json",
-    ...(process.env.JUPITER_API_KEY ? { "x-api-key": process.env.JUPITER_API_KEY } : {}),
-  };
+  const { action, inviteCode, sender, amount, mint } = req.body || {};
+
+  if (!action) return res.status(400).json({ error: "Missing action" });
+  if (!inviteCode) return res.status(400).json({ error: "Missing inviteCode" });
+  if (!sender) return res.status(400).json({ error: "Missing sender" });
 
   try {
-    // ── CLAWBACK ────────────────────────────────────────────────────────────────
+    // ── Derive invite keypair from code ──────────────────────────────────
+    const inviteKeypair = await inviteCodeToKeypair(inviteCode);
+    const invitePubkey  = inviteKeypair.publicKey;
+
+    // ── CLAWBACK ─────────────────────────────────────────────────────────
     if (action === "clawback") {
-      if (!inviteCode || !sender) {
-        return res.status(400).json({ error: "Missing required fields: inviteCode, sender" });
+      // Derive the invitePDA — this is what Jupiter's craft-clawback requires
+      let invitePDA;
+      try {
+        invitePDA = deriveInvitePDA(invitePubkey);
+      } catch (pdaErr) {
+        console.error("[/api/send] invitePDA derivation failed:", pdaErr.message);
+        return res.status(500).json({ error: `Failed to derive invitePDA: ${pdaErr.message}` });
       }
-      const inviteKeypair = inviteCodeToKeypair(inviteCode);
-      const inviteSigner  = inviteKeypair.publicKey.toBase58();
 
-      const craftRes  = await fetch(`${JUP_SEND_API}/craft-clawback`, {
-        method: "POST", headers: jupHeaders,
-        body: JSON.stringify({ inviteSigner, sender }),
-      });
-      const craftData = await craftRes.json();
-      if (craftData.error) return res.status(502).json({
-        error: typeof craftData.error === "object" ? JSON.stringify(craftData.error) : craftData.error,
-      });
-      if (!craftData.tx) return res.status(502).json({ error: "No transaction returned from Jupiter clawback." });
+      console.log(`[clawback] sender=${sender} invitePubkey=${invitePubkey.toBase58()} invitePDA=${invitePDA.toBase58()}`);
 
-      const tx = VersionedTransaction.deserialize(b64ToBytes(craftData.tx));
-      partialSignWithInviteKeypair(tx, inviteKeypair);
-      return res.status(200).json({ partiallySignedTx: bytesToB64(tx.serialize()) });
+      // Call Jupiter craft-clawback with all required fields
+      const jupRes = await fetch(`${JUP_SEND_API}/craft-clawback`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          sender:     sender,
+          invitePDA:  invitePDA.toBase58(),
+        }),
+      });
+
+      const jupData = await jupRes.json();
+      if (!jupRes.ok || jupData.error || jupData.issues) {
+        const errMsg = jupData.error || JSON.stringify(jupData);
+        console.error("[/api/send] craft-clawback Jupiter error:", errMsg);
+        return res.status(400).json({ error: errMsg });
+      }
+
+      if (!jupData.transaction) {
+        return res.status(500).json({ error: "Jupiter returned no transaction for clawback" });
+      }
+
+      // Partially sign the tx with the invite keypair so the clawback is authorized
+      const { VersionedTransaction } = await import("@solana/web3.js");
+      const txBytes = Buffer.from(jupData.transaction, "base64");
+      const tx      = VersionedTransaction.deserialize(txBytes);
+
+      // Sign with invite keypair
+      const msgBytes   = tx.message.serialize();
+      const inviteSig  = nacl.sign.detached(msgBytes, inviteKeypair.secretKey);
+      const inviteIdx  = tx.message.staticAccountKeys
+        .findIndex(k => k.toBase58() === invitePubkey.toBase58());
+
+      if (inviteIdx >= 0) {
+        tx.signatures[inviteIdx] = inviteSig;
+      } else {
+        console.warn("[/api/send] invite keypair not found in tx signers — proceeding without partial sig");
+      }
+
+      const partiallySignedTx = Buffer.from(tx.serialize()).toString("base64");
+      return res.status(200).json({ partiallySignedTx });
     }
 
-    // ── SEND ────────────────────────────────────────────────────────────────────
-    if (!sender || !amount || !mint || !inviteCode) {
-      return res.status(400).json({ error: "Missing required fields: sender, amount, mint, inviteCode" });
+    // ── SEND ─────────────────────────────────────────────────────────────
+    if (action === "send") {
+      if (!amount) return res.status(400).json({ error: "Missing amount" });
+      if (!mint)   return res.status(400).json({ error: "Missing mint" });
+
+      console.log(`[send] sender=${sender} mint=${mint} amount=${amount} invitePubkey=${invitePubkey.toBase58()}`);
+
+      const jupRes = await fetch(`${JUP_SEND_API}/craft-send`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          sender:        sender,
+          inviteKeypair: invitePubkey.toBase58(),
+          amount:        amount,
+          mint:          mint,
+        }),
+      });
+
+      const jupData = await jupRes.json();
+      if (!jupRes.ok || jupData.error || jupData.issues) {
+        const errMsg = jupData.error || JSON.stringify(jupData);
+        console.error("[/api/send] craft-send Jupiter error:", errMsg);
+        return res.status(400).json({ error: errMsg });
+      }
+
+      if (!jupData.transaction) {
+        return res.status(500).json({ error: "Jupiter returned no transaction for send" });
+      }
+
+      // Partially sign with invite keypair
+      const { VersionedTransaction } = await import("@solana/web3.js");
+      const txBytes = Buffer.from(jupData.transaction, "base64");
+      const tx      = VersionedTransaction.deserialize(txBytes);
+
+      const msgBytes  = tx.message.serialize();
+      const inviteSig = nacl.sign.detached(msgBytes, inviteKeypair.secretKey);
+      const inviteIdx = tx.message.staticAccountKeys
+        .findIndex(k => k.toBase58() === invitePubkey.toBase58());
+
+      if (inviteIdx >= 0) {
+        tx.signatures[inviteIdx] = inviteSig;
+      }
+
+      const partiallySignedTx = Buffer.from(tx.serialize()).toString("base64");
+      return res.status(200).json({ partiallySignedTx, inviteCode });
     }
 
-    const inviteKeypair = inviteCodeToKeypair(inviteCode);
-    const inviteSigner  = inviteKeypair.publicKey.toBase58();
-
-    const craftRes  = await fetch(`${JUP_SEND_API}/craft-send`, {
-      method: "POST", headers: jupHeaders,
-      body: JSON.stringify({ inviteSigner, sender, amount, mint }),
-    });
-    const craftData = await craftRes.json();
-    if (craftData.error) return res.status(502).json({
-      error: typeof craftData.error === "object" ? JSON.stringify(craftData.error) : craftData.error,
-    });
-    if (!craftData.tx) return res.status(502).json({ error: "No transaction returned from Jupiter Send." });
-
-    // Partially sign with invite keypair (writes only invite slot, no reset)
-    const tx = VersionedTransaction.deserialize(b64ToBytes(craftData.tx));
-    partialSignWithInviteKeypair(tx, inviteKeypair);
-
-    // Fetch blockhash and return it alongside the tx so the client can use it
-    // for confirmTransaction without making a second getLatestBlockhash call
-    const connection = new Connection(RPC_URL, "confirmed");
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-
-    return res.status(200).json({
-      partiallySignedTx:   bytesToB64(tx.serialize()),
-      blockhash,
-      lastValidBlockHeight,
-    });
+    return res.status(400).json({ error: `Unknown action: ${action}` });
 
   } catch (err) {
-    console.error("[api/send] error:", err);
-    return res.status(500).json({ error: err?.message || "Internal server error" });
+    console.error(`[/api/send] ${action} error:`, err.message, err.stack?.slice(0, 500));
+    return res.status(500).json({ error: err.message });
   }
 }
