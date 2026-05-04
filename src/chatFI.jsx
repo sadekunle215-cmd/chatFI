@@ -9367,9 +9367,16 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       }
 
       // Guard: if the parsed text looks like a raw JSON block (model leaked its response format),
-      // replace it with a sensible fallback so we never show JSON to the user
-      if (parsed.text && parsed.text.trim().startsWith("{") && parsed.action) {
-        parsed.text = "";
+      // extract the inner "text" field or clear it so we never show raw JSON to the user
+      if (parsed.text && parsed.text.trim().startsWith("{")) {
+        try {
+          const inner = JSON.parse(parsed.text.trim());
+          parsed.text = inner.text || "";
+          if (!parsed.action && inner.action) parsed.action = inner.action;
+          if (!parsed.actionData && inner.actionData) parsed.actionData = inner.actionData;
+        } catch {
+          parsed.text = "";
+        }
       }
 
       const { text, action, actionData } = parsed;
