@@ -6414,12 +6414,23 @@ function JupChatInner() {
         data: Buffer.from(ix.data, "base64"),
       });
 
-      const buildAltAccounts = (rawAlts) => (rawAlts || []).map(alt => new AddressLookupTableAccount({
-        key:   new PublicKey(alt.key),
-        state: { addresses: alt.addresses.map(a => new PublicKey(a)), deactivationSlot: BigInt("18446744073709551615"), lastExtendedSlot: 0, lastExtendedSlotStartIndex: 0 },
-      }));
+      const buildAltAccounts = async (rawAlts, connection) => {
+        if (!rawAlts?.length) return [];
+        const keys = rawAlts.map(a => new PublicKey(a.key));
+        const infos = await connection.getMultipleAccountsInfo(keys);
+        return keys.map((key, i) => {
+          const info = infos[i];
+          if (!info) throw new Error(`ALT not found on chain: ${key.toBase58()}`);
+          return new AddressLookupTableAccount({
+            key,
+            state: AddressLookupTableAccount.deserialize(info.data),
+          });
+        });
+      };
 
       const signAndSend = async (ixs, alts) => {
+        const connection = new Connection(SOLANA_RPC, { commitment: "confirmed" });
+        const altAccounts = await buildAltAccounts(alts, connection);
         const bhRes = await jupFetch(SOLANA_RPC, {
           method: "POST",
           body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
@@ -6430,13 +6441,13 @@ function JupChatInner() {
           payerKey: new PublicKey(walletFull),
           recentBlockhash: blockhash,
           instructions: ixs.map(deserializeIx),
-        }).compileToV0Message(buildAltAccounts(alts));
+        }).compileToV0Message(altAccounts);
         const tx       = new VersionedTransaction(msg);
         const signedTx = await provider.signTransaction(tx);
         const rpcRes   = await jupFetch(SOLANA_RPC, {
           method: "POST",
           body: { jsonrpc:"2.0", id:1, method:"sendTransaction",
-            params:[bytesToB64(signedTx.serialize()), { encoding:"base64", skipPreflight:true, maxRetries:5 }] },
+            params:[bytesToB64(signedTx.serialize()), { encoding:"base64", maxRetries:5 }] },
         });
         const sig = rpcRes?.result;
         if (!sig) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
