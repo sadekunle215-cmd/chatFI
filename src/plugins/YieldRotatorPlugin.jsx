@@ -312,21 +312,33 @@ export default function YieldRotatorPlugin({
         ? Math.floor(posAmt)                           // already in raw units
         : Math.floor(posAmt * Math.pow(10, dec));      // convert from human-readable
 
-      const withdrawRes = await jupFetch(`${JUP_EARN_API}/withdraw`, {
+      // ── PIPELINE: fire withdraw + deposit API calls in parallel ─────────
+      // Deposit tx is safe to prefetch now (same-asset only — amount is known).
+      // This hides ~400-800ms of serial API latency before the wallet popup.
+      const bestPlanId = bestPool.planId || bestPool.id || bestPool.poolId;
+      const preMint    = posMint || symToMint(posSym);
+
+      const withdrawFetchP = jupFetch(`${JUP_EARN_API}/withdraw`, {
         method: "POST",
-        body: {
-          asset:  posMint || symToMint(posSym),  // underlying token mint
-          amount: withdrawAmtRaw.toString(),
-          signer: walletFull,
-        },
+        body: { asset: preMint, amount: withdrawAmtRaw.toString(), signer: walletFull },
       });
+      const depositPrefetchP = !isCrossAsset
+        ? jupFetch(`${JUP_EARN_API}/deposit`, {
+            method: "POST",
+            body: { asset: preMint, amount: withdrawAmtRaw.toString(), signer: walletFull,
+                    ...(bestPlanId ? { planId: bestPlanId } : {}) },
+          }).catch(() => null)
+        : Promise.resolve(null);
+
+      const [withdrawRes, _depositPrefetched] = await Promise.all([withdrawFetchP, depositPrefetchP]);
+      // Store prefetched deposit for use in Step 3 (same-asset path only)
+      const depositPrefetched = _depositPrefetched;
+
       if (withdrawRes?.error || !withdrawRes?.transaction) {
         throw new Error(withdrawRes?.error || "No withdraw transaction returned");
       }
 
-      // Do NOT mutate recentBlockhash on VersionedTransactions — message is already
-      // compiled and blockhash mutation corrupts the hash, causing Custom:1 errors.
-      // Jupiter issues txs with a fresh blockhash; sign and send immediately.
+      // Do NOT mutate recentBlockhash on VersionedTransactions — sign immediately.
       const withdrawTx = VersionedTransaction.deserialize(b64ToBytes(withdrawRes.transaction));
       const withdrawSigned = await provider.signTransaction(withdrawTx);
       // Send via RPC jsonrpc (same pattern as chatFI doEarnWithdraw)
@@ -365,7 +377,7 @@ export default function YieldRotatorPlugin({
         if (swapExec?.error) throw new Error(swapExec.error);
         const swapSig = swapExec?.signature || swapExec?.txid;
         if (!swapSig) throw new Error("No signature from swap tx");
-        await waitConfirm(swapSig);
+        await waitConfirm(swapSig, 75000, "processed");
 
         depositMint = bestMint;
         depositSym  = bestSym;
@@ -414,18 +426,19 @@ export default function YieldRotatorPlugin({
       setStep("Depositing into new pool…");
       push("ai", `[Deposit] Step 3/3 — depositing into ${bestSym} Earn (${bestApy.toFixed(2)}% APY)…`);
 
-      // Fix: include bestPlanId so Jupiter routes to the correct pool
-      const bestPlanId = bestPool.planId || bestPool.id || bestPool.poolId;
-
-      const depositRes = await jupFetch(`${JUP_EARN_API}/deposit`, {
-        method: "POST",
-        body: {
-          asset:  depositMint,
-          amount: depositAmtRaw.toString(),
-          signer: walletFull,
-          ...(bestPlanId ? { planId: bestPlanId } : {}),
-        },
-      });
+      // Use prefetched deposit tx for same-asset migrations (already in flight)
+      // For cross-asset, fetch now (amount only known after swap)
+      let depositRes = (depositPrefetched && !depositPrefetched?.error && depositPrefetched?.transaction)
+        ? depositPrefetched
+        : await jupFetch(`${JUP_EARN_API}/deposit`, {
+            method: "POST",
+            body: {
+              asset:  depositMint,
+              amount: depositAmtRaw.toString(),
+              signer: walletFull,
+              ...(bestPlanId ? { planId: bestPlanId } : {}),
+            },
+          });
       if (depositRes?.error || !depositRes?.transaction) {
         throw new Error(depositRes?.error || `No deposit transaction returned (amount: ${depositAmtRaw}, mint: ${depositMint})`);
       }
