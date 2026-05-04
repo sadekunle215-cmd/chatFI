@@ -336,22 +336,14 @@ export default function YieldRotatorPlugin({
           const pMint = p.asset?.address || p.asset?.mint || p.mint || p.token?.address || p.tokenMint || p.assetMint || "";
           return (posPoolId && pId === posPoolId) || (posMint && pMint === posMint);
         });
-        // Log full matched position so we can see all available fields
-        console.log(`[YieldRotator] Matched position:`, JSON.stringify(matched, null, 2));
-        // ── Use e.shares (raw share integer) — same field used by fetchEarnUserPositions.
-        // underlyingAssets is token units (principal+interest), NOT what the withdraw API expects.
-        const shareAmt = matched?.shares != null ? parseFloat(matched.shares) : null;
-        if (shareAmt && shareAmt > 0) {
-          withdrawAmtRaw = Math.floor(shareAmt);
-          console.log(`[YieldRotator] Using shares: ${withdrawAmtRaw}`);
-        } else if (matched?.underlyingAssets && Number(matched.underlyingAssets) > 0) {
-          // Fallback: underlyingAssets is already raw token units
-          withdrawAmtRaw = Math.floor(Number(matched.underlyingAssets));
-          console.warn(`[YieldRotator] No shares field — falling back to underlyingAssets: ${withdrawAmtRaw}`);
+        const rawFromApi = matched?.depositedAmount ?? matched?.shares ?? matched?.rawAmount ?? null;
+        if (rawFromApi && Number(rawFromApi) > 0) {
+          withdrawAmtRaw = Math.floor(Number(rawFromApi));
+          console.log(`[YieldRotator] Using API amount: ${withdrawAmtRaw}`);
         } else {
           const dec = KNOWN_DECIMALS[posSym] ?? KNOWN_DECIMALS[posMint] ?? 6;
           withdrawAmtRaw = posAmt > 1e6 ? Math.floor(posAmt) : Math.floor(posAmt * Math.pow(10, dec));
-          console.warn(`[YieldRotator] No raw amount from API — falling back to scaled posAmt: ${withdrawAmtRaw}`);
+          console.warn(`[YieldRotator] /positions returned no raw amount — falling back to scaled posAmt: ${withdrawAmtRaw}`);
         }
       } catch (fetchErr) {
         console.warn("[YieldRotator] Could not fetch /positions, falling back:", fetchErr);
@@ -505,37 +497,53 @@ export default function YieldRotatorPlugin({
       // Show success card in the panel
       setSuccessCard({ posSym, bestSym, posApy, bestApy, depositSig });
 
-      // ── Sync yield vault to reflect the new position ──────────────────────
-      // After a successful migration the user's active earn position has moved
-      // from posSym → bestSym. Any yield vault that was watching posSym must be
-      // updated so it tracks the new asset, otherwise it silently becomes stale
-      // (pointing at a token the user no longer holds in Earn).
+      // ── Sync yield vault: cancel old vault + recreate for new position ──────
+      // After a successful migration the earn position has moved from posSym →
+      // bestSym. We cancel any vault watching the old position (so it doesn't
+      // silently stay "active" pointing at a token the user no longer holds in
+      // Earn) and immediately create a fresh vault for the new position,
+      // preserving the same threshold and target token settings.
       try {
         const vaultRes = await fetch(`/api/yield-vault?wallet=${walletFull}`);
         if (vaultRes.ok) {
           const { vaults = [] } = await vaultRes.json();
 
-          // Find any vault whose fromSym matches the position we just migrated out of
-          const staleVaults = vaults.filter(v =>
-            v.earnMint === posMint || (v.earnSym || v.sym || "").toUpperCase() === posSym.toUpperCase()
-          );
+          // Match on earnMint first (exact), then fall back to earnSymbol string compare
+          const staleVaults = vaults.filter(v => {
+            if (posMint && v.earnMint && v.earnMint === posMint) return true;
+            const storedSym = (v.earnSymbol || v.earnSym || v.sym || "").toUpperCase();
+            return storedSym && storedSym === posSym.toUpperCase();
+          });
 
           for (const vault of staleVaults) {
+            // 1️⃣  Cancel the old vault
             await fetch(`/api/yield-vault?id=${vault.id}&wallet=${walletFull}`, {
-              method: "PATCH",
+              method: "DELETE",
+            });
+
+            // 2️⃣  Recreate for the new position — inherit threshold + target token
+            await fetch(`/api/yield-vault`, {
+              method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                earnMint:   bestMint,
-                earnSymbol: bestSym,   // matches vault schema field (earnSymbol, not earnSym)
-                // targetTokenSymbol / threshold unchanged — only source position changed
+                wallet:             walletFull,
+                earnMint:           bestMint,
+                earnSymbol:         bestSym,
+                earnJlMint:         vault.earnJlMint || null,
+                depositedAmount:    vault.depositedAmount || 0,
+                depositedValueUSD:  vault.depositedValueUSD || 0,
+                thresholdUSD:       vault.thresholdUSD,
+                targetTokenSymbol:  vault.targetTokenSymbol,
+                targetTokenMint:    vault.targetTokenMint,
+                targetTokenDecimals: vault.targetTokenDecimals ?? 9,
               }),
             });
           }
 
           if (staleVaults.length > 0) {
             push("ai",
-              `[Vault] Updated ${staleVaults.length} yield vault${staleVaults.length > 1 ? "s" : ""} ` +
-              `— now tracking ${bestSym} Earn instead of ${posSym} Earn.`
+              `[Vault] Cancelled old ${posSym} vault and created a new one for ${bestSym} Earn ` +
+              `(same threshold & target token preserved).`
             );
           }
         }
