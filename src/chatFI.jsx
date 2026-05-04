@@ -6414,27 +6414,32 @@ function JupChatInner() {
         data: Buffer.from(ix.data, "base64"),
       });
 
-      const buildAltAccounts = async (rawAlts, connection) => {
+      const buildAltAccounts = async (rawAlts) => {
         if (!rawAlts?.length) return [];
-        const keys = rawAlts.map(a => new PublicKey(a.key));
-        const infos = await connection.getMultipleAccountsInfo(keys);
-        return keys.map((key, i) => {
-          const info = infos[i];
-          if (!info) throw new Error(`ALT not found on chain: ${key.toBase58()}`);
+        const keys = rawAlts.map(a => a.key);
+        const accountsRes = await jupFetch(SOLANA_RPC, {
+          method: "POST",
+          body: { jsonrpc:"2.0", id:1, method:"getMultipleAccounts", params:[keys, { encoding:"base64", commitment:"confirmed" }] },
+        });
+        const infos = accountsRes?.result?.value || [];
+        return infos.map((info, i) => {
+          if (!info) throw new Error(`ALT not found on chain: ${keys[i]}`);
+          const data = Buffer.from(info.data[0], "base64");
           return new AddressLookupTableAccount({
-            key,
-            state: AddressLookupTableAccount.deserialize(info.data),
+            key: new PublicKey(keys[i]),
+            state: AddressLookupTableAccount.deserialize(data),
           });
         });
       };
 
       const signAndSend = async (ixs, alts) => {
-        const connection = new Connection(SOLANA_RPC, { commitment: "confirmed" });
-        const altAccounts = await buildAltAccounts(alts, connection);
-        const bhRes = await jupFetch(SOLANA_RPC, {
-          method: "POST",
-          body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
-        });
+        const [altAccounts, bhRes] = await Promise.all([
+          buildAltAccounts(alts),
+          jupFetch(SOLANA_RPC, {
+            method: "POST",
+            body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
+          }),
+        ]);
         const blockhash = bhRes?.result?.value?.blockhash;
         if (!blockhash) throw new Error("Could not fetch blockhash.");
         const msg = new TransactionMessage({
@@ -6467,14 +6472,17 @@ function JupChatInner() {
       push("ai", `Collateral deposited ✓ — confirming…`);
       await confirmTxLanded(depositSig);
 
-      // Query chain for the newly created position (SDK returns 0 for new positions)
-      push("ai", "Fetching new position ID from chain…");
-      await new Promise(r => setTimeout(r, 3000)); // let indexer catch up
-      const posRes = await fetch(`/api/lend-positions?wallet=${walletFull}&all=1`);
-      const posData = await posRes.json();
-      const newPosition = (posData.positions || []).find(p => String(p.vaultId) === String(vaultId));
-      if (!newPosition?.positionId) throw new Error("No positionId returned after deposit.");
-      const newPositionId = newPosition.positionId;
+      // SDK returns nftId directly — use it; fall back to chain query if missing
+      let newPositionId = d1.nftId;
+      if (!newPositionId) {
+        push("ai", "Fetching new position ID from chain…");
+        await new Promise(r => setTimeout(r, 3000));
+        const posRes = await fetch(`/api/lend-positions?wallet=${walletFull}&all=1`);
+        const posData = await posRes.json();
+        const newPosition = (posData.positions || []).find(p => String(p.vaultId) === String(vaultId));
+        if (!newPosition?.positionId) throw new Error("No positionId returned after deposit.");
+        newPositionId = newPosition.positionId;
+      }
 
       // ── Step 2: Borrow against the new position ────────────────────────
       const { ok: ok2, data: d2 } = await safeApiFetch("/api/lend-positions", {
