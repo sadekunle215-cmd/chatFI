@@ -333,24 +333,21 @@ export default function YieldRotatorPlugin({
         const arr = Array.isArray(positions) ? positions : (positions?.positions || positions?.data || []);
         const matched = arr.find(p => {
           const pId   = p.planId || p.poolId || p.marketId || p.id || "";
-          const pMint = p.asset?.address || p.asset?.mint || p.mint || p.tokenMint || p.assetMint || "";
+          const pMint = p.asset?.address || p.asset?.mint || p.mint || p.token?.address || p.tokenMint || p.assetMint || "";
           return (posPoolId && pId === posPoolId) || (posMint && pMint === posMint);
         });
         // Log full matched position so we can see all available fields
         console.log(`[YieldRotator] Matched position:`, JSON.stringify(matched, null, 2));
-        // ── FIX: Jupiter tracks positions in jlToken shares, not token units.
-        // Priority: lpAmount / positionAmount / jlAmount (share units) first.
-        // depositedAmount is token units — do NOT use it as the withdraw amount.
-        // underlyingAssets is also token units — only use as scaled fallback.
-        const shareAmt = matched?.lpAmount ?? matched?.positionAmount ?? matched?.jlAmount
-                      ?? matched?.shareAmount ?? matched?.shares ?? null;
-        if (shareAmt && Number(shareAmt) > 0) {
-          withdrawAmtRaw = Math.floor(Number(shareAmt));
-          console.log(`[YieldRotator] Using share amount: ${withdrawAmtRaw}`);
+        // ── Use e.shares (raw share integer) — same field used by fetchEarnUserPositions.
+        // underlyingAssets is token units (principal+interest), NOT what the withdraw API expects.
+        const shareAmt = matched?.shares != null ? parseFloat(matched.shares) : null;
+        if (shareAmt && shareAmt > 0) {
+          withdrawAmtRaw = Math.floor(shareAmt);
+          console.log(`[YieldRotator] Using shares: ${withdrawAmtRaw}`);
         } else if (matched?.underlyingAssets && Number(matched.underlyingAssets) > 0) {
-          // underlyingAssets is already in raw token units (e.g. 399000 for 0.399 USDC)
+          // Fallback: underlyingAssets is already raw token units
           withdrawAmtRaw = Math.floor(Number(matched.underlyingAssets));
-          console.log(`[YieldRotator] Using underlyingAssets as raw amount: ${withdrawAmtRaw}`);
+          console.warn(`[YieldRotator] No shares field — falling back to underlyingAssets: ${withdrawAmtRaw}`);
         } else {
           const dec = KNOWN_DECIMALS[posSym] ?? KNOWN_DECIMALS[posMint] ?? 6;
           withdrawAmtRaw = posAmt > 1e6 ? Math.floor(posAmt) : Math.floor(posAmt * Math.pow(10, dec));
