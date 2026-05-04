@@ -6416,10 +6416,19 @@ function JupChatInner() {
       if (!ok || data.error) throw new Error(data.error || "Borrow API error");
       if (!data.transaction) throw new Error("No transaction returned from borrow API.");
 
-      // 2. If setupTransaction exists — sign + send it first (creates position NFT)
+      // 2. Fetch fresh blockhash RIGHT before signing (avoids "blockhash not found" expiry)
+      const bhRes = await jupFetch(SOLANA_RPC, {
+        method: "POST",
+        body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
+      });
+      let freshBlockhash = bhRes?.result?.value?.blockhash;
+      if (!freshBlockhash) throw new Error("Could not fetch fresh blockhash.");
+
+      // 3. If setupTransaction exists — patch blockhash, sign + send first
       if (data.setupTransaction) {
-        const setupBytes  = b64ToBytes(data.setupTransaction);
-        const setupTx     = Transaction.from(setupBytes);
+        const setupBytes = b64ToBytes(data.setupTransaction);
+        const setupTx    = Transaction.from(setupBytes);
+        setupTx.recentBlockhash = freshBlockhash;
         const signedSetup = await provider.signTransaction(setupTx);
         const setupRes    = await jupFetch(SOLANA_RPC, {
           method: "POST",
@@ -6427,13 +6436,19 @@ function JupChatInner() {
         });
         const setupSig = setupRes?.result;
         if (!setupSig) throw new Error(setupRes?.error?.message || "Setup transaction (create position) failed to send.");
-        // Wait for position to be confirmed before operating
         await new Promise(r => setTimeout(r, 4000));
+        // Refresh blockhash again after the wait
+        const bhRes2 = await jupFetch(SOLANA_RPC, {
+          method: "POST",
+          body: { jsonrpc:"2.0", id:1, method:"getLatestBlockhash", params:[{ commitment:"confirmed" }] },
+        });
+        if (bhRes2?.result?.value?.blockhash) freshBlockhash = bhRes2.result.value.blockhash;
       }
 
-      // 3. Sign + send operate transaction (deposit + borrow)
-      const bytes     = b64ToBytes(data.transaction);
-      const tx        = VersionedTransaction.deserialize(bytes);
+      // 4. Patch fresh blockhash into main versioned tx, sign + send
+      const bytes  = b64ToBytes(data.transaction);
+      const tx     = VersionedTransaction.deserialize(bytes);
+      tx.message.recentBlockhash = freshBlockhash;
       const signedTx  = await provider.signTransaction(tx);
       const rpcRes    = await jupFetch(SOLANA_RPC, {
         method: "POST",
