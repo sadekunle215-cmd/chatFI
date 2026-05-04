@@ -2031,35 +2031,103 @@ function EarnPositionCard({ e, i, sym, amt, label, vaults, walletFull, T, onRefr
   const matchedVault = (vaults || []).find(v =>
     v.earnMint === e.mint || v.earnSymbol?.toLowerCase() === sym.toLowerCase()
   );
-  const isAutoHarvest = matchedVault?.autoHarvest || false;
+
+  // localStorage key — wallet-scoped, used as instant-read cache only
+  const lsKey = walletFull ? `chatfi-autoharvest-${walletFull.slice(0,8)}-${sym.toUpperCase()}` : null;
+
+  const readInitial = () => {
+    // Server vault value wins
+    if (matchedVault?.autoHarvest) return true;
+    // Fall back to localStorage cache (written after every successful save)
+    if (lsKey) { try { return localStorage.getItem(lsKey) === "1"; } catch {} }
+    return false;
+  };
+
+  const [localHarvest, setLocalHarvest] = React.useState(readInitial);
+  const isAutoHarvest = localHarvest;
+
+  // Re-sync from server whenever vault data refreshes (reconnect / page reload)
+  React.useEffect(() => {
+    if (matchedVault) setLocalHarvest(matchedVault.autoHarvest || false);
+  }, [matchedVault?.autoHarvest, matchedVault?.id]);
+
+  // Persist to Firebase via API + localStorage cache
+  const persistHarvest = async (val) => {
+    // Always write localStorage cache immediately (works offline)
+    if (lsKey) { try { val ? localStorage.setItem(lsKey, "1") : localStorage.removeItem(lsKey); } catch {} }
+    // Write to Firebase via the yield-vault API (cross-device, survives refresh)
+    if (walletFull) {
+      try {
+        await fetch(`/api/yield-vault?action=set-harvest-pref`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            wallet: walletFull,
+            sym: sym.toUpperCase(),
+            earnMint: e.mint || "",
+            autoHarvest: val,
+            ...(matchedVault ? { vaultId: matchedVault.id } : {}),
+          }),
+        });
+      } catch(err) {
+        console.warn("persistHarvest API:", err);
+        // localStorage already written above — user won't notice
+      }
+    }
+  };
 
   const toggleAutoHarvest = async () => {
-    if (!matchedVault) return;
-    if (!isAutoHarvest) {
+    const next = !isAutoHarvest;
+
+    // No vault + turning ON → prompt Yield Vault setup
+    if (!matchedVault && next) {
+      setLocalHarvest(true);
+      await persistHarvest(true);
       const confirmed = window.confirm(
-        `Enable auto-harvest for ${sym} Earn?
-
-Your yield will be automatically harvested and swapped into ${matchedVault.targetTokenSymbol} when your $${matchedVault.thresholdUSD} threshold is reached. No manual action needed.
-
-You can disable this anytime.`
+        `Set up Yield Vault for ${sym} Earn?\n\nYield Vault will automatically harvest and swap your ${sym} yield into any token you choose whenever it reaches a threshold you set.\n\nTap OK to open Yield Vault setup.`
       );
-      if (!confirmed) return;
+      if (confirmed) {
+        send("set yield vault");
+      } else {
+        setLocalHarvest(false);
+        await persistHarvest(false);
+      }
+      return;
     }
-    setToggling(true);
-    try {
-      const action = isAutoHarvest ? "disable-auto-harvest" : "enable-auto-harvest";
-      const res = await fetch(`/api/yield-vault?action=${action}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: walletFull, vaultId: matchedVault.id }),
-      });
-      const data = await res.json();
-      if (data.success) onRefresh?.();
-    } catch(err) {
-      console.error("toggleAutoHarvest:", err);
-    } finally {
-      setToggling(false);
+
+    // Vault exists → use the existing enable/disable-auto-harvest API (already Firebase-backed)
+    if (matchedVault) {
+      if (next) {
+        const confirmed = window.confirm(
+          `Enable auto-harvest for ${sym} Earn?\n\nYour yield will be automatically harvested and swapped into ${matchedVault.targetTokenSymbol} when your $${matchedVault.thresholdUSD} threshold is reached.\n\nYou can disable this anytime.`
+        );
+        if (!confirmed) return;
+      }
+      setLocalHarvest(next);
+      await persistHarvest(next);
+      setToggling(true);
+      try {
+        const action = next ? "enable-auto-harvest" : "disable-auto-harvest";
+        const res = await fetch(`/api/yield-vault?action=${action}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet: walletFull, vaultId: matchedVault.id }),
+        });
+        const data = await res.json();
+        if (!data.success) { setLocalHarvest(!next); await persistHarvest(!next); }
+        else onRefresh?.();
+      } catch(err) {
+        console.error("toggleAutoHarvest:", err);
+        setLocalHarvest(!next); await persistHarvest(!next);
+      } finally {
+        setToggling(false);
+      }
+      return;
     }
+
+    // No vault, turning OFF — just persist
+    setLocalHarvest(next);
+    await persistHarvest(next);
   };
 
   return (
@@ -2068,20 +2136,19 @@ You can disable this anytime.`
         <span style={{ color:T.text2 }}>{sym} <span style={{ fontSize:10, color:T.text3 }}>Earn{label}</span></span>
         <span style={{ fontWeight:600, color:"#68d391" }}>{amt}</span>
       </div>
-      {matchedVault && (
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, padding:"6px 8px", background:"rgba(104,211,145,0.04)", border:"1px solid rgba(104,211,145,0.12)", borderRadius:7 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="#68d391" stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-            <span style={{ fontSize:10, color: isAutoHarvest ? "#68d391" : T.text3, fontWeight: isAutoHarvest ? 600 : 400 }}>
-              {isAutoHarvest ? "Auto-harvest on" : "Auto-harvest off"}
-            </span>
-          </div>
-          <button onClick={toggleAutoHarvest} disabled={toggling}
-            style={{ width:32, height:17, borderRadius:9, background: isAutoHarvest ? "#68d391" : T.border, border:"none", cursor:"pointer", position:"relative", transition:"background 0.2s", padding:0, opacity: toggling ? 0.5 : 1 }}>
-            <div style={{ width:13, height:13, borderRadius:"50%", background:"#fff", position:"absolute", top:2, left: isAutoHarvest ? 17 : 2, transition:"left 0.2s" }}/>
-          </button>
+      {/* Auto-harvest toggle — always visible */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, padding:"6px 8px", background:"rgba(104,211,145,0.04)", border:"1px solid rgba(104,211,145,0.12)", borderRadius:7 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill={isAutoHarvest ? "#68d391" : T.text3} stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <span style={{ fontSize:10, color: isAutoHarvest ? "#68d391" : T.text3, fontWeight: isAutoHarvest ? 600 : 400 }}>
+            {isAutoHarvest ? "Auto-harvest on" : "Auto-harvest off"}
+          </span>
         </div>
-      )}
+        <button onClick={toggleAutoHarvest} disabled={toggling}
+          style={{ width:32, height:17, borderRadius:9, background: isAutoHarvest ? "#68d391" : T.border, border:"none", cursor:"pointer", position:"relative", transition:"background 0.2s", padding:0, opacity: toggling ? 0.5 : 1 }}>
+          <div style={{ width:13, height:13, borderRadius:"50%", background:"#fff", position:"absolute", top:2, left: isAutoHarvest ? 17 : 2, transition:"left 0.2s" }}/>
+        </button>
+      </div>
       <button onClick={() => { setShowPortfolio(false); send("show my earn positions"); }} className="hov-btn"
         style={{ width:"100%", padding:"5px", background:"rgba(104,211,145,0.08)", border:`1px solid rgba(104,211,145,0.25)`, borderRadius:7, color:"#68d391", fontSize:11, fontWeight:600, cursor:"pointer", transition:"all 0.15s" }}>
         Withdraw
@@ -2318,6 +2385,25 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch, onConnectTelegram, telegra
   const [editThreshold, setEditThreshold] = useState(String(v.thresholdUSD));
   const [saving, setSaving]   = useState(false);
   const [error, setError]     = useState(null);
+  const [autoHarvest, setAutoHarvest] = useState(v.autoHarvest || false);
+  const [harvestToggling, setHarvestToggling] = useState(false);
+
+  const toggleAutoHarvest = async () => {
+    const next = !autoHarvest;
+    setAutoHarvest(next);
+    setHarvestToggling(true);
+    try {
+      const action = next ? "enable-auto-harvest" : "disable-auto-harvest";
+      const res = await fetch(`/api/yield-vault?action=${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: v.wallet, vaultId: v.id }),
+      });
+      const data = await res.json();
+      if (!data.success) setAutoHarvest(!next);
+    } catch { setAutoHarvest(!next); }
+    finally { setHarvestToggling(false); }
+  };
 
   const handleSave = async () => {
     if (!editToken.mint) { setError("Pick a target token."); return; }
@@ -2401,6 +2487,20 @@ function VaultCard({ v, onCancel, onUpdate, jupFetch, onConnectTelegram, telegra
             </div>
           )}
           {v.status === "active" && (
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"8px 10px", marginBottom:8, background:"rgba(104,211,145,0.04)", border:"1px solid rgba(104,211,145,0.12)", borderRadius:8 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill={autoHarvest ? "#68d391" : "#4d6a7a"} stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                <span style={{ fontSize:11, color: autoHarvest ? "#68d391" : "#4d6a7a", fontWeight: autoHarvest ? 600 : 400 }}>
+                  {autoHarvest ? "Auto-harvest on" : "Auto-harvest off"}
+                </span>
+              </div>
+              <button onClick={toggleAutoHarvest} disabled={harvestToggling}
+                style={{ width:36, height:20, borderRadius:10, background: autoHarvest ? "#68d391" : "#1e2d3d", border:"none", cursor:"pointer", position:"relative", transition:"background 0.2s", padding:0, opacity: harvestToggling ? 0.5 : 1, flexShrink:0 }}>
+                <div style={{ width:14, height:14, borderRadius:"50%", background:"#fff", position:"absolute", top:3, left: autoHarvest ? 19 : 3, transition:"left 0.2s" }}/>
+              </button>
+            </div>
+          )}
+          {v.status === "active" && (
             <button onClick={() => onCancel(v.id)} style={{ width: "100%", padding: "8px 0", background: "none", border: `1px solid ${T.redBd}`, borderRadius: 8, color: T.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancel Vault</button>
           )}
           {v.status === "active" && onConnectTelegram && (
@@ -2451,7 +2551,26 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefres
                 {vaults && vaults.length > 0 && (
                   <div style={{ fontSize: 11, color: T.text3, margin: "10px 0 6px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Earn Positions — No Vault Set</div>
                 )}
-                {unconfigured.map((p) => (
+                {unconfigured.map((p) => {
+                  const lsKey = `chatfi-autoharvest-${(p.wallet||"").slice(0,8)}-${(p.sym||"").toUpperCase()}`;
+                  const [noVaultHarvest, setNoVaultHarvest] = React.useState(() => {
+                    try { return localStorage.getItem(lsKey) === "1"; } catch { return false; }
+                  });
+                  const toggleNoVaultHarvest = async () => {
+                    const next = !noVaultHarvest;
+                    setNoVaultHarvest(next);
+                    // localStorage as instant cache
+                    try { next ? localStorage.setItem(lsKey, "1") : localStorage.removeItem(lsKey); } catch {}
+                    // Firebase via API
+                    try {
+                      await fetch(`/api/yield-vault?action=set-harvest-pref`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ wallet: p.wallet || "", sym: p.sym, earnMint: p.mint || "", autoHarvest: next }),
+                      });
+                    } catch(err) { console.warn("set-harvest-pref:", err); }
+                  };
+                  return (
                   <div key={p.mint} style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 12, padding: "12px 14px", marginBottom: 8 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -2466,9 +2585,22 @@ function YieldVaultTracker({ show, onClose, vaults, onCancel, onUpdate, onRefres
                     {p.apy != null && (
                       <div style={{ fontSize: 11, color: T.teal, marginBottom: 8 }}>APY: {(p.apy / 100).toFixed(2)}%</div>
                     )}
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"7px 10px", marginBottom:8, background:"rgba(104,211,145,0.04)", border:"1px solid rgba(104,211,145,0.12)", borderRadius:8 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill={noVaultHarvest ? "#68d391" : "#4d6a7a"} stroke="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                        <span style={{ fontSize:11, color: noVaultHarvest ? "#68d391" : "#4d6a7a", fontWeight: noVaultHarvest ? 600 : 400 }}>
+                          {noVaultHarvest ? "Auto-harvest on" : "Auto-harvest off"}
+                        </span>
+                      </div>
+                      <button onClick={toggleNoVaultHarvest}
+                        style={{ width:36, height:20, borderRadius:10, background: noVaultHarvest ? "#68d391" : "#1e2d3d", border:"none", cursor:"pointer", position:"relative", transition:"background 0.2s", padding:0, flexShrink:0 }}>
+                        <div style={{ width:14, height:14, borderRadius:"50%", background:"#fff", position:"absolute", top:3, left: noVaultHarvest ? 19 : 3, transition:"left 0.2s" }}/>
+                      </button>
+                    </div>
                     <button onClick={() => onSetVault && onSetVault(p)} style={{ width: "100%", padding: "8px 0", background: T.accent, border: "none", borderRadius: 8, color: "#0d1117", fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><SvgZapSm /> Set Yield Vault</button>
                   </div>
-                ))}
+                  );
+                })}
               </>
             )}
           </>
@@ -5427,6 +5559,22 @@ function JupChatInner() {
       const res = await fetch(`/api/yield-vault?wallet=${walletFull}`);
       const data = await res.json();
       if (data.vaults) setYieldVaultSaved(data.vaults);
+      // Sync autoHarvest flags from vault records into localStorage cache
+      // so EarnPositionCard reads the correct value instantly on next mount
+      if (data.vaults?.length) {
+        data.vaults.forEach(v => {
+          if (!v.earnSymbol) return;
+          const lsKey = `chatfi-autoharvest-${walletFull.slice(0,8)}-${v.earnSymbol.toUpperCase()}`;
+          try { v.autoHarvest ? localStorage.setItem(lsKey, "1") : localStorage.removeItem(lsKey); } catch {}
+        });
+      }
+      // Also read standalone harvest prefs (for positions without a vault)
+      if (data.harvestPrefs) {
+        Object.entries(data.harvestPrefs).forEach(([sym, val]) => {
+          const lsKey = `chatfi-autoharvest-${walletFull.slice(0,8)}-${sym.toUpperCase()}`;
+          try { val ? localStorage.setItem(lsKey, "1") : localStorage.removeItem(lsKey); } catch {}
+        });
+      }
     } catch {}
   };
 
@@ -8784,13 +8932,14 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
     }
 
     // best yield / yield rotator keywords — standalone panel
-    if (/best yield|find better yield|better apy|compare earn|rotate yield|switch earn pool|best earn pool|higher apy|compare my earn/i.test(lower)) {
+    if (/best yield|find better yield|better apy|compare earn|rotate yield|switch earn pool|best earn pool|higher apy|compare my earn|migrate.*earn|migrate.*position/i.test(lower)) {
       setInput("");
       push("user", raw);
       if (!walletFull) {
         push("ai", "Connect your wallet first to see your earn positions and find better yield opportunities.");
         return;
       }
+      fetchEarnVaults();
       fetchEarnUserPositions();
       setShowYieldRotator(true);
       push("ai", "Opening **Best Yield Finder** — comparing your current earn positions against available pools for better APY.");
@@ -9223,45 +9372,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         if (!walletFull) {
           push("ai", text + "\n\nConnect your wallet first to migrate your earn position.");
         } else {
-          const fromSym = (actionData?.fromSym || "").toUpperCase();
-          const toSym   = (actionData?.toSym   || "").toUpperCase();
-          const fromApy = actionData?.fromApy ? `${parseFloat(actionData.fromApy).toFixed(2)}%` : "";
-          const toApy   = actionData?.toApy   ? `${parseFloat(actionData.toApy).toFixed(2)}%`   : "";
           push("ai", text);
-          if (directMode && fromSym && toSym) {
-            const rotator = directMigrateRef?.current;
-            const ops = rotator?.getOpportunities?.() || [];
-            const match = ops.find(op =>
-              op.posSym?.toUpperCase() === fromSym && op.bestSym?.toUpperCase() === toSym
-            );
-            if (match && rotator?.migrate) {
-              push("ai", `⚡ **Direct Mode** — Migrating **${fromSym} Earn**${fromApy ? ` (${fromApy})` : ""} → **${toSym} Earn**${toApy ? ` (${toApy})` : ""} now…`);
-              rotator.migrate(match);
-            } else {
-              push("ai", `⚡ **Direct Mode** — Opening Best Yield Finder for ${fromSym} → ${toSym} migration…`);
-              setShowYieldRotator(true);
-              let attempts = 0;
-              const tryMigrate = setInterval(() => {
-                attempts++;
-                const r = directMigrateRef?.current;
-                const o = r?.getOpportunities?.() || [];
-                const m = o.find(op =>
-                  op.posSym?.toUpperCase() === fromSym && op.bestSym?.toUpperCase() === toSym
-                );
-                if (m && r?.migrate) {
-                  clearInterval(tryMigrate);
-                  push("ai", `Found migration — starting now…`);
-                  r.migrate(m);
-                } else if (attempts >= 10) {
-                  clearInterval(tryMigrate);
-                  push("ai", `Tap the **Migrate** button on the ${fromSym} → ${toSym} card in your portfolio.`);
-                }
-              }, 1500);
-            }
-          } else {
-            setShowYieldRotator(true);
-            push("ai", "Opening **Best Yield Finder** — the Yield Rotator will show available migration options.");
-          }
+          // Fetch fresh data then open the Best Yield Finder panel
+          // which will show: current position vs best APY, migrate button, or "already best" state
+          fetchEarnVaults();
+          fetchEarnUserPositions();
+          setShowYieldRotator(true);
         }
 
       } else if (action === "EARN_DEPOSIT") {
@@ -13604,6 +13720,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
 
           {/* ── Best Yield Panel — standalone, triggered by chat keywords ──── */}
           {showYieldRotator && walletFull && (() => {
+            // Build user positions with their current APY
             const positions = [];
             for (const [sym, pos] of Object.entries(earnUserPositions || {})) {
               if (!pos || parseFloat(pos.amount || 0) <= 0) continue;
@@ -13617,34 +13734,177 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 amount: parseFloat(pos.amount || 0),
                 value:  parseFloat(pos.amount || 0),
                 apy:    parseFloat(vault.apy || 0),
+                apyDisplay: vault.apyDisplay || (parseFloat(vault.apy||0).toFixed(2) + "%"),
                 mint:   vault.assetMint || "",
                 planId: vault.id || "",
+                logoUrl: vault.logoUrl || "",
               });
             }
+
+            // For each user position, find the single best APY vault for the same token family
+            // (across all earnVaults), then for cross-token find top APY vault overall
+            const sortedVaults = [...earnVaults].sort((a,b) => b.apy - a.apy);
+            const topVault = sortedVaults[0]; // overall best APY vault
+
+            const comparisons = positions.map(pos => {
+              // Best vault for same token
+              const sameToken = sortedVaults.find(v =>
+                (v.token||"").toUpperCase() === pos.sym.toUpperCase() && v.planId !== pos.planId
+              );
+              // Best vault across all tokens (different from user's current)
+              const crossBest = sortedVaults.find(v =>
+                (v.token||"").toUpperCase() !== pos.sym.toUpperCase()
+              );
+              const bestSameApy = sameToken ? sameToken.apy : 0;
+              const bestSameSym = sameToken ? sameToken.token : null;
+              // Is user already in best pool for their token?
+              const alreadyBest = !sameToken || pos.apy >= bestSameApy;
+              return { pos, sameToken, crossBest, alreadyBest };
+            });
+
+            const SvgZapIcon = () => (
+              <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke={T.accent} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              </svg>
+            );
+            const SvgArrowRight = () => (
+              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+              </svg>
+            );
+            const SvgExternalLink = ({size=13}) => (
+              <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+            );
+
             return (
               <ErrorBoundary fallback={null}>
                 <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", background: T.surface, border:`1px solid ${T.border}`, borderRadius:12, overflow:"hidden" }}>
+                  {/* Header */}
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 16px", borderBottom:`1px solid ${T.border}` }}>
-                    <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1 }}>⚡ Best Yield Finder</div>
+                    <div style={{ display:"flex", alignItems:"center", gap:7, fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1 }}>
+                      <SvgZapIcon /> Best Yield Finder
+                    </div>
                     <button onClick={() => setShowYieldRotator(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:18, cursor:"pointer", lineHeight:1, padding:"4px 6px" }}>✕</button>
                   </div>
+
                   {positions.length === 0 ? (
-                    <div style={{ padding:20, color:T.text3, fontSize:13 }}>
-                      No active earn positions found. Deposit into an Earn vault first, then check back here for better APY options.
+                    /* No open positions — show top available pools + link */
+                    <div style={{ padding:16 }}>
+                      <div style={{ fontSize:13, color:T.text3, marginBottom:14 }}>
+                        No active earn positions found. Here are the top available pools — deposit to start earning:
+                      </div>
+                      {sortedVaults.slice(0,4).map((v,i) => (
+                        <div key={v.id||i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 12px", marginBottom:8, background:T.bg, border:`1px solid ${T.border}`, borderRadius:10 }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                            {v.logoUrl ? (
+                              <img src={v.logoUrl} alt={v.token} style={{ width:28,height:28,borderRadius:"50%",objectFit:"cover" }} onError={e=>{e.target.style.display="none"}} />
+                            ) : (
+                              <div style={{ width:28,height:28,borderRadius:"50%",background:T.border,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:T.text2 }}>{(v.token||"?")[0]}</div>
+                            )}
+                            <div>
+                              <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{v.token}</div>
+                              <div style={{ fontSize:11, color:T.text3 }}>Jupiter Earn</div>
+                            </div>
+                          </div>
+                          <div style={{ textAlign:"right" }}>
+                            <div style={{ fontSize:14, fontWeight:700, color:T.green }}>{v.apyDisplay}</div>
+                            <div style={{ fontSize:10, color:T.text3 }}>APY</div>
+                          </div>
+                        </div>
+                      ))}
+                      <a href="https://jup.ag/earn" target="_blank" rel="noopener noreferrer"
+                        style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, marginTop:4, padding:"9px", borderRadius:8, background:"none", border:`1px solid ${T.border}`, color:T.accent, fontSize:12, fontWeight:600, textDecoration:"none" }}>
+                        View all pools on Jupiter Earn <SvgExternalLink />
+                      </a>
                     </div>
                   ) : (
-                    <div style={{ padding:"0 0 8px 0" }}>
-                      <YieldRotatorPlugin
-                        walletFull={walletFull}
-                        earnPositions={positions}
-                        jupFetch={jupFetch}
-                        getActiveProvider={getActiveProvider}
-                        push={push}
-                        T={T}
-                        isMobile={isMobile}
-                        onMigrationDone={() => { try { fetchEarnUserPositions(); } catch(e) { console.warn("onMigrationDone:", e); } }}
-                        onDirectMigrateRef={directMigrateRef}
-                      />
+                    /* User has positions — show comparison cards */
+                    <div style={{ padding:"12px 16px 8px" }}>
+                      <div style={{ fontSize:12, color:T.text3, marginBottom:12 }}>Comparing your open positions against available pools:</div>
+                      {comparisons.map(({ pos, sameToken, crossBest, alreadyBest }, idx) => (
+                        <div key={pos.sym+idx} style={{ marginBottom:12, background:T.bg, border:`1px solid ${alreadyBest ? T.green+"55" : T.border}`, borderRadius:10, overflow:"hidden" }}>
+                          {/* Current position row */}
+                          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 14px", borderBottom:`1px solid ${T.border}` }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+                              {pos.logoUrl ? (
+                                <img src={pos.logoUrl} alt={pos.sym} style={{ width:26,height:26,borderRadius:"50%",objectFit:"cover" }} onError={e=>{e.target.style.display="none"}} />
+                              ) : (
+                                <div style={{ width:26,height:26,borderRadius:"50%",background:T.border,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:T.text2 }}>{pos.sym[0]}</div>
+                              )}
+                              <div>
+                                <div style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{pos.sym} Earn</div>
+                                <div style={{ fontSize:11, color:T.text3 }}>{pos.amount.toLocaleString(undefined,{maximumFractionDigits:4})} {pos.sym}</div>
+                              </div>
+                            </div>
+                            <div style={{ textAlign:"right" }}>
+                              <div style={{ fontSize:13, fontWeight:700, color:T.text1 }}>{pos.apyDisplay}</div>
+                              <div style={{ fontSize:10, color:T.text3 }}>current APY</div>
+                            </div>
+                          </div>
+
+                          {alreadyBest ? (
+                            /* Already best */
+                            <div style={{ padding:"9px 14px", display:"flex", alignItems:"center", gap:7 }}>
+                              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={T.green} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                              <span style={{ fontSize:12, color:T.green, fontWeight:600 }}>Already in best available APY for {pos.sym}</span>
+                            </div>
+                          ) : sameToken ? (
+                            /* Better pool found */
+                            <div style={{ padding:"10px 14px" }}>
+                              <div style={{ fontSize:11, color:T.text3, marginBottom:8 }}>Better pool available:</div>
+                              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+                                <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+                                  {sameToken.logoUrl ? (
+                                    <img src={sameToken.logoUrl} alt={sameToken.token} style={{ width:22,height:22,borderRadius:"50%",objectFit:"cover" }} onError={e=>{e.target.style.display="none"}} />
+                                  ) : (
+                                    <div style={{ width:22,height:22,borderRadius:"50%",background:T.border,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,color:T.text2 }}>{(sameToken.token||"?")[0]}</div>
+                                  )}
+                                  <span style={{ fontSize:13, fontWeight:600, color:T.text1 }}>{sameToken.token} Earn</span>
+                                  <span style={{ fontSize:11, color:T.text3 }}>Jupiter Earn</span>
+                                </div>
+                                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                                  <div style={{ textAlign:"right" }}>
+                                    <div style={{ fontSize:14, fontWeight:700, color:T.green }}>{sameToken.apyDisplay}</div>
+                                    <div style={{ fontSize:10, color:T.text3 }}>+{(sameToken.apy - pos.apy).toFixed(2)}% more</div>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      setShowYieldRotator(false);
+                                      push("user", `Migrate my ${pos.sym} earn position`);
+                                      push("ai", `Opening migration for **${pos.sym} → ${sameToken.token}** (${pos.apyDisplay} → **${sameToken.apyDisplay}**)…`);
+                                      setShowYieldRotator(true);
+                                    }}
+                                    style={{ padding:"6px 12px", borderRadius:8, background:T.accent, border:"none", color:"#0d1117", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                                    Migrate
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                      <a href="https://jup.ag/earn" target="_blank" rel="noopener noreferrer"
+                        style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, marginTop:4, padding:"8px", borderRadius:8, background:"none", border:`1px solid ${T.border}`, color:T.accent, fontSize:12, fontWeight:600, textDecoration:"none" }}>
+                        Explore all pools on Jupiter Earn <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                      </a>
+
+                      {/* YieldRotatorPlugin still handles actual migrations */}
+                      <div style={{ display:"none" }}>
+                        <YieldRotatorPlugin
+                          walletFull={walletFull}
+                          earnPositions={positions}
+                          jupFetch={jupFetch}
+                          getActiveProvider={getActiveProvider}
+                          push={push}
+                          T={T}
+                          isMobile={isMobile}
+                          onMigrationDone={() => { try { fetchEarnUserPositions(); } catch(e) { console.warn("onMigrationDone:", e); } }}
+                          onDirectMigrateRef={directMigrateRef}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
