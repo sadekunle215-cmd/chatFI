@@ -2760,6 +2760,7 @@ function JupChatInner() {
   const yieldVaultSavedRef                          = useRef([]); // mirror for use inside async callbacks
   const [yieldVaultNotifs, setYieldVaultNotifs]     = useState([]);
   const [showYieldVaultTracker, setShowYieldVaultTracker] = useState(false);
+  const [showYieldRotator, setShowYieldRotator]     = useState(false); // standalone Best Yield panel
   const [telegramLinked, setTelegramLinked]         = useState(false);  // synced from localStorage + Firestore
   const [telegramLinking, setTelegramLinking]       = useState(false);  // loading state for link button
   const [showTelegramPrompt, setShowTelegramPrompt] = useState(false);  // post-activation prompt
@@ -8782,6 +8783,20 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       return;
     }
 
+    // best yield / yield rotator keywords — standalone panel
+    if (/best yield|find better yield|better apy|compare earn|rotate yield|switch earn pool|best earn pool|higher apy|compare my earn/i.test(lower)) {
+      setInput("");
+      push("user", raw);
+      if (!walletFull) {
+        push("ai", "Connect your wallet first to see your earn positions and find better yield opportunities.");
+        return;
+      }
+      fetchEarnUserPositions();
+      setShowYieldRotator(true);
+      push("ai", "Opening **Best Yield Finder** — comparing your current earn positions against available pools for better APY.");
+      return;
+    }
+
     // yield vault keywords
     if (/yield vault|my vault|vault position|show.*vault|vault status/i.test(lower)) {
       setInput("");
@@ -8806,7 +8821,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
     setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
     setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowBet(false); setShowMultiply(false); setShowBorrow(false);
     setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false); setShowPerps(false);
-    setShowTokenCard(false); setTokenCardData(null);
+    setShowTokenCard(false); setTokenCardData(null); setShowYieldRotator(false);
 
     histRef.current = [...histRef.current, { role:"user", content:raw }];
     try { sessionStorage.setItem("chatfi-hist", JSON.stringify(histRef.current.slice(-40))); } catch {}
@@ -9223,8 +9238,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               push("ai", `⚡ **Direct Mode** — Migrating **${fromSym} Earn**${fromApy ? ` (${fromApy})` : ""} → **${toSym} Earn**${toApy ? ` (${toApy})` : ""} now…`);
               rotator.migrate(match);
             } else {
-              push("ai", `⚡ **Direct Mode** — Opening portfolio to find ${fromSym} → ${toSym} migration…`);
-              setShowPortfolio(true);
+              push("ai", `⚡ **Direct Mode** — Opening Best Yield Finder for ${fromSym} → ${toSym} migration…`);
+              setShowYieldRotator(true);
               let attempts = 0;
               const tryMigrate = setInterval(() => {
                 attempts++;
@@ -9244,8 +9259,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               }, 1500);
             }
           } else {
-            setShowPortfolio(true);
-            push("ai", "Open your Portfolio → the Yield Rotator will show available migration options.");
+            setShowYieldRotator(true);
+            push("ai", "Opening **Best Yield Finder** — the Yield Rotator will show available migration options.");
           }
         }
 
@@ -13582,45 +13597,57 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             </ErrorBoundary>
           )}
 
-          {/* ── Yield Rotator — shown below portfolio as its own block ── */}
-          {showPortfolio && !portfolioLoading && portfolioData && walletFull &&
-            Object.values(earnUserPositions || {}).some(p => parseFloat(p?.amount || 0) > 0) && (
-            <ErrorBoundary fallback={null}>
-              <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px" }}>
-                <YieldRotatorPlugin
-                  walletFull={walletFull}
-                  earnPositions={
-                    // Build from live earnUserPositions + earnVaults (same logic as Earn panel).
-                    // Only include positions where we resolved a real vault APY.
-                    Object.entries(earnUserPositions || {})
-                      .filter(([, pos]) => parseFloat(pos?.amount || 0) > 0)
-                      .flatMap(([sym, pos]) => {
-                        const vault = earnVaults.find(v =>
-                          (v.token  || "").toUpperCase() === sym.toUpperCase() ||
-                          (v.symbol || "").toUpperCase() === sym.toUpperCase()
-                        );
-                        if (!vault) return [];
-                        return [{
-                          sym, symbol: sym,
-                          amount: parseFloat(pos.amount || 0),
-                          value:  parseFloat(pos.amount || 0),
-                          apy:    parseFloat(vault.apy || 0),
-                          mint:   vault.assetMint || "",
-                          planId: vault.id || "",
-                        }];
-                      })
-                  }
-                  jupFetch={jupFetch}
-                  getActiveProvider={getActiveProvider}
-                  push={push}
-                  T={T}
-                  isMobile={isMobile}
-                  onMigrationDone={() => { try { fetchPortfolioData(walletFull); } catch(e) { console.warn("onMigrationDone:", e); } }}
-                  onDirectMigrateRef={directMigrateRef}
-                />
-              </div>
-            </ErrorBoundary>
-          )}
+          {/* ── Yield Rotator removed from portfolio — now a standalone panel ── */}
+
+          {/* ── Best Yield Panel — standalone, triggered by chat keywords ──── */}
+          {showYieldRotator && walletFull && (() => {
+            const positions = [];
+            for (const [sym, pos] of Object.entries(earnUserPositions || {})) {
+              if (!pos || parseFloat(pos.amount || 0) <= 0) continue;
+              const vault = earnVaults.find(v =>
+                (v.token  || "").toUpperCase() === sym.toUpperCase() ||
+                (v.symbol || "").toUpperCase() === sym.toUpperCase()
+              );
+              if (!vault) continue;
+              positions.push({
+                sym, symbol: sym,
+                amount: parseFloat(pos.amount || 0),
+                value:  parseFloat(pos.amount || 0),
+                apy:    parseFloat(vault.apy || 0),
+                mint:   vault.assetMint || "",
+                planId: vault.id || "",
+              });
+            }
+            return (
+              <ErrorBoundary fallback={null}>
+                <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", background: T.surface, border:`1px solid ${T.border}`, borderRadius:12, overflow:"hidden" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"12px 16px", borderBottom:`1px solid ${T.border}` }}>
+                    <div style={{ fontFamily:T.serif, fontSize:15, fontWeight:600, color:T.text1 }}>⚡ Best Yield Finder</div>
+                    <button onClick={() => setShowYieldRotator(false)} style={{ background:"none", border:"none", color:T.text3, fontSize:18, cursor:"pointer", lineHeight:1, padding:"4px 6px" }}>✕</button>
+                  </div>
+                  {positions.length === 0 ? (
+                    <div style={{ padding:20, color:T.text3, fontSize:13 }}>
+                      No active earn positions found. Deposit into an Earn vault first, then check back here for better APY options.
+                    </div>
+                  ) : (
+                    <div style={{ padding:"0 0 8px 0" }}>
+                      <YieldRotatorPlugin
+                        walletFull={walletFull}
+                        earnPositions={positions}
+                        jupFetch={jupFetch}
+                        getActiveProvider={getActiveProvider}
+                        push={push}
+                        T={T}
+                        isMobile={isMobile}
+                        onMigrationDone={() => { try { fetchEarnUserPositions(); } catch(e) { console.warn("onMigrationDone:", e); } }}
+                        onDirectMigrateRef={directMigrateRef}
+                      />
+                    </div>
+                  )}
+                </div>
+              </ErrorBoundary>
+            );
+          })()}
 
           {/* ── Prediction Market CLI / Odds Scanner panel ───────────────────── */}
           {showPredCLI && (() => {            const fmtTime = (ts) => {
