@@ -14284,11 +14284,29 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
             const ltvNum   = parseFloat(vault.ltv);
             const colAmt   = parseFloat(borrowCfg.colAmount  || 0);
             const debtAmt  = parseFloat(borrowCfg.borrowAmount || 0);
-            const maxBorrow = colAmt * (ltvNum / 100);
-            const riskPct  = maxBorrow > 0 ? Math.min(100, Math.round((debtAmt / maxBorrow) * 100)) : 0;
+
+            // Get USD prices from portfolio prices map (same source used across the app)
+            const colSym  = (vault.collateral || "SOL").toUpperCase();
+            const debtSym = (vault.debt || "USDC").toUpperCase();
+            const colPrice  = prices?.[colSym]  ?? prices?.["SOL"] ?? 0;
+            const debtPrice = prices?.[debtSym] ?? 1; // stablecoins default to 1
+
+            // Max borrow in debt token units = (colAmt × colPrice × LTV) / debtPrice
+            const colUsd    = colAmt * colPrice;
+            const maxBorrowUsd = colUsd * (ltvNum / 100);
+            const maxBorrow = debtPrice > 0 ? maxBorrowUsd / debtPrice : 0;
+
+            // Min borrow: 1 USDC / 0.001 SOL equivalent — prevents "Unknown instruction error"
+            const MIN_BORROW_USD = 1.0;
+            const minBorrow = debtPrice > 0 ? MIN_BORROW_USD / debtPrice : 1;
+
+            // Risk % = how much of max capacity is used
+            const debtUsd  = debtAmt * debtPrice;
+            const riskPct  = maxBorrowUsd > 0 ? Math.min(100, Math.round((debtUsd / maxBorrowUsd) * 100)) : 0;
             const riskColor = riskPct > 80 ? T.red : riskPct > 60 ? "#f59e0b" : T.green;
-            const colBal   = portfolio[(vault.collateral || "SOL").toUpperCase()] ?? 0;
+            const colBal   = portfolio[colSym] ?? 0;
             const isSigning = borrowStatus === "signing";
+            const belowMin  = debtAmt > 0 && debtAmt < minBorrow;
             return (
               <div style={{ margin: isMobile ? "0 0 16px 0" : "0 0 20px 44px", padding:20, background:T.surface, border:`1px solid ${T.border}`, borderRadius:12 }}>
 
@@ -14359,10 +14377,10 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 <div style={{ marginBottom:14 }}>
                   <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:T.text3, marginBottom:4 }}>
                     <span>Borrow ({vault.debt})</span>
-                    {colAmt > 0 && (
-                      <button onClick={() => setBorrowCfg(c => ({ ...c, borrowAmount: (maxBorrow * 0.8).toFixed(4).replace(/\.?0+$/,"") }))}
+                    {colAmt > 0 && maxBorrow > 0 && (
+                      <button onClick={() => setBorrowCfg(c => ({ ...c, borrowAmount: Math.max(maxBorrow * 0.8, minBorrow).toFixed(4).replace(/\.?0+$/,"") }))}
                         style={{ background:"none", border:"none", color:T.accent, fontSize:11, cursor:"pointer", padding:0 }}>
-                        Safe (80% LTV): {(maxBorrow * 0.8).toFixed(4)}
+                        Safe (80%): {Math.max(maxBorrow * 0.8, minBorrow).toFixed(4)} {vault.debt} {colPrice > 0 ? `(~$${(maxBorrowUsd * 0.8).toFixed(2)})` : ""}
                       </button>
                     )}
                   </div>
@@ -14371,6 +14389,13 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                     style={{ width:"100%", padding:"8px 12px", border:`1px solid ${T.border}`, borderRadius:8, background:T.bg, color:T.text1, fontSize:13 }}
                   />
                 </div>
+
+                {/* Min borrow warning */}
+                {belowMin && (
+                  <div style={{ marginBottom:10, padding:"7px 12px", background:T.redBg, border:`1px solid ${T.redBd}`, borderRadius:8, fontSize:11, color:T.red }}>
+                    ⚠ Minimum borrow is ~${MIN_BORROW_USD} ({minBorrow.toFixed(4)} {vault.debt}). Jupiter Lend will reject smaller amounts.
+                  </div>
+                )}
 
                 {/* Health / LTV meter */}
                 {colAmt > 0 && debtAmt > 0 && (
@@ -14392,11 +14417,11 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                   <div style={{ padding:"10px 12px", background:T.accentBg, border:`1px solid ${T.accent}22`, borderRadius:8, marginBottom:14, fontSize:12, color:T.text3 }}>
                     <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
                       <span>Depositing</span>
-                      <strong style={{ color:T.text1 }}>{borrowCfg.colAmount} {vault.collateral}</strong>
+                      <strong style={{ color:T.text1 }}>{borrowCfg.colAmount} {vault.collateral}{colPrice > 0 ? ` (~$${colUsd.toFixed(2)})` : ""}</strong>
                     </div>
                     <div style={{ display:"flex", justifyContent:"space-between" }}>
                       <span>Borrowing</span>
-                      <strong style={{ color:T.accent }}>{borrowCfg.borrowAmount} {vault.debt}</strong>
+                      <strong style={{ color:T.accent }}>{borrowCfg.borrowAmount} {vault.debt}{debtPrice !== 1 ? ` (~$${debtUsd.toFixed(2)})` : ""}</strong>
                     </div>
                   </div>
                 )}
@@ -14404,7 +14429,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 {/* Action buttons */}
                 <div style={{ display:"flex", gap:8 }}>
                   <button onClick={doBorrow}
-                    disabled={!walletFull || !borrowCfg.colAmount || !borrowCfg.borrowAmount || parseFloat(borrowCfg.colAmount)<=0 || parseFloat(borrowCfg.borrowAmount)<=0 || isSigning}
+                    disabled={!walletFull || !borrowCfg.colAmount || !borrowCfg.borrowAmount || parseFloat(borrowCfg.colAmount)<=0 || parseFloat(borrowCfg.borrowAmount)<=0 || isSigning || belowMin}
                     className="hov-btn"
                     style={{ flex:1, padding:"10px", background:(!walletFull||!borrowCfg.colAmount||!borrowCfg.borrowAmount||isSigning)?T.border:T.accent, border:"none", borderRadius:8, color:(!walletFull||!borrowCfg.colAmount||!borrowCfg.borrowAmount||isSigning)?T.text3:"#0d1117", fontSize:13, fontWeight:700, cursor:isSigning?"default":"pointer" }}>
                     {isSigning ? "Signing…" : !walletFull ? "Connect wallet" : "Deposit & Borrow"}
