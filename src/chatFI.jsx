@@ -2989,6 +2989,9 @@ function JupChatInner() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [directMode,  setDirectMode]  = useState(() => localStorage.getItem("chatfi_directMode") === "true");
   const [pendingDirectAction, setPendingDirectAction] = useState(null); // { type, label, exec }
+  // Token creation wizard (direct mode) — null = inactive, else { step, data }
+  // steps: "name" → "symbol" → "description" → "image" → "confirm"
+  const [tokenWizard, setTokenWizard] = useState(null);
   const [chatHistory, setChatHistory] = useState([{ id:"default", title:"New conversation", active:true }]);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showHowItWorks, setShowHowItWorks] = useState(false);
@@ -9008,7 +9011,65 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    // ── Power Command intercept (runs before Claude call) ────────────────────
+    // ── Token Wizard intercept (direct mode studio creation) ─────────────────
+    if (tokenWizard) {
+      setInput("");
+      push("user", raw);
+      const { step, data } = tokenWizard;
+
+      if (step === "name") {
+        const name = raw.trim();
+        const next = { ...data, name };
+        setStudioCfg(c => ({ ...c, name }));
+        setTokenWizard({ step: "symbol", data: next });
+        push("ai", `Nice! **${name}** — what **symbol** should it use? (2–6 letters, e.g. MTK)`);
+
+      } else if (step === "symbol") {
+        const symbol = raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
+        const next = { ...data, symbol };
+        setStudioCfg(c => ({ ...c, symbol }));
+        setTokenWizard({ step: "description", data: next });
+        push("ai", `**$${symbol}** — give it a short **description** (what is this token for?)`);
+
+      } else if (step === "description") {
+        const description = raw.trim();
+        const next = { ...data, description };
+        setStudioCfg(c => ({ ...c, description }));
+        setTokenWizard({ step: "image", data: next });
+        push("ai", `Got it. Now upload the **token image** — tap the 🖼 button next to the input bar.`);
+
+      } else if (step === "confirm") {
+        const answer = raw.toLowerCase().trim();
+        if (answer === "yes" || answer === "y" || answer === "launch" || answer === "confirm" || answer === "go") {
+          setTokenWizard(null);
+          push("ai", `🚀 Launching **${data.name}** ($${data.symbol})… Approve the transaction in your wallet.`);
+          await doCreateToken();
+        } else if (answer === "no" || answer === "cancel" || answer === "n") {
+          setTokenWizard(null);
+          push("ai", "Token creation cancelled. Type **create token** to start again.");
+        } else {
+          // Let them edit a field by detecting keywords
+          if (/name/i.test(raw)) {
+            setTokenWizard({ step: "name", data });
+            push("ai", `What should the new **name** be?`);
+          } else if (/symbol/i.test(raw)) {
+            setTokenWizard({ step: "symbol", data });
+            push("ai", `What **symbol** would you like instead?`);
+          } else if (/desc/i.test(raw)) {
+            setTokenWizard({ step: "description", data });
+            push("ai", `What should the **description** say?`);
+          } else if (/image|logo|icon/i.test(raw)) {
+            setTokenWizard({ step: "image", data });
+            push("ai", `Upload a new **image** using the 🖼 button.`);
+          } else {
+            push("ai", `Type **yes** to launch, **no** to cancel, or mention a field (name / symbol / description / image) to change it.`);
+          }
+        }
+      }
+      // Note: "image" step is handled by the file input handler below, not text
+      return;
+    }
+    // ─────────────────────────────────────────────────────────────────────────
     const powerCmd = detectPowerCommand(raw);
     if (powerCmd) {
       await executePowerCommand(powerCmd.id, powerCmd.token, raw);
@@ -9929,19 +9990,48 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
         }
 
       } else if (action === "SHOW_STUDIO") {
-        setStudioCfg(c => ({
-          ...c,
-          name:        actionData?.name        || c.name,
-          symbol:      actionData?.symbol      || c.symbol,
-          description: actionData?.description || c.description,
-          website:     actionData?.website     || c.website,
-          twitter:     actionData?.twitter     || c.twitter,
-        }));
         setStudioImage(null);
         setStudioStatus(null);
         setStudioResult(null);
-        setShowStudio(true);
-        push("ai", text);
+        // ── Direct Mode: conversational wizard instead of panel ───────────────
+        if (directMode && walletFull) {
+          // Pre-fill any data the LLM already extracted from the user's message
+          const prefill = {
+            name:        actionData?.name        || "",
+            symbol:      actionData?.symbol      || "",
+            description: actionData?.description || "",
+            website:     actionData?.website     || "",
+            twitter:     actionData?.twitter     || "",
+          };
+          setStudioCfg(c => ({ ...c, ...prefill }));
+          // Determine first missing field and start wizard there
+          const firstStep = prefill.name ? (prefill.symbol ? (prefill.description ? "image" : "description") : "symbol") : "name";
+          setTokenWizard({ step: firstStep, data: prefill });
+          // Build opening message depending on what's already known
+          const knownParts = [];
+          if (prefill.name)        knownParts.push(`name **${prefill.name}**`);
+          if (prefill.symbol)      knownParts.push(`symbol **${prefill.symbol}**`);
+          if (prefill.description) knownParts.push(`description set`);
+          const knownText = knownParts.length ? `Got ${knownParts.join(", ")}. ` : "";
+          const firstQ =
+            firstStep === "name"        ? "Let's create your token! What's the **token name**?" :
+            firstStep === "symbol"      ? `${knownText}What **symbol** should it use? (e.g. MTK)` :
+            firstStep === "description" ? `${knownText}Give it a short **description**.` :
+                                          `${knownText}Now upload the **token image** using the 🖼 button next to the input bar.`;
+          push("ai", `⚡ **Token Wizard** — ${firstQ}`);
+        } else {
+          // Non-direct mode: open panel as before
+          setStudioCfg(c => ({
+            ...c,
+            name:        actionData?.name        || c.name,
+            symbol:      actionData?.symbol      || c.symbol,
+            description: actionData?.description || c.description,
+            website:     actionData?.website     || c.website,
+            twitter:     actionData?.twitter     || c.twitter,
+          }));
+          setShowStudio(true);
+          push("ai", text);
+        }
 
       } else if (action === "FETCH_STUDIO_FEES") {
         push("ai", text);
@@ -15925,7 +16015,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} }}
-              placeholder="Ask about prices, swaps, tokens…"
+              placeholder={tokenWizard ? (tokenWizard.step === "image" ? "Upload image with 🖼 button →" : "Reply to continue…") : "Ask about prices, swaps, tokens…"}
               rows={1}
               style={{
                 flex:1, border:"none", outline:"none", background:"transparent",
@@ -15934,6 +16024,31 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                 paddingTop:6, paddingBottom:6,
               }}
             />
+            {/* Image upload button — only visible during token wizard image step */}
+            {tokenWizard?.step === "image" && (
+              <label style={{ display:"flex", alignItems:"center", justifyContent:"center", width:36, height:36, borderRadius:"50%", background:studioImage ? T.accentBg : T.surface, border:`1.5px solid ${studioImage ? T.accent : T.border}`, cursor:"pointer", flexShrink:0, marginRight:4, transition:"all 0.15s", title:"Upload token image" }}>
+                <input type="file" accept="image/*" style={{ display:"none" }} onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = ev => {
+                    setStudioImage({ file, dataUrl: ev.target.result, type: file.type });
+                    // Advance wizard to confirm step
+                    setTokenWizard(prev => {
+                      const next = { ...prev.data };
+                      push("ai", `🖼 **${file.name}** uploaded!\n\nHere's your token summary:\n- **Name:** ${next.name || studioCfg.name}\n- **Symbol:** $${next.symbol || studioCfg.symbol}\n- **Description:** ${next.description || studioCfg.description}\n\nType **yes** to launch, or mention a field to change it.`);
+                      return { step: "confirm", data: next };
+                    });
+                  };
+                  reader.readAsDataURL(file);
+                  e.target.value = "";
+                }} />
+                {studioImage
+                  ? <img src={studioImage.dataUrl} alt="token" style={{ width:24, height:24, borderRadius:"50%", objectFit:"cover" }} />
+                  : <span style={{ fontSize:16 }}>🖼</span>
+                }
+              </label>
+            )}
             {/* Circular send button */}
             <button
               onClick={() => send()}
