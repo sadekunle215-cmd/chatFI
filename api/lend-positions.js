@@ -1,8 +1,8 @@
 // /api/lend-positions.js — Vercel serverless function
 // GET  ?wallet=xxx  → reads all open borrow positions (existing)
-// POST action:borrow → builds deposit+borrow versioned tx via getOperateIx (new)
+// POST action:borrow → returns raw instructions + ALT keys (client builds tx with fresh blockhash)
 
-import { Connection, PublicKey, TransactionMessage, VersionedTransaction, Transaction } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { Client } from "@jup-ag/lend-read";
 import { getOperateIx } from "@jup-ag/lend/borrow";
 import BN from "bn.js";
@@ -19,6 +19,19 @@ const VAULT_META = {
   7: { collateral: "USDC",   debt: "USDT", colDecimals: 6, debtDecimals: 6 },
 };
 
+// Serialize a TransactionInstruction to a plain JSON-safe object
+function serializeIx(ix) {
+  return {
+    programId: ix.programId.toBase58(),
+    keys: ix.keys.map(k => ({
+      pubkey:     k.pubkey.toBase58(),
+      isSigner:   k.isSigner,
+      isWritable: k.isWritable,
+    })),
+    data: Buffer.from(ix.data).toString("base64"),
+  };
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -27,7 +40,7 @@ export default async function handler(req, res) {
 
   const connection = new Connection(RPC_URL, { commitment: "confirmed" });
 
-  // ── POST — build borrow transaction ────────────────────────────────────────
+  // ── POST — return raw instructions so client can build tx with fresh blockhash
   if (req.method === "POST") {
     const { action, vaultId, positionId, signer: signerStr, colAmount, debtAmount } = req.body || {};
 
@@ -54,33 +67,16 @@ export default async function handler(req, res) {
 
       if (!ixs?.length) throw new Error("No instructions returned from getOperateIx");
 
-      const { blockhash } = await connection.getLatestBlockhash("confirmed");
+      // Return serialized instructions + ALT pubkeys — NO blockhash baked in
+      // Client will fetch a fresh blockhash and build the versioned tx itself
+      const serializedIxs   = ixs.map(serializeIx);
+      const altKeys = (addressLookupTableAccounts || []).map(a => a.key.toBase58());
 
-      let setupTransaction = null;
-      let mainIxs = ixs;
+      // Split: setup ixs (all but last) + main ix (last)
+      const setupIxs = serializedIxs.length > 1 ? serializedIxs.slice(0, -1) : [];
+      const mainIxs  = serializedIxs.length > 1 ? [serializedIxs[serializedIxs.length - 1]] : serializedIxs;
 
-      if (ixs.length > 1) {
-        const setupIxs = ixs.slice(0, -1);
-        mainIxs = [ixs[ixs.length - 1]];
-        const setupTx = new Transaction();
-        setupTx.recentBlockhash = blockhash;
-        setupTx.feePayer = signer;
-        setupTx.add(...setupIxs);
-        setupTransaction = Buffer.from(
-          setupTx.serialize({ requireAllSignatures: false })
-        ).toString("base64");
-      }
-
-      const msg = new TransactionMessage({
-        payerKey: signer,
-        recentBlockhash: blockhash,
-        instructions: mainIxs,
-      }).compileToV0Message(addressLookupTableAccounts || []);
-
-      const vTx = new VersionedTransaction(msg);
-      const transaction = Buffer.from(vTx.serialize()).toString("base64");
-
-      return res.status(200).json({ transaction, setupTransaction });
+      return res.status(200).json({ mainIxs, setupIxs, altKeys });
     } catch (err) {
       console.error("[/api/lend-positions] borrow error:", err.message);
       return res.status(500).json({ error: err.message });
