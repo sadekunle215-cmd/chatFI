@@ -891,6 +891,36 @@ async function handleTelegramWebhook(req, res) {
   }
 }
 
+// ── Set harvest pref (no vault required) ─────────────────────────────────────
+async function handleSetHarvestPref(req, res) {
+  const { wallet, sym, earnMint, autoHarvest, vaultId } = req.body;
+  if (!wallet || !sym) return res.status(400).json({ error: "wallet and sym required" });
+  try {
+    const db = getDb();
+    // If a vaultId was also supplied, update the vault record too
+    if (vaultId) {
+      const ref = db.collection("yield_vaults").doc(vaultId);
+      const doc = await ref.get();
+      if (doc.exists && doc.data().wallet === wallet) {
+        await ref.update({ autoHarvest: !!autoHarvest, updatedAt: new Date().toISOString() });
+      }
+    }
+    // Always write to harvest_prefs collection — keyed by wallet+sym
+    const prefId = `${wallet}_${sym.toUpperCase()}`;
+    await db.collection("harvest_prefs").doc(prefId).set({
+      wallet,
+      sym: sym.toUpperCase(),
+      earnMint: earnMint || "",
+      autoHarvest: !!autoHarvest,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+    return res.status(200).json({ success: true, autoHarvest: !!autoHarvest });
+  } catch (e) {
+    console.error("[setHarvestPref]", e.message);
+    return res.status(500).json({ error: e.message });
+  }
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -948,6 +978,11 @@ export default async function handler(req, res) {
     return handleDisableAutoHarvest(req, res);
   }
 
+  // Set harvest pref (works with or without a vault) — POST ?action=set-harvest-pref
+  if (req.method === "POST" && req.query.action === "set-harvest-pref") {
+    return handleSetHarvestPref(req, res);
+  }
+
   let db;
   try { db = getDb(); } catch (e) { return res.status(500).json({ error: e.message }); }
 
@@ -964,7 +999,12 @@ export default async function handler(req, res) {
         return res.status(200).json({ telegramLinked: linked });
       }
       const snap = await col.where("wallet", "==", wallet).where("status", "==", "active").get();
-      return res.status(200).json({ vaults: snap.docs.map(d => ({ id: d.id, ...d.data() })) });
+      const vaults = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Also fetch standalone harvest prefs (for positions without a vault)
+      const prefSnap = await db.collection("harvest_prefs").where("wallet", "==", wallet).get();
+      const harvestPrefs = {};
+      prefSnap.docs.forEach(d => { harvestPrefs[d.data().sym] = d.data().autoHarvest; });
+      return res.status(200).json({ vaults, harvestPrefs });
     } catch (e) { return res.status(500).json({ error: e.message }); }
   }
 
