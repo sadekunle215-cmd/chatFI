@@ -6107,19 +6107,18 @@ function JupChatInner() {
       if (!data?.transaction) throw new Error(data?.error?.message || data?.error || `Earn deposit API returned: ${JSON.stringify(data).slice(0, 200)}`);
 
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
-      // Do NOT replace the blockhash — Jupiter bakes account state into the tx
+      try {
+        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
+        tx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal */ }
       const signedTx = await provider.signTransaction(tx);
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 3 }] },
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
       });
       const signature = rpcRes?.result;
-      if (!signature) {
-        const rpcErr = rpcRes?.error;
-        const logs = rpcErr?.data?.logs || [];
-        const logMsg = logs.find(l => l.includes("Error") || l.includes("failed") || l.includes("insufficient"));
-        throw new Error(logMsg || rpcErr?.message || "Transaction simulation failed.");
-      }
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
       push("ai",
         `✅ **Deposited ${amount} ${vault.token}** into ${vault.name}\n\n` +
@@ -6143,25 +6142,6 @@ function JupChatInner() {
     if (!provider) { push("ai", "Wallet provider not found. Please reconnect."); return; }
     if (!provider.signTransaction) { push("ai", "Your wallet does not support transaction signing."); return; }
 
-    // ── SOL fee check — withdraw tx costs ~0.000005 SOL, need a small buffer ──
-    // This prevents the wallet "Insufficient funds" error for fee coverage.
-    try {
-      const solRes = await fetch(SOLANA_RPC, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [walletFull] }),
-      });
-      const solJson = await solRes.json();
-      const solBalance = (solJson?.result?.value ?? 0) / 1e9;
-      if (solBalance < 0.002) {
-        push("ai",
-          `⚠️ **Insufficient SOL for transaction fees**\n\n` +
-          `Your wallet only has **${solBalance.toFixed(5)} SOL** — you need at least **0.002 SOL** (~$${(0.002 * 170).toFixed(2)}) to cover the network fee.\n\n` +
-          `Add a small amount of SOL to your wallet and try again.`
-        );
-        return;
-      }
-    } catch { /* non-fatal — proceed and let the tx simulation catch it */ }
-
     const decimals = vault.assetDecimals ?? 6;
     const amountRaw = Math.floor(parseFloat(amount) * Math.pow(10, decimals)).toString();
 
@@ -6175,33 +6155,19 @@ function JupChatInner() {
       });
       if (!data?.transaction) throw new Error(data?.error?.message || data?.error || `Earn withdraw API returned: ${JSON.stringify(data).slice(0, 200)}`);
 
-      // ── Sign the transaction exactly as Jupiter returned it ──
-      // Do NOT replace the blockhash — Jupiter bakes account state into the tx
-      // that is tied to the blockhash. Replacing it causes on-chain assertion failures.
       const tx = VersionedTransaction.deserialize(b64ToBytes(data.transaction));
+      try {
+        const _rpc = import.meta.env.VITE_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+        const { blockhash } = await new Connection(_rpc, "confirmed").getLatestBlockhash("confirmed");
+        tx.message.recentBlockhash = blockhash;
+      } catch { /* non-fatal */ }
       const signedTx = await provider.signTransaction(tx);
-
-      // ── Send with preflight enabled so simulation catches errors before submitting ──
       const rpcRes = await jupFetch(SOLANA_RPC, {
         method: "POST",
-        body: {
-          jsonrpc: "2.0", id: 1, method: "sendTransaction",
-          params: [bytesToB64(signedTx.serialize()), {
-            encoding: "base64",
-            skipPreflight: false,       // simulate first — catches fee/state errors
-            preflightCommitment: "confirmed",
-            maxRetries: 3,
-          }],
-        },
+        body: { jsonrpc: "2.0", id: 1, method: "sendTransaction", params: [bytesToB64(signedTx.serialize()), { encoding: "base64", skipPreflight: true }] },
       });
       const signature = rpcRes?.result;
-      if (!signature) {
-        // Extract a clean error message from preflight simulation
-        const rpcErr = rpcRes?.error;
-        const logs = rpcErr?.data?.logs || [];
-        const logMsg = logs.find(l => l.includes("Error") || l.includes("failed") || l.includes("insufficient"));
-        throw new Error(logMsg || rpcErr?.message || "Transaction simulation failed — check your SOL balance for fees.");
-      }
+      if (!signature) throw new Error(rpcRes?.error?.message || "Transaction failed to send.");
 
       push("ai",
         `✅ **Withdrew ${amount} ${vault.token}** from ${vault.name}\n\n` +
@@ -9618,26 +9584,27 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           push("ai", text + "\n\nPlease **connect your wallet** first to view send history.");
         } else {
           try {
-            const endpoint = type === "pending"
-              ? `${JUP_SEND_API}/pending-invites?wallet=${addr}`
-              : `${JUP_SEND_API}/invite-history?wallet=${addr}`;
-            const data = await jupFetch(endpoint);
-            const items = data?.invites || data?.history || data || [];
+            // Route through /api/send so the Jupiter API key header is included
+            const res  = await fetch(`/api/send?type=${type}&wallet=${addr}`);
+            const data = await res.json();
+            // Jupiter may return: { invites:[...] } | { history:[...] } | [...] | { data:[...] }
+            const items = Array.isArray(data)
+              ? data
+              : (data?.invites || data?.pendingInvites || data?.history || data?.data || []);
             if (!items.length) {
               push("ai", text + `\n\nNo ${type === "pending" ? "pending unclaimed invites" : "send history"} found for your wallet.`);
             } else {
               const lines = items.slice(0, 10).map((inv, i) => {
                 const amt    = inv.amount || inv.tokenAmount || "?";
-                const tok    = inv.token  || inv.mint        || "token";
+                const tok    = inv.token  || inv.tokenSymbol || inv.mint || "token";
                 const status = inv.status || (type === "pending" ? "Unclaimed" : inv.claimed ? "Claimed" : "Clawed back");
                 return `${i+1}. **${amt} ${tok}** — ${status}`;
               }).join("\n");
-              // For pending invites, also attach clawback buttons as structured data
               const clawbackItems = type === "pending"
                 ? items.slice(0, 10).map(inv => ({
-                    code:   inv.inviteCode || inv.code || null,
+                    code:   inv.inviteCode || inv.code || inv.invite || null,
                     amount: inv.amount || inv.tokenAmount || "?",
-                    token:  inv.token  || inv.mint        || "token",
+                    token:  inv.token  || inv.tokenSymbol || inv.mint || "token",
                   })).filter(i => i.code)
                 : [];
               push("ai", text + `\n\n**${type === "pending" ? "Pending Invites" : "Send History"}**\n${lines}`, {
@@ -10543,25 +10510,25 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
               if (!walletFull) { push("ai", "Connect your wallet to view send history."); continue; }
               try {
                 const type = stepData.type || "pending";
-                const endpoint = type === "pending"
-                  ? `${JUP_SEND_API}/pending-invites?wallet=${walletFull}`
-                  : `${JUP_SEND_API}/invite-history?wallet=${walletFull}`;
-                const data = await jupFetch(endpoint);
-                const items = data?.invites || data?.history || data || [];
+                const res  = await fetch(`/api/send?type=${type}&wallet=${walletFull}`);
+                const data = await res.json();
+                const items = Array.isArray(data)
+                  ? data
+                  : (data?.invites || data?.pendingInvites || data?.history || data?.data || []);
                 if (!items.length) {
                   push("ai", `No ${type === "pending" ? "pending invites" : "send history"} found.`);
                 } else {
                   const lines = items.slice(0, 10).map((inv, i) => {
                     const amt    = inv.amount || inv.tokenAmount || "?";
-                    const tok    = inv.token  || inv.mint        || "token";
+                    const tok    = inv.token  || inv.tokenSymbol || inv.mint || "token";
                     const status = inv.status || (type === "pending" ? "Unclaimed" : inv.claimed ? "Claimed" : "Clawed back");
                     return `${i+1}. **${amt} ${tok}** — ${status}`;
                   }).join("\n");
                   const clawbackItems = type === "pending"
                     ? items.slice(0, 10).map(inv => ({
-                        code: inv.inviteCode || inv.code || null,
+                        code: inv.inviteCode || inv.code || inv.invite || null,
                         amount: inv.amount || inv.tokenAmount || "?",
-                        token: inv.token || inv.mint || "token",
+                        token: inv.token || inv.tokenSymbol || inv.mint || "token",
                       })).filter(i => i.code)
                     : [];
                   push("ai", `**${type === "pending" ? "Pending Invites" : "Send History"}**\n${lines}`, { clawbackItems });
