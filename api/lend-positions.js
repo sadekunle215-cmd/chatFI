@@ -51,6 +51,7 @@ async function buildOp({ vaultId, positionId, colAmount, debtAmount, signer, con
     debtAmount: new BN(debtAmount.toString()),
     connection,
     signer,
+    cluster:    "mainnet",
   });
   if (!ixs?.length) throw new Error("No instructions returned from getOperateIx");
   return {
