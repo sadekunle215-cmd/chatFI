@@ -6391,16 +6391,18 @@ function JupChatInner() {
     const { vaultId, collateral, debt, colDecimals, debtDecimals, colAmount, borrowAmount } = borrowCfg;
     if (!colAmount || parseFloat(colAmount) <= 0 || !borrowAmount || parseFloat(borrowAmount) <= 0) { push("ai", "Please enter valid collateral and borrow amounts."); return; }
 
-    const colRaw  = Math.floor(parseFloat(colAmount)    * Math.pow(10, colDecimals  ?? 9)).toString();
     const debtRaw = Math.floor(parseFloat(borrowAmount) * Math.pow(10, debtDecimals ?? 6)).toString();
 
-    // Balance check using the actual collateral token from the selected vault
+    // Balance check — for SOL collateral reserve 0.003 SOL for WSOL rent + tx fees
     const colSym = (collateral || "SOL").toUpperCase();
     const colBal = portfolio[colSym] ?? 0;
-    if (colBal < parseFloat(colAmount)) {
-      push("ai", `Insufficient balance. You have **${colBal.toFixed(4)} ${colSym}** but need **${colAmount} ${colSym}**.`);
+    const FEE_BUFFER = colSym === "SOL" ? 0.003 : 0;
+    const safeColAmount = Math.min(parseFloat(colAmount), colBal - FEE_BUFFER);
+    if (safeColAmount <= 0 || colBal < parseFloat(colAmount) + FEE_BUFFER) {
+      push("ai", `Insufficient ${colSym}. You have **${colBal.toFixed(4)} ${colSym}** — need deposit amount plus **0.003 SOL** for WSOL rent and fees.`);
       return;
     }
+    const colRaw = Math.floor(safeColAmount * Math.pow(10, colDecimals ?? 9)).toString();
 
     setBorrowStatus("signing");
     push("ai", `Depositing **${colAmount} ${collateral}** as collateral and borrowing **${borrowAmount} ${debt}**…`);
