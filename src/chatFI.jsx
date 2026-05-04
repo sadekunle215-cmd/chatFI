@@ -8875,10 +8875,53 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
           }, 800);
         }
         else if (type === "migrateEarn") {
-          // Trigger the YieldRotator migration for the specified pair
-          push("ai", "Opening Yield Rotator to migrate your position…");
-          setShowPortfolio(true);
-          push("ai", "Your portfolio is open — tap Migrate on the " + pendingDirectAction.fromSym + " → " + pendingDirectAction.toSym + " card to confirm.");
+          push("ai", "Executing migration…");
+          // If the op was pre-built (from a Migrate button click), use it directly
+          if (pendingDirectAction._op && directMigrateRef?.current?.migrate) {
+            directMigrateRef.current.migrate(pendingDirectAction._op);
+            push("ai", `Migration started — **${pendingDirectAction.fromSym} → ${pendingDirectAction.toSym}**. Approve in your wallet.`);
+          } else {
+            // Came from a voice/chat command — resolve positions + vaults
+            await new Promise(r => setTimeout(r, 600));
+            setEarnUserPositions(positions => {
+              setEarnVaults(vaults => {
+                const fromSym = pendingDirectAction.fromSym;
+                const toSym   = pendingDirectAction.toSym;
+                const userPos = fromSym
+                  ? positions.find(p => (p.sym || "").toUpperCase() === fromSym)
+                  : positions[0];
+                const targetVault = toSym
+                  ? vaults.find(v => (v.token || "").toUpperCase() === toSym)
+                  : vaults.filter(v => !positions.find(p => (p.sym||"").toUpperCase() === (v.token||"").toUpperCase()))
+                           .sort((a, b) => b.apy - a.apy)[0];
+                if (!userPos) {
+                  push("ai", `No active ${fromSym || "Earn"} position found to migrate.`);
+                  return vaults;
+                }
+                if (!targetVault) {
+                  push("ai", `Could not find target vault${toSym ? ` for ${toSym}` : ""}. Open Yield Rotator to migrate manually.`);
+                  return vaults;
+                }
+                const op = {
+                  position: { ...userPos, logo: userPos.logoUrl },
+                  posSym: userPos.sym, posMint: userPos.mint, posApy: userPos.apy, posAmt: userPos.amount,
+                  posPoolId: userPos.vaultId,
+                  bestPool: targetVault, bestSym: targetVault.token, bestMint: targetVault.assetMint,
+                  bestApy: targetVault.apy, apyGap: targetVault.apy - userPos.apy,
+                  isCrossAsset: (targetVault.assetMint || "") !== (userPos.mint || ""),
+                };
+                if (directMigrateRef?.current?.migrate) {
+                  directMigrateRef.current.migrate(op);
+                  push("ai", `Migration started — **${userPos.sym} → ${targetVault.token}**. Approve in your wallet.`);
+                } else {
+                  setShowYieldRotator(true);
+                  push("ai", `Tap **Migrate** on the ${userPos.sym} → ${targetVault.token} card to confirm.`);
+                }
+                return vaults;
+              });
+              return positions;
+            });
+          }
         }
         else if (type === "send")        { setShowSend(false);        await doSend(); }
         else if (type === "lock")        { setShowLock(false);        await doCreateLock(); }
@@ -8938,11 +8981,45 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
     // ── Keyword shortcuts — handled client-side, never sent to Claude ─────────
     const lower = raw.toLowerCase().trim();
 
-    // "refresh" / "reload" — save chat then reload page
-    if (lower === "refresh" || lower === "reload" || lower === "refresh page" || lower === "reload page") {
+    // ── Helper: detect refresh intent ────────────────────────────────────────
+    const isRefreshIntent = (s) =>
+      /\b(refresh|reload|reboot|restart|hard reload|force reload|refresh (the )?(page|app|chat|chatfi)|can you refresh|please refresh|refresh now|do a refresh|refresh it|reload (the )?(page|app)|restart (the )?(page|app|chat))\b/i.test(s);
+
+    // ── Helper: detect delete/clear chat intent ───────────────────────────────
+    const isDeleteIntent = (s) =>
+      /\b(delete (chat|messages?|conversation|all messages?|everything)|clear (chat|messages?|conversation|all messages?|history|everything)|new chat|wipe (chat|messages?|history)|reset chat|start (over|fresh|new)|remove (all )?messages?|erase (chat|messages?|history))\b/i.test(s);
+
+    // ── Combined: "refresh and delete messages" / "refresh then clear chat" ────
+    if (isRefreshIntent(lower) && isDeleteIntent(lower)) {
       setInput("");
-      // Save current msgs to sessionStorage BEFORE pushing the refresh messages
-      // so they don't reappear after the page restores
+      // Clear everything first, then reload
+      setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
+      setShowPredList(false); setShowEarn(false); setShowEarnDeposit(false); setShowEarnWithdraw(false); setShowBet(false); setShowMultiply(false); setShowMultiplyForm(false); setShowBorrow(false);
+      setShowSend(false); setShowPortfolio(false); setShowPerpsPos(false); setShowPerps(false);
+      setShowTokenCard(false); setTokenCardData(null);
+      setShowCopyTrade(false); setCopyTradeData(null);
+      setShowRoute(false); setRouteData(null);
+      setShowLock(false); setShowLocks(false);
+      setShowLendPos(false);
+      setShowStudio(false); setShowStudioFees(false); setStudioFees(null);
+      setShowBlog(false);
+      setShowYieldVault(false); setShowYieldVaultTracker(false);
+      setShowYieldRotator(false);
+      setActivePlugin(null);
+      setPortfolioData(null);
+      setEarnWithdraw({ vault:null, amount:"", positionAmount:0 });
+      histRef.current = [];
+      try { sessionStorage.removeItem("chatfi-msgs"); } catch {}
+      try { sessionStorage.removeItem("chatfi-wallet-shown"); } catch {}
+      // Reload after wipe — page starts fresh with no msgs
+      setTimeout(() => window.location.reload(), 300);
+      return;
+    }
+
+    // "refresh" / "reload" — save chat then reload page
+    if (isRefreshIntent(lower)) {
+      setInput("");
+      // Save current msgs to sessionStorage BEFORE reload so they survive
       setMsgs(m => {
         try { sessionStorage.setItem("chatfi-msgs", JSON.stringify(m.slice(-80))); } catch {}
         return m;
@@ -8952,7 +9029,7 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
     }
 
     // "delete chat" / "clear chat" / "new chat" — wipe chat history
-    if (lower === "delete chat" || lower === "clear chat" || lower === "new chat" || lower === "clear conversation" || lower === "delete conversation" || lower === "delete messages" || lower === "clear messages" || lower === "delete all messages" || lower === "clear all messages") {
+    if (isDeleteIntent(lower)) {
       setInput("");
       // Close every panel so nothing is left stranded
       setShowSwap(false); setShowPred(false); setShowTrig(false); setShowTrigV2(false); setShowTrigOrders(false); setShowRecurring(false); setShowRecurringOrders(false);
@@ -8966,6 +9043,8 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       setShowStudio(false); setShowStudioFees(false); setStudioFees(null);
       setShowBlog(false);
       setShowYieldVault(false); setShowYieldVaultTracker(false);
+      setShowYieldRotator(false);
+      setActivePlugin(null);
       setPortfolioData(null);
       setEarnWithdraw({ vault:null, amount:"", positionAmount:0 });
       histRef.current = [];
@@ -9423,10 +9502,23 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
       } else if (action === "MIGRATE_EARN") {
         if (!walletFull) {
           push("ai", text + "\n\nConnect your wallet first to migrate your earn position.");
+        } else if (directMode) {
+          // Direct mode: fetch positions, find best vault, present Yes/No
+          push("ai", text);
+          fetchEarnVaults();
+          fetchEarnUserPositions();
+          const fromSym = (actionData?.fromSym || "").toUpperCase() || null;
+          const toSym   = (actionData?.toSym   || "").toUpperCase() || null;
+          const fromApy = actionData?.fromApy || null;
+          const toApy   = actionData?.toApy   || null;
+          const label   = fromSym && toSym
+            ? `Migrate ${fromSym} Earn → ${toSym}${fromApy && toApy ? ` (${fromApy}% → ${toApy}%)` : ""}`
+            : "Migrate Earn position to best available pool";
+          push("ai", `⚡ **Direct Mode** — ${label}`);
+          setPendingDirectAction({ type: "migrateEarn", label, fromSym, toSym, fromApy, toApy });
         } else {
           push("ai", text);
           // Fetch fresh data then open the Best Yield Finder panel
-          // which will show: current position vs best APY, migrate button, or "already best" state
           fetchEarnVaults();
           fetchEarnUserPositions();
           setShowYieldRotator(true);
@@ -13927,7 +14019,12 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                                         bestApy: bestVault.apy, apyGap: bestVault.apy - pos.apy,
                                         isCrossAsset: (bestVault.assetMint||"") !== (pos.mint||""),
                                       };
-                                      if (directMigrateRef?.current?.migrate) {
+                                      if (directMode) {
+                                        // Direct mode: Yes/No confirmation in chat
+                                        const label = `Migrate ${pos.sym} Earn → ${bestVault.token} (${pos.apyDisplay} → ${bestVault.apyDisplay})`;
+                                        push("ai", `⚡ **Direct Mode** — ${label}`);
+                                        setPendingDirectAction({ type: "migrateEarn", label, fromSym: pos.sym, toSym: bestVault.token, _op: op });
+                                      } else if (directMigrateRef?.current?.migrate) {
                                         directMigrateRef.current.migrate(op);
                                       } else {
                                         push("user", `Migrate my ${pos.sym} earn position to ${bestVault.token}`);
@@ -13987,7 +14084,11 @@ Write a sharp portfolio pulse (max 150 words): total value, biggest positions, o
                                           bestApy: v.apy, apyGap: v.apy - userPos.apy,
                                           isCrossAsset: (v.assetMint||"") !== (userPos.mint||""),
                                         };
-                                        if (directMigrateRef?.current?.migrate) {
+                                        if (directMode) {
+                                          const label = `Migrate ${userPos.sym} Earn → ${v.token} (${userPos.apyDisplay} → ${v.apyDisplay})`;
+                                          push("ai", `⚡ **Direct Mode** — ${label}`);
+                                          setPendingDirectAction({ type: "migrateEarn", label, fromSym: userPos.sym, toSym: v.token, _op: op });
+                                        } else if (directMigrateRef?.current?.migrate) {
                                           directMigrateRef.current.migrate(op);
                                         } else {
                                           push("user", `Migrate my ${userPos.sym} earn position to ${v.token}`);
