@@ -295,8 +295,26 @@ async function runWatcher(req, res) {
           continue;
         }
 
-        const yieldAmount = Math.max(0, position.currentAmount - (vault.depositedAmount || 0));
+        const storedDeposit = vault.depositedAmount || 0;
         const priceUSD = await fetchUSDPrice(vault.earnMint);
+
+        // ── Detect partial unstake: current balance dropped below stored baseline ──
+        // If the user manually withdrew some (or all) of their principal outside the app,
+        // reset depositedAmount to the new lower balance so the yield baseline stays correct.
+        // Without this, yieldAmount would be negative → clamped to 0 forever.
+        if (position.currentAmount < storedDeposit && storedDeposit > 0) {
+          const diff = storedDeposit - position.currentAmount;
+          const diffUSD = priceUSD ? diff * priceUSD : 0;
+          await doc.ref.update({
+            depositedAmount: position.currentAmount,
+            updatedAt: new Date().toISOString(),
+          });
+          vaultLog.push(`Partial unstake detected — depositedAmount reset from ${storedDeposit.toFixed(4)} to ${position.currentAmount.toFixed(4)} (~$${diffUSD.toFixed(2)} withdrawn externally)`);
+          // Update local vault object so yield calc below uses the new baseline
+          vault.depositedAmount = position.currentAmount;
+        }
+
+        const yieldAmount = Math.max(0, position.currentAmount - (vault.depositedAmount || 0));
         const yieldUSD = priceUSD ? yieldAmount * priceUSD : 0;
 
         vaultLog.push(`current=${position.currentAmount.toFixed(4)}, yield=${yieldAmount.toFixed(4)} (~$${yieldUSD.toFixed(2)}), threshold=$${vault.thresholdUSD}`);
@@ -1034,9 +1052,11 @@ export default async function handler(req, res) {
     return res.status(200).json({ success: true, id: ref.id, action: "created" });
   }
 
-  // PATCH /api/yield-vault
+  // PATCH /api/yield-vault  — also accepts ?id=&wallet= as query params (for plugin sync calls)
   if (req.method === "PATCH") {
-    const { id, wallet, targetTokenSymbol, targetTokenMint, targetTokenDecimals, thresholdUSD, depositedAmount } = req.body;
+    const id     = req.body.id     || req.query.id;
+    const wallet = req.body.wallet || req.query.wallet;
+    const { targetTokenSymbol, targetTokenMint, targetTokenDecimals, thresholdUSD, depositedAmount, earnMint, earnSymbol } = req.body;
     if (!id || !wallet) return res.status(400).json({ error: "id and wallet required" });
     try {
       const doc = col.doc(id);
@@ -1049,6 +1069,9 @@ export default async function handler(req, res) {
       if (targetTokenDecimals !== undefined) updates.targetTokenDecimals = targetTokenDecimals ?? 6;
       if (thresholdUSD        !== undefined) updates.thresholdUSD        = parseFloat(thresholdUSD);
       if (depositedAmount     !== undefined) updates.depositedAmount     = parseFloat(depositedAmount);
+      // earnMint/earnSymbol updated when YieldRotator migrates position to a new pool
+      if (earnMint            !== undefined) updates.earnMint            = earnMint;
+      if (earnSymbol          !== undefined) updates.earnSymbol          = earnSymbol;
       await doc.update(updates);
       return res.status(200).json({ success: true, id });
     } catch (e) { return res.status(500).json({ error: e.message }); }
