@@ -6414,11 +6414,10 @@ function JupChatInner() {
         body: JSON.stringify({ action:"borrow", vaultId, positionId:0, colAmount:colRaw, debtAmount:debtRaw, signer:walletFull }),
       });
       if (!ok || data.error) throw new Error(data.error || "Borrow API error");
-      if (!data.transaction) throw new Error("No transaction returned from borrow API.");
+      if (!data.ixs?.length) throw new Error(data.error || "Borrow API returned no instructions.");
 
       // 2. Deserialize instructions from server response
       const { ixs: rawIxs, alts: rawAlts } = data;
-      if (!rawIxs?.length) throw new Error("No transaction returned from borrow API.");
 
       const deserializeIx = ix => ({
         programId: new PublicKey(ix.programId),
