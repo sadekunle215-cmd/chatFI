@@ -124,6 +124,10 @@ I'll be specific because vague product feedback isn't useful.
 
 ## Closing Thought
 
-I'm a developer in Ibadan building consumer DeFi products without a local dev environment. The fact that I was able to integrate ten Jupiter APIs into a production app entirely through Vercel serverless functions speaks to how solid the underlying APIs are. The gaps I documented above are real friction points but they didn't stop me — they slowed me down. Fix the auth callout on Trigger, add streaming or partial results to Portfolio, and build an interactive API explorer into the docs. Those three changes would have saved me the most time and I think they'd have the biggest ROI across your entire developer community.
+I'm a developer building consumer DeFi products without a local dev environment. The fact that I was able to integrate ten Jupiter APIs into a production app entirely through Vercel serverless functions speaks to how solid the underlying APIs are. 
+
+The gaps I documented above are real friction points but they didn't stop me — they slowed me down. Fix the auth callout on Trigger, add streaming or partial results to Portfolio, and build an interactive API explorer into the docs. 
+
+Those three changes would have saved me the most time and I think they'd have the biggest ROI across your entire developer community.
 
 ChatFi is live at [chatfi.pro](https://chatfi.pro). Every Jupiter API I integrated is production-tested with real wallets.
