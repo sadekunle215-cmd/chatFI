@@ -22,7 +22,7 @@ Under the hood the app uses: Swap V1/V2, Price API V3, Tokens V2, Earn/Lend, DCA
 
 As a first time jupiter API user,roughly 40 minutes from landing on developers.jup.ag to my first successful Swap quote response. That's actually pretty good.
 
-What helped: the API key was one field, one button. I was expecting OAuth flows and dashboard setup and billing — it was just an API key. That was the right call.
+What helped: the API key was one field, one button. I was expecting OAuth flows and dashboard setup and billing — it was just an API key.
 
 What slowed me down: I assumed the key worked across all Jupiter APIs immediately. It didn't for the Trigger endpoints. I spent about 20 minutes getting 401s on `trigger.jup.ag/v2` before I realized trigger orders use JWT Bearer tokens, not the standard API key header. This is documented, but it's buried. When you're scanning docs quickly on a phone, "Bearer JWT" appearing mid-page without a prominent callout is easy to miss.
 
@@ -40,9 +40,9 @@ A few things jump out from this: Lend API is sitting at a **17.88% error rate** 
 
 ### The `@jup-ag/lend` Package (Killed My Vercel Deployment)
 
-This was the worst moment of the build. I added `@jup-ag/lend` to power the Multiply and Borrow features. Everything worked locally (in Codespaces on Android). Then I deployed to Vercel and my entire serverless backend crashed. Every route — not just the lend routes, *every* route — returned 500s.
+This was the worst moment of the build. I added `@jup-ag/lend` to power the Multiply and Borrow features. Everything worked locally. Then I deployed to Vercel and my entire serverless backend crashed. Every route — not just the lend routes, *every* route — returned 500s.
 
-After two days of debugging production logs on my phone, I traced it to the `@jup-ag/lend` package importing Node.js internals in a way that Vercel's edge runtime couldn't handle. There was no error message that said "hey this package is incompatible with edge functions." The entire function bundle just failed silently.
+After two days of debugging production, I traced it to the `@jup-ag/lend` package importing Node.js internals in a way that Vercel's edge runtime couldn't handle. There was no error message that said "hey this package is incompatible with edge functions." The entire function bundle just failed silently.
 
 The fix was to remove the package entirely and rewrite the Earn/Lend integration as direct REST calls to `lend-api.jup.ag`. That worked perfectly. But I lost two full days to it. The NPM package and the REST API should have the same documentation standing — right now the REST endpoint docs are clearly better maintained.
 
@@ -50,9 +50,9 @@ The fix was to remove the package entirely and rewrite the Earn/Lend integration
 
 ### Portfolio API: 15–55 Second Response Times
 
-The Portfolio endpoint at `api.jup.ag/portfolio` aggregates across all Jupiter products and is genuinely useful — it's one of my app's marquee features. But the response time is brutal. I saw 15 seconds on a good day, 55 seconds on a bad one.
+The Portfolio endpoint at `api.jup.ag/portfolio` aggregates across all Jupiter products and is genuinely useful — it's one of my app's marquee features. But the response time is a bit slow. I saw 15 seconds on a good day, 55 seconds on a bad one.
 
-For a serverless function on Vercel, the default max execution time is 10 seconds. I had to explicitly set `maxDuration: 60` in the function config and move the portfolio route to Vercel's extended compute. That's not obvious if you're new.
+For a serverless function on Vercel, the default max execution time is 10 seconds. I had to explicitly set `maxDuration: 60` in the function config and move the portfolio route to Vercel's extended compute.
 
 The bigger problem: there's no streaming or progressive response from the Portfolio endpoint. Users see a loading spinner for 55 seconds with no feedback. I worked around this by adding a typing animation and status messages ("Fetching your positions…", "Almost there…"), but that's a band-aid. A streaming response or a structured partial-result format would make this endpoint dramatically better for production apps.
 
