@@ -386,7 +386,7 @@ User → /api/claude → action:SET_YIELD_VAULT → /api/yield-vault CREATE → 
 
 ## 26. chatFI.jsx — Line-by-Line Code Guide
 
-> `chatFI.jsx` is the entire React frontend in a single file — **16,681 lines**. Every feature the user sees lives here. This section annotates every 100-line block so a contest reviewer can navigate the code without reading all 16,681 lines.
+> `chatFI.jsx` is the entire React frontend in a single file — **16,681 lines**. Every feature the user sees lives here. This section annotates every 100-line block so it  can be east to navigate the code without reading all 16,681 lines.
 
 ---
 
