@@ -2,6 +2,7 @@
 
 **Project:** ChatFi (chatfi.pro)  
 **Builder:** SAM
+
 **APIs Used:** Swap V2, Lend/Earn, Lock, Trigger, DCA, Perps, Portfolio, Price V3, Tokens V2, Send, Studio (DBC)
 
 ---
