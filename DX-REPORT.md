@@ -20,7 +20,7 @@ Under the hood the app uses: Swap V1/V2, Price API V3, Tokens V2, Earn/Lend, DCA
 
 ## Onboarding: Time to First Successful API Call
 
-Roughly 40 minutes from landing on developers.jup.ag to my first successful Swap quote response. That's actually pretty good.
+As a first time jupiter API user,roughly 40 minutes from landing on developers.jup.ag to my first successful Swap quote response. That's actually pretty good.
 
 What helped: the API key was one field, one button. I was expecting OAuth flows and dashboard setup and billing — it was just an API key. That was the right call.
 
