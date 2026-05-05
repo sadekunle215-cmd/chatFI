@@ -12,7 +12,7 @@
 
 ChatFi is a conversational DeFi terminal. You type natural language, ChatFi interprets your intent, and the app maps it to on-chain Jupiter actions. "Swap 50 USDC to SOL," "Set a limit order if JUP drops to $0.80," "Deposit 100 USDC into the highest-APY earn vault" — all of that flows through a single chat UI.
 
-The core idea came from a frustration I had personally using Jupiter. I'd open the app, forget what each product did, and have to read docs before doing anything. I wanted something that just knew what I was trying to do and handled the API routing for me. So I built ChatFi as the routing layer.
+The core idea came from a frustration I had personally using any web app/mobile interface. I'd open the app, forget what each product did, and have to read docs before doing anything. I wanted something that just knew what I was trying to do and handled the API routing for me. So I built ChatFi as the routing layer.
 
 Under the hood the app uses: Swap V1/V2, Price API V3, Tokens V2, Earn/Lend, DCA, Trigger (Single/OCO/OTOCO), Lock (vesting), Send (invite-link transfers), Studio (DBC pool creation), and Portfolio. I also built a Yield Vault system on top of the Earn API that monitors positions, detects harvestable yield, and either sends a Telegram alert or auto-executes a harvest swap via a delegate keypair.
 
