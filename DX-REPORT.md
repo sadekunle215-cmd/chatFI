@@ -1,7 +1,7 @@
 # DX Report — ChatFi × Jupiter Developer Platform
 
 **Project:** ChatFi (chatfi.pro)  
-**Builder:** Sagjha  
+**Builder:** SAM
 **APIs Used:** Swap V2, Lend/Earn, Lock, Trigger, DCA, Perps, Portfolio, Price V3, Tokens V2, Send, Studio (DBC)
 
 ---
@@ -34,7 +34,7 @@ Here's my actual API usage data from the Jupiter Developer Platform dashboard:
 
 ![ChatFi Jupiter Developer Platform Analytics](./jupiter-dev-platform-analytics.png)
 
-A few things jump out from this: Lend API is sitting at a **17.88% error rate** with a **6.7s p99 latency**. Token API at **52.70% error rate**. These aren't edge cases — this is what production traffic actually looks like hitting these endpoints. The numbers below explain where most of those errors came from.
+A few things jump out from this: Lend API is sitting at a **17.88% error rate** with a **6.7s p99 latency**. Token API at **52.70% error rate**. 
 
 ### The `@jup-ag/lend` Package (Killed My Vercel Deployment)
 
