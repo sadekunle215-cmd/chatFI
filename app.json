@@ -4,57 +4,18 @@
     "slug": "chatfi",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "backgroundColor": "#0d1117",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0d1117"
-    },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "pro.chatfi.app",
-      "infoPlist": {
-        "LSApplicationQueriesSchemes": ["phantom", "solflare", "exodus", "trust"]
-      }
+      "bundleIdentifier": "pro.chatfi.app"
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0d1117"
-      },
-      "package": "pro.chatfi.app",
-      "intentFilters": [
-        {
-          "action": "VIEW",
-          "autoVerify": true,
-          "data": [
-            {
-              "scheme": "https",
-              "host": "chatfi.pro",
-              "pathPrefix": "/wc"
-            }
-          ],
-          "category": ["BROWSABLE", "DEFAULT"]
-        }
-      ]
+      "package": "pro.chatfi.app"
     },
     "scheme": "chatfi",
-    "plugins": [
-      "expo-router",
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "minSdkVersion": 26
-          }
-        }
-      ]
-    ],
     "extra": {
       "eas": {
-        "projectId": "YOUR_EAS_PROJECT_ID"
+        "projectId": "85a58465-7a3b-4f9f-b145-7e2c11478e2d"
       }
     }
   }
