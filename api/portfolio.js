@@ -402,6 +402,26 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
+  // Token image proxy — GET /api/portfolio?tokenImage=MINT
+  if (req.query.tokenImage) {
+    const mint = req.query.tokenImage;
+    try {
+      const meta = await jFetch(`https://tokens.jup.ag/token/${mint}`, {}, 5000);
+      const imageUrl = meta?.logoURI || meta?.icon || '';
+      if (imageUrl) {
+        const imgRes = await fetch(imageUrl);
+        if (imgRes.ok) {
+          const buf = await imgRes.arrayBuffer();
+          res.setHeader('Content-Type', imgRes.headers.get('content-type') || 'image/png');
+          res.setHeader('Cache-Control', 's-maxage=86400');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          return res.send(Buffer.from(buf));
+        }
+      }
+    } catch {}
+    return res.status(404).end();
+  }
+
   const { wallet } = req.query;
   if (!wallet) return res.status(400).json({ error: "wallet param required" });
 
