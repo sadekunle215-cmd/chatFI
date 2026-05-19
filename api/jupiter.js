@@ -6,7 +6,7 @@
 // Hobby plan max is 60s. Pro plan allows up to 300s if needed.
 export const maxDuration = 60;
 
-const DLMM_API  = "https://dlmm-api.meteora.ag";
+const DLMM_API  = "https://dlmm.datapi.meteora.ag"; // New API (dlmm-api.meteora.ag is legacy)
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -29,29 +29,32 @@ export default async function handler(req, res) {
       if (action === "list_pools") {
         const { search = "", limit = 20 } = params;
         // Normalise: AI may pass "SOL/USDC" — API expects "SOL-USDC"
-        const cleanSearch = search.replace(/\//g, "-").trim();
-        const qs = cleanSearch
-          ? "search_term=" + encodeURIComponent(cleanSearch) + "&sort_key=fees_24h&order_by=desc"
-          : "sort_key=fees_24h&order_by=desc&limit=" + limit;
-        const r = await fetch(DLMM_API + "/pair/all?" + qs);
-        if (!r.ok) throw new Error("DLMM API error " + r.status);
+        const cleanSearch = (search || "").replace(/\//g, "-").trim();
+        // New API: GET /pools?page=1&limit=N&order_by=fees_24h&sort=desc&search=X
+        const qs = new URLSearchParams({
+          page: "1",
+          limit: String(Math.min(parseInt(limit), 50)),
+          order_by: "fees_24h",
+          sort: "desc",
+          ...(cleanSearch ? { search: cleanSearch } : {}),
+        }).toString();
+        const r = await fetch(DLMM_API + "/pools?" + qs);
+        if (!r.ok) throw new Error("DLMM API error " + r.status + " " + await r.text().then(t=>t.slice(0,80)));
         const raw = await r.text();
         let data;
         try { data = JSON.parse(raw); } catch { throw new Error("DLMM non-JSON: " + raw.slice(0,100)); }
-        // API returns: array | { data:[] } | { pairs:[] } | { groups:[{pairs:[]}] }
+        // Response shape: { data: [...], total, page, limit } or plain array
         let pools = [];
-        if (Array.isArray(data))            pools = data;
-        else if (Array.isArray(data?.data)) pools = data.data;
-        else if (Array.isArray(data?.pairs)) pools = data.pairs;
-        else if (Array.isArray(data?.groups)) pools = data.groups.flatMap(g => g.pairs || []);
-        pools = pools.slice(0, parseInt(limit));
+        if (Array.isArray(data))             pools = data;
+        else if (Array.isArray(data?.data))  pools = data.data;
+        else if (Array.isArray(data?.pools)) pools = data.pools;
         return res.status(200).json({ pools });
       }
 
       if (action === "get_pool") {
         const { poolAddress } = params;
         if (!poolAddress) return res.status(400).json({ error: "poolAddress required" });
-        const r = await fetch(`${DLMM_API}/pair/${poolAddress}`);
+        const r = await fetch(DLMM_API + "/pools/" + poolAddress);
         if (!r.ok) throw new Error(`DLMM API error ${r.status}`);
         return res.status(200).json({ pool: await r.json() });
       }
@@ -59,9 +62,17 @@ export default async function handler(req, res) {
       if (action === "get_positions") {
         const { wallet } = params;
         if (!wallet) return res.status(400).json({ error: "wallet required" });
-        const r = await fetch(`${DLMM_API}/position/wallet/${wallet}`);
-        if (!r.ok) throw new Error(`DLMM API error ${r.status}`);
-        const data = await r.json();
+        // positions endpoint — try new API first, fall back to legacy
+        let posData;
+        const rNew = await fetch(DLMM_API + "/positions?wallet=" + wallet);
+        if (rNew.ok) {
+          posData = await rNew.json();
+        } else {
+          const rLeg = await fetch("https://dlmm-api.meteora.ag/position/wallet/" + wallet);
+          if (!rLeg.ok) throw new Error("DLMM positions API error " + rLeg.status);
+          posData = await rLeg.json();
+        }
+        const data = posData;
         const positions = Object.entries(data || {}).flatMap(([poolAddr, info]) =>
           (info?.userPositions || []).map(p => ({
             ...p,
