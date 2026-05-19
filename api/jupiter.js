@@ -28,13 +28,23 @@ export default async function handler(req, res) {
 
       if (action === "list_pools") {
         const { search = "", limit = 20 } = params;
-        const qs = search
-          ? `search_term=${encodeURIComponent(search)}&sort_key=fees_24h&order_by=desc`
-          : `sort_key=fees_24h&order_by=desc&limit=${limit}`;
-        const r = await fetch(`${DLMM_API}/pair/all?${qs}`);
-        if (!r.ok) throw new Error(`DLMM API error ${r.status}`);
-        const data = await r.json();
-        const pools = Array.isArray(data) ? data : (data?.data || data?.pairs || []);
+        // Normalise: AI may pass "SOL/USDC" — API expects "SOL-USDC"
+        const cleanSearch = search.replace(/\//g, "-").trim();
+        const qs = cleanSearch
+          ? "search_term=" + encodeURIComponent(cleanSearch) + "&sort_key=fees_24h&order_by=desc"
+          : "sort_key=fees_24h&order_by=desc&limit=" + limit;
+        const r = await fetch(DLMM_API + "/pair/all?" + qs);
+        if (!r.ok) throw new Error("DLMM API error " + r.status);
+        const raw = await r.text();
+        let data;
+        try { data = JSON.parse(raw); } catch { throw new Error("DLMM non-JSON: " + raw.slice(0,100)); }
+        // API returns: array | { data:[] } | { pairs:[] } | { groups:[{pairs:[]}] }
+        let pools = [];
+        if (Array.isArray(data))            pools = data;
+        else if (Array.isArray(data?.data)) pools = data.data;
+        else if (Array.isArray(data?.pairs)) pools = data.pairs;
+        else if (Array.isArray(data?.groups)) pools = data.groups.flatMap(g => g.pairs || []);
+        pools = pools.slice(0, parseInt(limit));
         return res.status(200).json({ pools });
       }
 
