@@ -89,8 +89,8 @@ export default async function handler(req, res) {
         const { poolAddress, wallet, xAmountRaw, yAmountRaw, strategy = "Spot", rangeHalf = 34 } = params;
         if (!poolAddress || !wallet) return res.status(400).json({ error: "poolAddress and wallet required" });
 
-        const { default: DLMM } = await import("@meteora-ag/dlmm");
-        const { Connection, PublicKey, Keypair } = await import("@solana/web3.js");
+        const DLMM = require("@meteora-ag/dlmm").default;
+        const { Connection, PublicKey, Keypair } = require("@solana/web3.js");
         const connection = new Connection(SOLANA_RPC, "confirmed");
         const dlmmPool   = await DLMM.create(connection, new PublicKey(poolAddress));
         const activeBin  = await dlmmPool.getActiveBin();
@@ -130,8 +130,8 @@ export default async function handler(req, res) {
         if (!poolAddress || !wallet || !positionAddress)
           return res.status(400).json({ error: "poolAddress, wallet, positionAddress required" });
 
-        const { default: DLMM }          = await import("@meteora-ag/dlmm");
-        const { Connection, PublicKey }   = await import("@solana/web3.js");
+        const DLMM = require("@meteora-ag/dlmm").default;
+        const { Connection, PublicKey } = require("@solana/web3.js");
         const connection = new Connection(SOLANA_RPC, "confirmed");
         const dlmmPool   = await DLMM.create(connection, new PublicKey(poolAddress));
 
@@ -164,8 +164,8 @@ export default async function handler(req, res) {
         if (!poolAddress || !wallet || !positionAddress)
           return res.status(400).json({ error: "poolAddress, wallet, positionAddress required" });
 
-        const { default: DLMM }          = await import("@meteora-ag/dlmm");
-        const { Connection, PublicKey }   = await import("@solana/web3.js");
+        const DLMM = require("@meteora-ag/dlmm").default;
+        const { Connection, PublicKey } = require("@solana/web3.js");
         const connection = new Connection(SOLANA_RPC, "confirmed");
         const dlmmPool   = await DLMM.create(connection, new PublicKey(poolAddress));
 
