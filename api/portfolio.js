@@ -71,7 +71,8 @@ async function mintMeta(mint) {
   if (!mint) return { symbol: "?", logoURI: "" };
   if (TOKEN_CACHE[mint]) return TOKEN_CACHE[mint];
   try {
-    const data = await jFetch(`https://tokens.jup.ag/token/${mint}`, {}, 5000);
+    const r = await jFetch(`https://api.jup.ag/tokens/v2/search?query=${mint}&limit=1`, {}, 5000);
+    const data = Array.isArray(r) ? r[0] : r;
     const meta = {
       symbol:   data?.symbol  || mint.slice(0, 6) + "…",
       logoURI:  data?.logoURI || data?.icon || "",
@@ -86,57 +87,69 @@ async function mintToSymbol(mint) {
   return (await mintMeta(mint)).symbol;
 }
 
-// ── 1. Token balances via Helius RPC (reliable SPL) + Jupiter for prices ─────
+// ── 1. Token balances via Helius RPC + Jupiter BATCH metadata ────────────────
 async function fetchTokenBalances(wallet) {
   try {
     const HELIUS_RPC = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}`;
 
-    // Step 1: Get SOL balance
-    const solRes = await fetch(HELIUS_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [wallet] }),
-    });
-    const solJson = await solRes.json();
-    const solAmt  = (solJson?.result?.value || 0) / 1e9;
-
-    // Step 2: Get all SPL token accounts
-    const splRes = await fetch(HELIUS_RPC, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0", id: 2,
-        method: "getTokenAccountsByOwner",
-        params: [wallet,
-          { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-          { encoding: "jsonParsed" },
-        ],
+    // Step 1: Get SOL balance + SPL accounts in parallel
+    const [solRes, splRes] = await Promise.all([
+      fetch(HELIUS_RPC, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [wallet] }),
       }),
-    });
+      fetch(HELIUS_RPC, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0", id: 2,
+          method: "getTokenAccountsByOwner",
+          params: [wallet,
+            { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+            { encoding: "jsonParsed" },
+          ],
+        }),
+      }),
+    ]);
+
+    const solJson = await solRes.json();
     const splJson = await splRes.json();
+    const solAmt  = (solJson?.result?.value || 0) / 1e9;
     const accounts = splJson?.result?.value || [];
 
-    // Step 3: Collect mints with nonzero balance
+    // Step 2: Collect mints with nonzero balance
     const splMints = [];
     for (const acc of accounts) {
-      const info   = acc.account?.data?.parsed?.info;
-      const mint   = info?.mint || "";
-      const uiAmt  = parseFloat(info?.tokenAmount?.uiAmount || 0);
-      const dec    = parseInt(info?.tokenAmount?.decimals ?? 6);
+      const info  = acc.account?.data?.parsed?.info;
+      const mint  = info?.mint || "";
+      const uiAmt = parseFloat(info?.tokenAmount?.uiAmount || 0);
+      const dec   = parseInt(info?.tokenAmount?.decimals ?? 6);
       if (uiAmt > 0 && mint) splMints.push({ mint, amount: uiAmt, decimals: dec });
     }
 
-    // Step 4: Resolve metadata + prices for all mints in parallel (including SOL)
-    const SOL_MINT = "So11111111111111111111111111111111111111112";
-    const allMints = [SOL_MINT, ...splMints.map(m => m.mint)];
-    const SOL_PRICE_URL = `https://lite-api.jup.ag/price/v2?ids=${allMints.join(",")}`;
-    const [solMeta, metaResults, priceRes] = await Promise.all([
-      jFetch(`https://tokens.jup.ag/token/${SOL_MINT}`, {}, 5000),
-      Promise.allSettled(splMints.map(({ mint }) => jFetch(`https://tokens.jup.ag/token/${mint}`, {}, 5000))),
-      jFetch(SOL_PRICE_URL, {}, 8000),
+    const SOL_MINT    = "So11111111111111111111111111111111111111112";
+    const allMints    = [SOL_MINT, ...splMints.map(m => m.mint)];
+    const mintList    = splMints.map(m => m.mint).join(",");
+    const PRICE_URL   = `https://api.jup.ag/price/v3/price?ids=${allMints.join(",")}`;
+
+    // Step 3: ONE batch call for all token metadata + prices in parallel
+    const [solMeta, batchMeta, priceRes] = await Promise.all([
+      jFetch(`https://api.jup.ag/tokens/v2/search?query=${SOL_MINT}&limit=1`, {}, 5000),
+      mintList ? jFetch(`https://api.jup.ag/tokens/v2/search?query=${mintList}&limit=100`, {}, 15000) : Promise.resolve([]),
+      jFetch(PRICE_URL, {}, 8000),
     ]);
 
-    // Helius DAS getAsset — resolves symbol + logo for any on-chain token not in Jupiter list
+    // Build metadata map from batch response
+    const metaMap = {};
+    if (Array.isArray(batchMeta)) {
+      batchMeta.forEach(t => {
+        const key = t.id || t.address || t.mint;
+        if (key) metaMap[key] = t;
+      });
+    }
+
+    // Step 4: DAS fallback ONLY for tokens missing from Jupiter list
     const dasLookup = async (mint) => {
       try {
         const res = await fetch(HELIUS_RPC, {
@@ -146,44 +159,41 @@ async function fetchTokenBalances(wallet) {
         });
         const d = await res.json();
         const asset = d?.result;
-        const symbol  = asset?.content?.metadata?.symbol || asset?.symbol || null;
-        const logoURI = asset?.content?.links?.image || asset?.content?.files?.[0]?.uri || null;
-        return { symbol, logoURI };
+        return {
+          symbol:   asset?.content?.metadata?.symbol || null,
+          logoURI:  asset?.content?.links?.image || asset?.content?.files?.[0]?.uri || null,
+        };
       } catch { return { symbol: null, logoURI: null }; }
     };
 
-    // Run DAS lookups in parallel for all tokens Jupiter couldn't resolve (avoids sequential await timeout)
-    const needsDas = splMints.map((_, i) => {
-      const jupMeta = metaResults[i]?.status === "fulfilled" ? metaResults[i].value : null;
-      return !jupMeta?.symbol;
-    });
     const dasResults = await Promise.allSettled(
-      splMints.map((m, i) => needsDas[i] ? dasLookup(m.mint) : Promise.resolve({ symbol: null, logoURI: null }))
+      splMints.map(m => !metaMap[m.mint]?.symbol ? dasLookup(m.mint) : Promise.resolve({ symbol: null, logoURI: null }))
     );
 
-    const prices   = priceRes?.data || {};
+    const prices = priceRes?.data || priceRes || {};
     const solPrice = parseFloat(prices[SOL_MINT]?.price || 0);
     const solUSD   = solAmt * solPrice;
 
     const tokens = [{
-      symbol:   solMeta?.symbol  || "SOL",
-      mint:     SOL_MINT,
-      amount:   solAmt,
-      usdValue: solUSD,
-      logoURI:  "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
-      price:    solPrice,
+      symbol:     (Array.isArray(solMeta) ? solMeta[0] : solMeta)?.symbol || "SOL",
+      mint:       SOL_MINT,
+      amount:     solAmt,
+      usdValue:   solUSD,
+      logoURI:    (Array.isArray(solMeta) ? solMeta[0] : solMeta)?.icon || "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+      price:      solPrice,
+      isVerified: true,
     }];
 
     for (let i = 0; i < splMints.length; i++) {
       const { mint, amount } = splMints[i];
-      const jupMeta = metaResults[i]?.status === "fulfilled" ? metaResults[i].value : null;
-      const dasMeta = dasResults[i]?.status === "fulfilled" ? dasResults[i].value : { symbol: null, logoURI: null };
-      const symbol  = jupMeta?.symbol || dasMeta.symbol || mint.slice(0, 6) + "…";
-      const logoURI = jupMeta?.logoURI || jupMeta?.icon || jupMeta?.image
-                    || dasMeta.logoURI || `https://img.jup.ag/tokens/${mint}`;
+      const jupMeta  = metaMap[mint] || null;
+      const dasMeta  = dasResults[i]?.status === "fulfilled" ? dasResults[i].value : { symbol: null, logoURI: null };
+      const symbol   = jupMeta?.symbol || dasMeta.symbol || mint.slice(0, 6) + "…";
+      const logoURI  = jupMeta?.icon || jupMeta?.logoURI || jupMeta?.image || dasMeta.logoURI || `https://img.jup.ag/tokens/${mint}`;
       const price    = parseFloat(prices[mint]?.price || 0);
       const usdValue = amount * price;
-      tokens.push({ symbol, mint, amount, usdValue, logoURI, price });
+      const isVerified = !!(jupMeta?.tags?.includes("verified") || jupMeta?.tags?.includes("strict") || jupMeta?.strict);
+      tokens.push({ symbol, mint, amount, usdValue, logoURI, price, isVerified });
     }
 
     tokens.sort((a, b) => b.usdValue - a.usdValue);
