@@ -22,8 +22,7 @@
     },
     "api/jupiter.js": {
       "memory": 1024,
-      "maxDuration": 60,
-      "experimentalAllowBundling": true
+      "maxDuration": 60
     }
   }
 }
