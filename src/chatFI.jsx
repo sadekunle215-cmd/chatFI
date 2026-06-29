@@ -169,7 +169,7 @@ const JUP_TV2           = `${JUP_BASE}/trigger/v2`;       // v2: JWT auth, USD p
 const JUP_TV2_LITE      = `${JUP_LITE}/trigger/v2`;
 const JUP_RECUR_BASE   = `${JUP_BASE}/recurring/v1`;      // createOrder, execute, cancelOrder, getRecurringOrders
 const JUP_PORTFOLIO    = `${JUP_BASE}/portfolio/v1`;
-const JUP_PRED_API     = "https://lite-api.jup.ag/prediction/v1";
+const JUP_PRED_API     = "https://api.jup.ag/prediction/v1";
 const JUP_EARN_API     = `${JUP_BASE}/lend/v1/earn`;   // deposit, withdraw, mint, redeem, tokens, positions, earnings
 const JUP_BORROW_API   = `${JUP_BASE}/lend/v1/borrow`;  // borrow vault data (SDK-based ops)
 const JUP_SEND_API     = `${JUP_BASE}/send/v1`;          // craft-send, craft-clawback, pending-invites, invite-history
@@ -4832,13 +4832,13 @@ function JupChatInner() {
 
     // ── 7. Prediction positions ───────────────────────────────────────────────
     try {
-      const pred = await predFetch(JUP_PRED_API + "/positions?ownerPubkey=" + walletAddress);
+      const pred = await jupFetch(JUP_PRED_API + "/positions?ownerPubkey=" + walletAddress);
       results.predPositions = Array.isArray(pred) ? pred : (pred?.data || []);
     } catch {}
 
     // ── 8. Prediction orders ──────────────────────────────────────────────────
     try {
-      const orders = await predFetch(JUP_PRED_API + "/orders?ownerPubkey=" + walletAddress);
+      const orders = await jupFetch(JUP_PRED_API + "/orders?ownerPubkey=" + walletAddress);
       results.predOrders = Array.isArray(orders) ? orders : (orders?.data || []);
     } catch {}
 
@@ -5483,35 +5483,41 @@ function JupChatInner() {
         (e.markets||[]).some(mk => mk.metadata?.title?.toLowerCase().includes(lq))
       );
     };
-    const fetchLimit = Math.max(20, Math.min(limit || 50, 200)); // clamp between 20 and 200
+
+    // Search by keyword — goes through proxy for API key injection
     if (searchQuery) {
       try {
-        const data = await predFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=${fetchLimit}&includeMarkets=true`);
+        const data = await jupFetch(`${JUP_PRED_API}/events/search?query=${encodeURIComponent(searchQuery)}&limit=${Math.min(limit, 50)}&includeMarkets=true`);
         const events = extractEvents(data);
         if (events.length > 0) return { markets: events, source: "search" };
       } catch {}
+      // fallback: fetch all then client-filter
       try {
-        const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: String(fetchLimit * 4) });
-        const data = await predFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+        const p = new URLSearchParams({ includeMarkets: "true", filter: "trending" });
+        const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
         const all = extractEvents(data);
         const filtered = clientFilter(all, searchQuery);
         if (filtered.length > 0) return { markets: filtered, source: "client-filter" };
         if (all.length > 0) return { markets: all, source: "api-fallback" };
       } catch {}
     }
+
+    // Category + filter fetch — through proxy
     try {
-      const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: String(fetchLimit * 2) });
+      const p = new URLSearchParams({ includeMarkets: "true", filter: "trending" });
       if (category && category !== "null") p.set("category", category.toLowerCase());
-      const data = await predFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+      const data = await jupFetch(`${JUP_PRED_API}/events?${p.toString()}`);
       const events = extractEvents(data);
       if (events.length > 0) return { markets: events, source: "api" };
     } catch {}
+
+    // Final fallback — all events no filter
     try {
-      const p = new URLSearchParams({ includeMarkets: "true", sortBy: "volume", sortDirection: "desc", end: String(fetchLimit * 2) });
-      const data = await predFetch(`${JUP_PRED_API}/events?${p.toString()}`);
+      const data = await jupFetch(`${JUP_PRED_API}/events?includeMarkets=true`);
       const events = extractEvents(data);
       if (events.length > 0) return { markets: events, source: "api-all" };
     } catch {}
+
     return { markets: [], source: "empty" };
   };
 
