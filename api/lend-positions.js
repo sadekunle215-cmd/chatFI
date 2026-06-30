@@ -1,23 +1,8 @@
 // /api/lend-positions.js — Vercel serverless function
-// Reads all open borrow positions for a wallet using @jup-ag/lend-read SDK.
-// Install: npm install @jup-ag/lend-read @solana/web3.js
+// Reads Jupiter Lend EARN positions (deposit/APY vaults) for a wallet.
+// Uses REST API: GET https://api.jup.ag/lend/v1/earn/positions
 
-import { Connection, PublicKey } from "@solana/web3.js";
-import { Client } from "@jup-ag/lend-read";
-
-const RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
-
-// Vault metadata map (vaultId → collateral/debt symbols & decimals)
-// Matches MULTIPLY_VAULTS in the frontend
-const VAULT_META = {
-  1: { collateral: "SOL",    debt: "USDC", colDecimals: 9, debtDecimals: 6 },
-  2: { collateral: "JitoSOL",debt: "SOL",  colDecimals: 9, debtDecimals: 9 },
-  3: { collateral: "JupSOL", debt: "SOL",  colDecimals: 9, debtDecimals: 9 },
-  4: { collateral: "WBTC",   debt: "USDC", colDecimals: 8, debtDecimals: 6 },
-  5: { collateral: "JLP",    debt: "USDC", colDecimals: 6, debtDecimals: 6 },
-  6: { collateral: "JUP",    debt: "USDC", colDecimals: 6, debtDecimals: 6 },
-  7: { collateral: "USDC",   debt: "USDT", colDecimals: 6, debtDecimals: 6 },
-};
+const JUP_API_KEY = process.env.JUPITER_API_KEY || "";
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -29,75 +14,49 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Missing wallet query param" });
   }
 
-  let userPubkey;
   try {
-    userPubkey = new PublicKey(wallet);
-  } catch {
-    return res.status(400).json({ error: "Invalid wallet address" });
-  }
-
-  try {
-    const connection = new Connection(RPC_URL, { commitment: "confirmed" });
-
-    // @jup-ag/lend-read Client — reads all vault positions from on-chain accounts
-    const client = new Client(connection);
-
-    // getAllUserPositions returns NftPosition & { vault: VaultEntireData }[]
-    // — every borrow/multiply position owned by this wallet across all vaults
-    const rawPositions = await client.vault.getAllUserPositions(userPubkey);
-
-    const positions = rawPositions.map(p => {
-      const vaultId = p.vault?.constantViews?.vaultId ?? null;
-      const meta    = VAULT_META[vaultId] || {};
-
-      // supply/borrow are BN — convert to string for JSON serialisation
-      const supplyRaw = p.supply?.toString()  ?? "0";
-      const borrowRaw = p.borrow?.toString()  ?? "0";
-      const dustRaw   = p.dustBorrow?.toString() ?? "0";
-
-      // Compute risk ratio: borrow / supply (0–1, or null if no supply)
-      let riskRatio = null;
-      const supplyNum = parseFloat(supplyRaw);
-      const borrowNum = parseFloat(borrowRaw);
-      if (supplyNum > 0) riskRatio = borrowNum / supplyNum;
-
-      // liquidationThreshold from vault config (0–1 float)
-      const lt = p.vault?.configs?.liquidationThreshold ?? null;
-
-      return {
-        positionId:            p.nftId,
-        vaultId,
-        owner:                 p.owner?.toBase58() ?? wallet,
-        collateral:            meta.collateral  ?? "Unknown",
-        debt:                  meta.debt        ?? "Unknown",
-        colDecimals:           meta.colDecimals ?? 9,
-        debtDecimals:          meta.debtDecimals ?? 6,
-        supply:                supplyRaw,   // raw base units
-        borrow:                borrowRaw,   // raw base units
-        dustBorrow:            dustRaw,
-        riskRatio,             // 0–1 float, null if no supply
-        liquidationThreshold:  lt,
-        isLiquidated:          p.isLiquidated ?? false,
-        tick:                  p.tick   ?? null,
-        tickId:                p.tickId ?? null,
-        isSupplyOnly:          p.isSupplyPosition ?? false,
-      };
+    const url = `https://api.jup.ag/lend/v1/earn/positions?users=${encodeURIComponent(wallet)}`;
+    const r = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(JUP_API_KEY ? { "x-api-key": JUP_API_KEY } : {}),
+      },
     });
 
-    // Filter out supply-only positions (those have no debt — not borrow positions)
-    const borrowPositions = positions.filter(p => !p.isSupplyOnly);
+    if (!r.ok) {
+      const text = await r.text();
+      console.error("[/api/lend-positions] Jupiter API error:", r.status, text);
+      return res.status(200).json({ positions: [], total: 0, wallet });
+    }
+
+    const data = await r.json();
+    // data is an array of UserPosition objects, each with shares > "0" meaning an active deposit
+    const positions = (Array.isArray(data) ? data : []).filter(p => p.shares && p.shares !== "0");
+
+    const mapped = positions.map(p => ({
+      symbol: p.token?.symbol || "?",
+      mint: p.token?.assetAddress || p.token?.address,
+      address: p.token?.address,
+      decimals: p.token?.decimals || 6,
+      shares: p.shares || "0",
+      underlyingAssets: (Number(p.underlyingAssets || 0) / Math.pow(10, p.token?.decimals || 6)).toFixed(6),
+      underlyingBalance: p.underlyingBalance || "0",
+      logoUrl: p.token?.asset?.logo_url || "",
+    }));
 
     return res.status(200).json({
-      positions:  borrowPositions,
-      total:      borrowPositions.length,
+      positions: mapped,
+      total: mapped.length,
       wallet,
     });
 
   } catch (err) {
     console.error("[/api/lend-positions] error:", err);
-    return res.status(500).json({
-      error:    err?.message || "Failed to fetch positions",
+    return res.status(200).json({
       positions: [],
+      total: 0,
+      wallet,
+      error: err?.message || "Failed to fetch positions",
     });
   }
 }
