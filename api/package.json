@@ -2,7 +2,6 @@
   "name": "chatfi-api",
   "version": "1.0.0",
   "private": true,
-  "type": "commonjs",
   "dependencies": {
     "@solana/web3.js": "^1.98.0",
     "@solana/spl-token": "^0.4.9",
@@ -10,6 +9,7 @@
     "@jup-ag/lend": "latest",
     "@meteora-ag/dlmm": "^1.1.1",
     "bn.js": "^5.2.1",
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "^1.0.3",
+    "firebase-admin": "^12.0.0"
   }
 }
