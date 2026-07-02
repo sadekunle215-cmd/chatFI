@@ -956,6 +956,11 @@ export default async function handler(req, res) {
     return runRotatorWatcher(req, res);
   }
 
+  // Push Notification Watcher — GET ?cron=notify
+  if (req.method === "GET" && req.query.cron === "notify") {
+    return runPushNotifyWatcher(req, res);
+  }
+
   // Telegram magic link — POST ?action=link-telegram
   if (req.method === "POST" && req.query.action === "link-telegram") {
     return handleLinkTelegram(req, res);
@@ -1093,3 +1098,61 @@ export default async function handler(req, res) {
 
   return res.status(405).json({ error: "Method not allowed" });
 }
+
+async function runPushNotifyWatcher(req, res) {
+  try {
+    const heliusKey = process.env.HELIUS_API_KEY;
+    if (!heliusKey) return res.status(500).json({ error: 'HELIUS_API_KEY not set' });
+    let db;
+    try { db = getDb(); } catch(e) { return res.status(500).json({ error: 'getDb: ' + e.message }); }
+
+    const snapshot = await db.collection('chatfi_users').limit(100).get();
+    if (snapshot.empty) return res.status(200).json({ message: 'No users' });
+
+    const results = [];
+    for (const docSnap of snapshot.docs) {
+      const wallet = docSnap.id;
+      const data = docSnap.data();
+      const expoPushToken = data.expoPushToken;
+      const lastSig = data.lastNotifiedSignature;
+      if (!expoPushToken) continue;
+      try {
+        const url = 'https://api.helius.xyz/v0/addresses/' + wallet + '/transactions?api-key=' + heliusKey + '&limit=5&type=TRANSFER';
+        const txRes = await fetch(url);
+        const txs = await txRes.json();
+        if (!Array.isArray(txs) || !txs.length) continue;
+        const latest = txs[0];
+        if (latest.signature === lastSig) continue;
+        let title = null, body = null;
+        for (const t of (latest.tokenTransfers || [])) {
+          if (t.toUserAccount === wallet && t.tokenAmount > 0) {
+            title = 'Token Received';
+            body = 'You received ' + t.tokenAmount + ' ' + (t.symbol || (t.mint || '').slice(0,6));
+            break;
+          }
+        }
+        if (!title) {
+          for (const t of (latest.nativeTransfers || [])) {
+            if (t.toUserAccount === wallet && t.amount > 0) {
+              title = 'SOL Received';
+              body = 'You received ' + (t.amount / 1e9).toFixed(4) + ' SOL';
+              break;
+            }
+          }
+        }
+        if (!title) continue;
+        await fetch('https://exp.host/--/api/v2/push/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: expoPushToken, title: title, body: body, sound: 'default', priority: 'high' }),
+        });
+        await docSnap.ref.update({ lastNotifiedSignature: latest.signature });
+        results.push({ wallet: wallet.slice(0,6), pushed: body });
+      } catch(e) { console.error('notify error', wallet, e.message); }
+    }
+    return res.status(200).json({ notified: results.length, results: results });
+  } catch(e) {
+    return res.status(500).json({ error: e.message, stack: e.stack });
+  }
+}
+
