@@ -6642,7 +6642,7 @@ function JupChatInner() {
 
     // Try USDC first, then JupUSD as fallback
     const tryMints = [USDC_MINT, JUPUSD_MINT];
-    const placeOrder = (mint) => predFetch(`${JUP_PRED_API}/orders`, {
+    const placeOrder = (mint) => jupFetch(`${JUP_PRED_API}/orders`, {
       method: "POST",
       body: {
         ownerPubkey:  walletFull,
@@ -6847,7 +6847,7 @@ function JupChatInner() {
     const depositAmount = Math.floor(amtNum * 1_000_000);
     const isYes = side === "yes";
     const tryMints = [USDC_MINT, JUPUSD_MINT];
-    const placeOrder = (mint) => predFetch(`${JUP_PRED_API}/orders`, {
+    const placeOrder = (mint) => jupFetch(`${JUP_PRED_API}/orders`, {
       method: "POST",
       body: { ownerPubkey: walletFull, marketId: foundMarketId, isYes, isBuy: true, depositAmount, depositMint: mint },
     });
@@ -7429,7 +7429,7 @@ function JupChatInner() {
 
     push("ai", (introText ? introText + "\n\n" : "") + "Checking for claimable prediction positions…");
     try {
-      const res = await predFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletFull}`);
+      const res = await jupFetch(`${JUP_PRED_API}/positions?ownerPubkey=${walletFull}`);
       const positions = Array.isArray(res) ? res : (res?.data || []);
       const claimable = positions.filter(p => p.claimable === true && p.claimed === false);
       if (claimable.length === 0) {
@@ -7442,7 +7442,7 @@ function JupChatInner() {
       let claimed = 0;
       for (const pos of claimable) {
         try {
-          const claimRes = await predFetch(`${JUP_PRED_API}/positions/${pos.pubkey}/claim`, {
+          const claimRes = await jupFetch(`${JUP_PRED_API}/positions/${pos.pubkey}/claim`, {
             method: "POST",
             body: { ownerPubkey: walletFull },
           });
