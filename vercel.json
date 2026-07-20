@@ -21,8 +21,9 @@
       "maxDuration": 60
     },
     "api/jupiter.js": {
-      "memory": 1024,
-      "maxDuration": 60
+      "regions": [
+        "cpt1"
+      ]
     }
   }
 }
