@@ -3554,8 +3554,16 @@ function JupChatInner() {
     });
     // Safe parse: proxy may return HTML on error (404/500), never throw JSON parse crash
     const text = await res.text();
-    try { return JSON.parse(text); }
+    let data;
+    try { data = JSON.parse(text); }
     catch { throw new Error(`Proxy error (${res.status}): ${text.slice(0, 200)}`); }
+
+    // Friendly message for region-restricted prediction market calls
+    if (data?.code === "unsupported_region") {
+      throw new Error("Prediction markets aren't available in your region right now.");
+    }
+
+    return data;
   };
 
   // ── Resolve any token symbol → { mint, decimals } ───────────────────────────

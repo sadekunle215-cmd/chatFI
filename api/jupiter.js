@@ -197,12 +197,17 @@ export default async function handler(req, res) {
   // Resolve special RPC placeholder
   const targetUrl = url === "SOLANA_RPC" ? SOLANA_RPC : url;
 
-  // Only send clean headers — no user IP, no country hints.
-  // This ensures Jupiter sees Vercel's US server IP, not the user's Nigerian IP.
+  // Forward the real client IP so Jupiter can correctly identify the user's region
+  // (previously stripped, which made Nigerian users appear as US — a restricted region)
+  const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
+    || req.headers["x-real-ip"]
+    || "";
+
   const headers = {
     "Content-Type": "application/json",
     ...(API_KEY    ? { "x-api-key": API_KEY }              : {}),
     ...(triggerJwt ? { "Authorization": `Bearer ${triggerJwt}` } : {}),
+    ...(clientIp   ? { "x-forwarded-for": clientIp }       : {}),
   };
 
   // Per-endpoint timeout — portfolio/positions needs more time than price/swap calls
